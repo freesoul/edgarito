@@ -1,0 +1,1 @@
+This project intends to be, in a first instance, a developer friendly, **annotated**, simple **async** client to receive **structured data** from EDGAR REST API.

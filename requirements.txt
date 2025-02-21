@@ -1,0 +1,4 @@
+aiohttp==3.11.12
+pydantic==2.10.6
+pydantic_settings==2.7.1
+py-xbrl==2.2.14

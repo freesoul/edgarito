@@ -1,0 +1,5 @@
+venv_windows/
+venv/
+cache/
+*.pyc
+__pycache__/
