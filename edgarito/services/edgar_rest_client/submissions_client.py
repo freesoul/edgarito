@@ -3,7 +3,7 @@ from typing import List
 
 from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, TransposedFiling
 
-from edgarito.services.edgar_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
 
 
 class SubmissionsClient:

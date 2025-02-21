@@ -6,9 +6,9 @@ from edgarito.cli.logger import configure_logger
 from edgarito.cli.settings import settings
 from edgarito.enums.cli.actions import Action
 
-from edgarito.services.edgar_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.edgar_client.submissions_client import SubmissionsClient
+from edgarito.services.edgar_rest_client.submissions_client import SubmissionsClient
 
 if __name__ == "__main__":
     configure_logger()
