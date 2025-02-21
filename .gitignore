@@ -1,5 +1,5 @@
 venv_windows/
 venv/
-cache/
+./cache
 *.pyc
 __pycache__/
