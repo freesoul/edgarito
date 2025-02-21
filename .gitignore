@@ -1,5 +1,5 @@
 venv_windows/
 venv/
-cache/
+/cache/
 !edgarito/**/cache
 __pycache__/
