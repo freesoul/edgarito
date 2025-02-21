@@ -41,10 +41,10 @@ The current objectives are:
             - https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data
 
         Routes
-            - Ticker-CIK
+            - Ticker-CIK - OK
                 https://www.sec.gov/files/company_tickers.json
 
-            - Submissions
+            - Submissions - OK
                 https://data.sec.gov/submissions/CIK0001018724.json
 
             - One submission files (first resp_json["filings"]["files"])

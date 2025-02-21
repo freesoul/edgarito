@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 
-class CompanyTicker(BaseModel):
+class CompanyTickerResponse(BaseModel):
     cik_str: int
     ticker: str
     title: str

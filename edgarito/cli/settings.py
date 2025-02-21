@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     # Used by pydantic_settings
     model_config = SettingsConfigDict(cli_parse_args=True, env_file=".env")
 
+    # Shared params
+    cik: Optional[int] = None
+    ticker: Optional[str] = None
+
     # Cli settings
     action: Action
     user_agent: str

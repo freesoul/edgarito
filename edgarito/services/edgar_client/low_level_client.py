@@ -8,7 +8,8 @@ import urllib.parse
 
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 
-from edgarito.schemas.edgar.company_ticker import CompanyTicker
+from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
+from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse
 
 
 class EDGARLowLevelClient:
@@ -26,9 +27,22 @@ class EDGARLowLevelClient:
         else:
             self._session = session
 
-    async def get_tickers(self, use_cache: bool = True, make_cache: bool = True) -> List[CompanyTicker]:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self._session.close()
+
+    async def get_tickers(self, use_cache: bool = True, make_cache: bool = True) -> List[CompanyTickerResponse]:
         raw_json = await self._fetch_json_with_retry_and_cache("https://www.sec.gov/files/company_tickers.json", use_cache=use_cache, make_cache=make_cache)
-        return [CompanyTicker(**d) for d in raw_json.values()]
+        return [CompanyTickerResponse(**d) for d in raw_json.values()]
+
+    async def get_submissions(self, cik: int, use_cache: bool = True, make_cache: bool = True) -> CompanySubmissionsResponse:
+        cik_str = str(cik).zfill(10)
+        raw_json = await self._fetch_json_with_retry_and_cache(
+            f"https://data.sec.gov/submissions/CIK{cik_str}.json", use_cache=use_cache, make_cache=make_cache
+        )
+        return CompanySubmissionsResponse(**raw_json)
 
     async def _fetch_json_with_retry_and_cache(
         self,
