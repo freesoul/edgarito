@@ -9,7 +9,7 @@ import urllib.parse
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
-from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse
+from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, FilingRecent
 
 
 class EDGARLowLevelClient:
@@ -43,6 +43,12 @@ class EDGARLowLevelClient:
             f"https://data.sec.gov/submissions/CIK{cik_str}.json", use_cache=use_cache, make_cache=make_cache
         )
         return CompanySubmissionsResponse(**raw_json)
+
+    async def get_submission_additional_filings(self, remote_file_name: str, use_cache: bool = True, make_cache: bool = True) -> Optional[FilingRecent]:
+        raw_json = await self._fetch_json_with_retry_and_cache(
+            f"https://data.sec.gov/submissions/{remote_file_name}", use_cache=use_cache, make_cache=make_cache
+        )
+        return FilingRecent(**raw_json)
 
     async def _fetch_json_with_retry_and_cache(
         self,
