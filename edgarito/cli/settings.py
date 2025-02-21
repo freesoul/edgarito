@@ -9,18 +9,22 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(cli_parse_args=True, env_file=".env")
 
     # Shared params
-    cik: Optional[int] = None
-    ticker: Optional[str] = None
-
-    # Cli settings
-    action: Action
     user_agent: str
     cache_path: str = "./cache"
     use_cache: bool = True
     make_cache: bool = True
+    cik: Optional[int] = None
+    ticker: Optional[str] = None
+    limit: Optional[int] = None  # Used for reading submissions and downloading
+
+    # Actions
+    action: Action
 
     # Action FIND_TICKER_CIK
     ticker: Optional[str] = None
+
+    # Action DOWNLOAD
+    # ranges ...    
 
 
 settings = Settings()

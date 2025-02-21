@@ -2,6 +2,8 @@ import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
+from edgarito.schemas.edgar_responses.submission_custom import TransposedFiling
+
 
 class Address(BaseModel):
     street1: str
@@ -15,28 +17,6 @@ class Address(BaseModel):
 class Addresses(BaseModel):
     mailing: Address
     business: Address
-
-
-class TransposedFiling(BaseModel):
-    """
-    Created for transposing! not from original responses.
-    """
-
-    accessionNumber: str
-    filingDate: datetime.date
-    acceptanceDateTime: datetime.datetime
-    act: str
-    form: str
-    fileNumber: str
-    filmNumber: str
-    items: str
-    core_type: Optional[str]
-    size: int
-    isXBRL: bool
-    isInlineXBRL: bool
-    primaryDocument: str
-    primaryDocDescription: str
-    reportDate: Optional[datetime.date]
 
 
 class FilingRecent(BaseModel):

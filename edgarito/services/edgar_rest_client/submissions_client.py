@@ -24,6 +24,10 @@ class SubmissionsClient:
 
         return first
 
-    async def get_all_submission_filings_transposed(self, cik: int, use_cache: bool = True, make_cache: bool = True) -> List[TransposedFiling]:
+    async def get_all_submission_filings_transposed(
+        self, cik: int, use_cache: bool = True, make_cache: bool = True
+    ) -> List[TransposedFiling]:
         response = await self.get_all_submissions(cik, use_cache=use_cache, make_cache=make_cache)
-        return response.filings.recent.transpose()
+        transposed = response.filings.recent.transpose()
+        # TODO: reverse should be necessary as we append the older to the most recent... but for some reason we see them already reversed, this must be a bug.
+        return transposed
