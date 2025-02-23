@@ -47,7 +47,7 @@ The current objectives are:
             - Submissions - OK
                 https://data.sec.gov/submissions/CIK0001018724.json
 
-            - One submission files (first resp_json["filings"]["files"])
+            - Submission additional (first resp_json["filings"]["files"]) - OK
                 https://data.sec.gov/submissions/CIK0001018724-submissions-001.json
 
             - Company facts (Everything from XBRLs)
