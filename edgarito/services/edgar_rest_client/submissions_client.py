@@ -31,3 +31,4 @@ class SubmissionsClient:
         transposed = response.filings.recent.transpose()
         # TODO: reverse should be necessary as we append the older to the most recent... but for some reason we see them already reversed, this must be a bug.
         return transposed
+    

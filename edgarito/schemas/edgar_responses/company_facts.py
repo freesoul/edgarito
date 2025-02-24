@@ -3,8 +3,6 @@ from typing import List, Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from edgarito.enums.gaap.gaap import USGAAP
-
 
 class Measurement(BaseModel):
     end: datetime.date
@@ -34,7 +32,8 @@ class GaapDataUnits(BaseModel):
 
 class Facts(BaseModel):
     dei: Dict[str, Fact]
-    us_gaap: Dict[USGAAP, Fact] = Field(..., alias="us-gaap")
+    us_gaap: Dict[str, Fact] = Field(..., alias="us-gaap")
+    us_gaap_deprecated: Dict[str, Fact] = {}
 
 
 class CompanyFacts(BaseModel):

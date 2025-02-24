@@ -7,9 +7,11 @@ import aiohttp
 import urllib.parse
 
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.taxonomy_client.xbrl_taxonomy_client import TaxonomyClient
 
 from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
 from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, FilingRecent
+from edgarito.schemas.edgar_responses.company_facts import CompanyFacts, Facts
 
 
 class EDGARLowLevelClient:
@@ -50,6 +52,30 @@ class EDGARLowLevelClient:
         )
         return FilingRecent(**raw_json)
 
+    async def get_company_facts(self, cik: int, use_cache: bool = True, make_cache: bool = True, taxonomy_url: Optional[str] = None) -> CompanyFacts:
+        """
+        If taxonomy_url is provided, it will move deprecated facts to the us_gaap_deprecated field.
+        """
+        cik_str = str(cik).zfill(10)
+        raw_json = await self._fetch_json_with_retry_and_cache(
+            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_str}.json", use_cache=use_cache, make_cache=make_cache
+        )
+        if taxonomy_url:            
+            await self._move_deprecated_facts(raw_json, taxonomy_url=taxonomy_url)
+        schema = CompanyFacts(**raw_json)
+        return schema
+
+    async def _move_deprecated_facts(self, raw_json: dict, taxonomy_url: str) -> None:
+        raw_json["facts"]["us_gaap_deprecated"] = {}
+        
+        taxonomy_client = TaxonomyClient(self._cache)
+        await taxonomy_client.load(taxonomy_url)
+        valid_facts = taxonomy_client.get_gaap_keys()
+        for fact_name in list(raw_json["facts"]["us-gaap"].keys()):
+            if fact_name not in valid_facts:
+                self._logger.warning(f"Deprecated fact: {fact_name}")
+                raw_json["facts"]["us_gaap_deprecated"][fact_name] = raw_json["facts"]["us-gaap"].pop(fact_name)
+
     async def _fetch_json_with_retry_and_cache(
         self,
         url: str,
@@ -57,7 +83,7 @@ class EDGARLowLevelClient:
         make_cache: bool = True,
     ) -> dict:
         if use_cache or make_cache:
-            local_filesystem_cached_file_path = f"edgar_rest/{urllib.parse.urlparse(url).path.lstrip("/")}"
+            local_filesystem_cached_file_path = f"edgar_rest/{FileSystemCache.path_from_url(url)}"
 
         if use_cache:
             cached_data = self._cache.read(local_filesystem_cached_file_path)

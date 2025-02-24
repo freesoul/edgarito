@@ -2,6 +2,7 @@ import logging
 from typing import Union, Optional
 import pathlib
 
+import urllib.parse
 
 class FileSystemCache:
     def __init__(self, root_directory: Union[str, pathlib.Path]):
@@ -31,3 +32,7 @@ class FileSystemCache:
         self._logger.info(f"Removing from cache: {file_path}")
         if file_path.is_file():
             file_path.unlink()
+
+    @staticmethod
+    def path_from_url(url: str) -> str:
+        return urllib.parse.urlparse(url).path.lstrip("/")
