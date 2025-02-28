@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from edgarito.enums.edgar.filing_type import FilingType
+
 
 class TransposedFiling(BaseModel):
     """
@@ -24,3 +26,10 @@ class TransposedFiling(BaseModel):
     primaryDocument: str
     primaryDocDescription: str
     reportDate: Optional[datetime.date]
+
+    @property
+    def parsed_type(self) -> Optional[FilingType]:
+        try:
+            return FilingType(self.form)
+        except ValueError:
+            return None
