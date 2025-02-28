@@ -11,7 +11,7 @@ from edgarito.services.taxonomy_client.xbrl_taxonomy_client import TaxonomyClien
 
 from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
 from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, FilingRecent
-from edgarito.schemas.edgar_responses.company_facts import CompanyFacts, Facts
+from edgarito.schemas.edgar_responses.company_facts import CompanyFacts, Fact
 
 
 class EDGARLowLevelClient:
@@ -52,6 +52,17 @@ class EDGARLowLevelClient:
         )
         return FilingRecent(**raw_json)
 
+    async def get_company_fact(self, cik: int, fact_name: str, use_cache: bool = True, make_cache: bool = True) -> Optional[Fact]:
+        cik_str = str(cik).zfill(10)
+        try:
+            raw_json = await self._fetch_json_with_retry_and_cache(
+                f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik_str}/us-gaap/{fact_name}.json", use_cache=use_cache, make_cache=make_cache
+            )
+        except FileNotFoundError as e:
+            self._logger.warning(f"Fact not found: {fact_name} for CIK {cik_str}")
+            return
+        return Fact(**raw_json)
+
     async def get_company_facts(self, cik: int, use_cache: bool = True, make_cache: bool = True, taxonomy_url: Optional[str] = None) -> CompanyFacts:
         """
         If taxonomy_url is provided, it will move deprecated facts to the us_gaap_deprecated field.
@@ -60,14 +71,14 @@ class EDGARLowLevelClient:
         raw_json = await self._fetch_json_with_retry_and_cache(
             f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_str}.json", use_cache=use_cache, make_cache=make_cache
         )
-        if taxonomy_url:            
+        if taxonomy_url:
             await self._move_deprecated_facts(raw_json, taxonomy_url=taxonomy_url)
         schema = CompanyFacts(**raw_json)
         return schema
 
     async def _move_deprecated_facts(self, raw_json: dict, taxonomy_url: str) -> None:
         raw_json["facts"]["us_gaap_deprecated"] = {}
-        
+
         taxonomy_client = TaxonomyClient(self._cache)
         await taxonomy_client.load(taxonomy_url)
         valid_facts = taxonomy_client.get_gaap_keys()
@@ -110,6 +121,8 @@ class EDGARLowLevelClient:
                 if resp.status == 403 and "Request Rate Threshold Exceeded" in await resp.text():
                     await asyncio.sleep(threshold_exceeded_delay)
                     continue
+                elif resp.status == 404:
+                    raise FileNotFoundError(f"404 Not Found: {url}")
                 return await resp.json()
 
 
@@ -123,7 +136,8 @@ if __name__ == "__main__":
     async def main():
         cache = FileSystemCache("./cache")
         client = EDGARLowLevelClient(cache, user_agent="Jean Francois Kener (betterask.jf@gmail.com)")
-        data = await client.get_tickers()
+        # data = await client.get_tickers()
+        data = await client.get_company_fact(cik=1018724, fact_name="CommonStockSharesOutstanding")
         print(data)
 
     asyncio.run(main())

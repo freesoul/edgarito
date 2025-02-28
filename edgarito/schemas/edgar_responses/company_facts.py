@@ -33,7 +33,6 @@ class GaapDataUnits(BaseModel):
 class Facts(BaseModel):
     dei: Dict[str, Fact]
     us_gaap: Dict[str, Fact] = Field(..., alias="us-gaap")
-    us_gaap_deprecated: Dict[str, Fact] = {}
 
 
 class CompanyFacts(BaseModel):

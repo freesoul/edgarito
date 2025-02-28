@@ -1,9 +1,9 @@
 import logging
 
 
-def configure_logger():
+def configure_logger(log_level: int = logging.INFO):
 
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=log_level,
+        format="[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
     )

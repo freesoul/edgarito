@@ -1,3 +1,5 @@
-This project intends to be, in a first instance, a developer friendly, **annotated**, simple **async** client to receive **structured data** from EDGAR REST API.
+This project provides a async client for the EDGAR REST API which structures the responses into pydantic schemas.
 
-The following purposes will be to extend it to perform higher level queries (eg. paginate REST queries, download filings, parse xbrl files, etc), compute additional metrics from the data and spot investment red flags.
+The following purposes include adding financial statement reader classes, computing common metrics such as FCF, and adding classes to spot investment red flags.
+
+Finally, perhaps adding, as a fallback to the EDGAR REST API, the pipeline of downloading, extracting and loading into the pydantic schemas the data directly from edgar txt/xbrl submissions.

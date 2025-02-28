@@ -9,14 +9,14 @@ class FileSystemCache:
         self._logger = logging.getLogger(__class__.__name__)
         self._root = pathlib.Path(root_directory).absolute()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._logger.info(f"Using cache directory: {self._root}")
+        self._logger.debug(f"Using cache directory: {self._root}")
 
     def read(self, path_in_cache: str) -> Optional[str]:
         file_path = self._root / path_in_cache
         if not file_path.is_file():
             self._logger.info(f"Not found in cache: {file_path}")
             return None
-        self._logger.info(f"Reading from cache: {file_path}")
+        self._logger.debug(f"Reading from cache: {file_path}")
         with file_path.open("r", encoding="utf-8") as file:
             return file.read()
 
