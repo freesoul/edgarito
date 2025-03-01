@@ -4,6 +4,57 @@ The following purposes include adding financial statement reader classes, comput
 
 Finally, perhaps adding, as a fallback to the EDGAR REST API, the pipeline of downloading, extracting and loading into the pydantic schemas the data directly from edgar txt/xbrl submissions.
 
+# Installation
+```
+python -m pip install edgarito
+```
+
+# Example usage of the async API
+
+```
+from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.enums.edgar.filing_type import FilingType
+
+
+async def main():
+    # A cache is required to comply with SEC request of optimizing requests.
+    cache = FileSystemCache(root_directory="./cache")
+
+    # We create a client to interact with the SEC API.
+    async with EDGARLowLevelClient(cache=cache, user_agent="Your Name (your-email@gmail.com)") as edgar:
+
+        # Search for Apple CIK from the tickers.
+        tickers = await edgar.get_tickers()
+        for ticker_info in tickers:
+            if ticker_info.ticker == "AAPL":
+                print(f"CIK for AAPL is {ticker_info.cik}")
+                cik = ticker_info.cik
+                break
+        else:
+            raise ValueError("Ticker not found")
+
+        # Display some company facts
+        company = await edgar.get_company_facts(cik=cik)
+
+        for fact_name, fact_info in company.facts.us_gaap.items():
+
+            if fact_info.units.USD:  # or fact_info.units.shares...
+
+                print(f"{fact_name} - {fact_info.label}:")
+                for measurement in fact_info.units.USD:
+
+                    if measurement.parsed_type != FilingType.FILING_10K:
+                        continue
+                    print(f"\t{measurement.fy}: {measurement.val}")
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+
+```
 
 # Examples of CLI usage.
 

@@ -3,3 +3,5 @@ venv/
 /cache/
 !edgarito/**/cache
 __pycache__/
+*.egg-info/
+dist/
