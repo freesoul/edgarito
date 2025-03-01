@@ -63,7 +63,7 @@ class EDGARLowLevelClient:
             return
         return Fact(**raw_json)
 
-    async def get_company_facts(self, cik: int, use_cache: bool = True, make_cache: bool = True, taxonomy_url: Optional[str] = None) -> CompanyFacts:
+    async def get_company_facts(self, cik: int, use_cache: bool = True, make_cache: bool = True) -> CompanyFacts:
         """
         If taxonomy_url is provided, it will move deprecated facts to the us_gaap_deprecated field.
         """
@@ -71,21 +71,8 @@ class EDGARLowLevelClient:
         raw_json = await self._fetch_json_with_retry_and_cache(
             f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_str}.json", use_cache=use_cache, make_cache=make_cache
         )
-        if taxonomy_url:
-            await self._move_deprecated_facts(raw_json, taxonomy_url=taxonomy_url)
         schema = CompanyFacts(**raw_json)
         return schema
-
-    async def _move_deprecated_facts(self, raw_json: dict, taxonomy_url: str) -> None:
-        raw_json["facts"]["us_gaap_deprecated"] = {}
-
-        taxonomy_client = TaxonomyClient(self._cache)
-        await taxonomy_client.load(taxonomy_url)
-        valid_facts = taxonomy_client.get_gaap_keys()
-        for fact_name in list(raw_json["facts"]["us-gaap"].keys()):
-            if fact_name not in valid_facts:
-                self._logger.warning(f"Deprecated fact: {fact_name}")
-                raw_json["facts"]["us_gaap_deprecated"][fact_name] = raw_json["facts"]["us-gaap"].pop(fact_name)
 
     async def _fetch_json_with_retry_and_cache(
         self,
