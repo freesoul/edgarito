@@ -26,6 +26,12 @@ class FinancialStatementReader:
     def get_cost_of_revenue(self, granularity: Granularity) -> UnivariateMeasurements:
         return self.get_usd_concept("CostOfRevenue", granularity)
 
+    def get_research_and_development_expense(self, granularity: Granularity) -> UnivariateMeasurements:
+        return self.get_usd_concept("ResearchAndDevelopmentExpense", granularity)
+
+    def get_general_and_administrative_expense(self, granularity: Granularity) -> UnivariateMeasurements:
+        return self.get_usd_concept("GeneralAndAdministrativeExpense", granularity)
+
     def get_usd_concept(self, concept: str, granularity: Granularity) -> UnivariateMeasurements:
         if concept not in self._data.facts.us_gaap:
             raise ValueError(f"Concept {concept} not found in the data")
@@ -44,7 +50,7 @@ class FinancialStatementReader:
         else:
             raise ValueError(f"Granularity {granularity} not supported")
 
-        univariate = UnivariateMeasurements.from_measurements(concept=concept, measurements=measurements_filtered_filings)
+        univariate = UnivariateMeasurements.from_measurements(concept=concept, granularity=granularity, measurements=measurements_filtered_filings)
         univariate.sort()
 
         if granularity == Granularity.QUARTERLY:
@@ -96,29 +102,19 @@ class FinancialStatementReader:
 
         return filtered_measurements
 
-    # @staticmethod
-    # def compact_measurement_filings(measurements: List[Measurement]) -> List[Measurement]:
-    #     """
-    #     For each fiscal year and fp (Q1, Q2, Q3, FY), keep only the lastest measurement (filed date)
-    #     """
-    #     compact = OrderedDict()
-    #     for measurement in measurements:
-    #         key = (measurement.calendar_year, measurement.fp)
-    #         # If the key is not in the OrderedDict, add it.
-    #         if key not in compact:
-    #             compact[key] = measurement
-    #         else:
-    #             # If a measurement with the same key exists, update only if the new one has a later filed date.
-    #             if measurement.filed > compact[key].filed:
-    #                 compact[key] = measurement
-    #     return list(compact.values())
-
 
 if __name__ == "__main__":
     reader = FinancialStatementReader()
     reader.load_from_json_file("cache/edgar_rest/api/xbrl/companyfacts/CIK0001652044.json")
 
     revenues = reader.get_cost_of_revenue(Granularity.ANNUAL)
+    print(revenues)
 
-    for value, period in revenues:
-        print(value, period.__dict__)
+    costs = reader.get_revenue(Granularity.ANNUAL)
+    print(costs)
+
+    expenses_admin = reader.get_general_and_administrative_expense(Granularity.ANNUAL)
+    print(expenses_admin)
+
+    expenses_rd = reader.get_research_and_development_expense(Granularity.ANNUAL)
+    print(expenses_rd)

@@ -23,6 +23,12 @@ class FiscalPeriod(enum.Enum):
 
     def __le__(self, other: "FiscalPeriod"):
         return FISCAL_PERIOD_PRIORITY[self] <= FISCAL_PERIOD_PRIORITY[other]
+    
+    def __sub__(self, other: "FiscalPeriod") -> int:
+        return FISCAL_PERIOD_PRIORITY[self] - FISCAL_PERIOD_PRIORITY[other]
+    
+    def __add__(self, other: "FiscalPeriod") -> "FiscalPeriod":
+        return FiscalPeriod(FISCAL_PERIOD_PRIORITY[self] + FISCAL_PERIOD_PRIORITY[other])
 
 
 FISCAL_PERIOD_PRIORITY = {FiscalPeriod.Q1: 1, FiscalPeriod.Q2: 2, FiscalPeriod.Q3: 3, FiscalPeriod.Q4: 4, FiscalPeriod.Year: 5}

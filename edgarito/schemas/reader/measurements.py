@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple, Iterator
 
 from edgarito.enums.edgar.period import FiscalPeriod
+from edgarito.enums.granularity import Granularity
 
 from edgarito.schemas.edgar_responses.company_facts import Measurement
 
@@ -23,38 +24,52 @@ class MeasurementPeriod:
         return self.year > other.year or (self.year == other.year and self.fp >= other.fp)
 
     def __lt__(self, other: "MeasurementPeriod"):
-
         return self.year < other.year or (self.year == other.year and self.fp < other.fp)
 
     def __le__(self, other: "MeasurementPeriod"):
-
         return self.year < other.year or (self.year == other.year and self.fp <= other.fp)
+
+    def __sub__(self, other: "MeasurementPeriod") -> int:
+        """gives the number of periods between self and other"""
+        return (self.year - other.year) * 4 + (self.fp - other.fp)
 
 
 class UnivariateMeasurements:
     concept: str
-    values: List[float]
+    granularity: Granularity
     periods: List[MeasurementPeriod]
+    values: List[float]
 
-    def __init__(self, concept: str, values: List[float], periods: List[MeasurementPeriod]):
+    def __init__(self, concept: str, granularity: Granularity, values: List[float], periods: List[MeasurementPeriod]):
         self.concept = concept
-        self.values = values
+        self.granularity = granularity
         self.periods = periods
+        self.values = values
+
+        self._validate_no_missing_periods()
+
+    def __str__(self):
+        ret = f"{self.concept}:\n"
+        for value, period in zip(self.values, self.periods):
+            ret += f"\t{period.year} {period.fp}\t{value}\n"
+        return ret
+
+    def _validate_no_missing_periods(self):
+        expected_num_quarters_per_row = 1 if self.granularity == Granularity.QUARTERLY else 4
+        for i in range(1, len(self.periods)):
+            if self.periods[i] - self.periods[i - 1] != expected_num_quarters_per_row:
+                raise ValueError(f"Missing period between {self.periods[i - 1].__dict__} and {self.periods[i].__dict__}")
 
     @staticmethod
-    def from_measurements(concept: str, measurements: List[Measurement]) -> "UnivariateMeasurements":
+    def from_measurements(concept: str, granularity: Granularity, measurements: List[Measurement]) -> "UnivariateMeasurements":
         concept = concept
         values = []
         periods = []
-        # form_types = set()
         for measurement in measurements:
             values.append(measurement.val)
             periods.append(MeasurementPeriod(year=measurement.calendar_year, fp=measurement.fp))
-            # form_types.add(measurement.form)
-        # if len(form_types) > 1:
-        #     raise ValueError(f"Measurements for concept {concept} have different form types: {form_types}")
 
-        return UnivariateMeasurements(concept=concept, values=values, periods=periods)
+        return UnivariateMeasurements(concept=concept, granularity=granularity, values=values, periods=periods)
 
     def sort(self):
         sorted_pairs = sorted(zip(self.values, self.periods), key=lambda x: x[1])
@@ -84,6 +99,7 @@ class UnivariateMeasurements:
             raise ValueError("Measurements must have the same length")
         return UnivariateMeasurements(
             concept=self.concept,
+            granularity=self.granularity,
             periods=self.periods,
             values=[value - other_value for value, other_value in zip(self.values, other.values)],
         )
@@ -96,6 +112,7 @@ class UnivariateMeasurements:
             raise ValueError("Measurements must have the same length")
         return UnivariateMeasurements(
             concept=self.concept,
+            granularity=self.granularity,
             periods=self.periods,
             values=[value + other_value for value, other_value in zip(self.values, other.values)],
         )
@@ -118,7 +135,7 @@ class UnivariateMeasurements:
             if (min_period is None or period >= min_period) and (max_period is None or period <= max_period):
                 values.append(value)
                 periods.append(period)
-        return UnivariateMeasurements(concept=self.concept, values=values, periods=periods)
+        return UnivariateMeasurements(concept=self.concept, granularity=self.granularity, values=values, periods=periods)
 
     def intersect(self, other: "UnivariateMeasurements") -> "UnivariateMeasurements":
         """
