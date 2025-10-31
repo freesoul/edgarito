@@ -1,0 +1,131 @@
+1 - Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
+2 - Factorize cli
+3 - Extend the red flags :
+
+
+-------------------- Done red flags
+
+🧾 Balance Sheet Health
+
+Debt > Market Cap → automatic red flag.
+
+Debt/Equity > 1.0 → capital structure too leveraged (unless it's a financial).
+
+Current Ratio < 1.0 → potential liquidity problems.
+
+Quick Ratio < 0.8 → can’t meet short-term obligations without selling inventory.
+
+Negative Tangible Book Value → high intangibles / goodwill masking weak core assets.
+
+Interest Coverage (EBIT / Interest Expense) < 2x → risk of default.
+
+Rising Total Liabilities faster than Total Assets → deterioration of financial position.
+
+Significant off-balance-sheet liabilities (leases, pensions, etc.) → check footnotes (SEC filings).
+
+💸 Cash Flow Red Flags
+
+Operating Cash Flow < Net Income consistently → earnings quality issues.
+
+Free Cash Flow (FCF) negative for 2+ years → burning cash.
+
+Dividends > Free Cash Flow → unsustainable payout.
+
+CapEx rising faster than operating cash flow → heavy reinvestment with poor returns.
+
+Stock-based compensation > 10% of operating cash flow → dilution disguised as expense.
+
+Frequent share issuance → management funding growth via dilution, not profits.
+
+📈 Income Statement / Profitability
+
+Declining gross margin → pricing pressure or cost inflation.
+
+Declining operating margin → poor cost control or competition.
+
+Net margin < 3% (except utilities, grocers, etc.) → too thin to handle downturns.
+
+ROE < 10% and ROIC < 7% → poor capital efficiency.
+
+One-time gains/losses repeatedly appearing → earnings manipulation.
+
+Extraordinary items > 10% of income → low-quality earnings.
+
+Revenue growth without EPS growth → margin compression or share dilution.
+
+Gross margin or EPS highly volatile year-to-year → unstable business.
+
+
+
+-------------------- TO ADD (whatever is not NLAP dependent yet)
+
+
+🧠 Management / Governance
+
+High or rising SG&A % of revenue → bloated overhead or poor discipline.
+
+Executive compensation rising faster than net income → shareholder-unfriendly.
+
+Insiders selling heavily / low insider ownership → lack of confidence.
+
+Auditor changes / restatements → accounting red flags.
+
+Frequent acquisitions without accretion → empire building, not value creation.
+
+Share buybacks at high valuations / issuing shares at low valuations → poor capital allocation.
+
+No clear or improving ROIC trend post-acquisition → poor integration.
+
+🧮 Valuation Traps
+
+PE ratio < 5 with no growth catalyst → might be a value trap.
+
+PEG ratio > 2.0 → overpriced relative to growth.
+
+Price/Book > 5 without high ROE or moat → speculative pricing.
+
+Dividend yield > 8% → market pricing in dividend cut.
+
+Enterprise Value / EBITDA > 15x → expensive, unless hyper-growth.
+
+Price/Sales > 10 → needs massive growth to justify.
+
+🧯 Growth & Sustainability
+
+Revenue CAGR < inflation over 5 years → stagnation.
+
+Earnings or revenue growth dependent on one-time items → unsustainable.
+
+Customer or product concentration (>30%) → fragile business.
+
+High cyclicality without strong balance sheet → danger in downturns.
+
+Declining R&D or capex while claiming growth → underinvesting.
+
+🌎 Qualitative / Contextual
+
+Business model difficult to understand (Buffett rule).
+
+No competitive advantage / moat erosion → low pricing power.
+
+Dependent on commodity prices → little control over margins.
+
+High regulatory risk / litigation exposure → unpredictable.
+
+Inconsistent communication or misleading investor relations → integrity risk.
+
+High short interest (>10%) → market skepticism.
+
+Sudden executive departures → internal trouble.
+
+⚠️ Absolute Dealbreakers
+
+Persistent negative free cash flow + rising debt.
+
+Accounting irregularities / restatements.
+
+Dividends paid from debt or equity issuance.
+
+Management hiding details or using excessive “adjusted” metrics.
+
+Material weakness in internal controls (SEC 10-K Item 9A).

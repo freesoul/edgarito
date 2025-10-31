@@ -106,14 +106,70 @@ class Cli:
 
     async def display_financials_from_ticker(self, ticker: str, use_cache: bool = True, make_cache: bool = True):
         """Display formatted financial statements for all available periods"""
-        facts = await self.facts_from_ticker(ticker, use_cache=use_cache, make_cache=make_cache)
-        self._display_financials(facts, ticker)
+        from edgarito.services.data_loader.company_data_loader import CompanyDataLoader
+        
+        async with aiohttp.ClientSession() as session:
+            loader = CompanyDataLoader(
+                session, 
+                cache_dir=settings.cache_path,
+                download_dir="cache/downloads",
+                use_cache=use_cache,
+                make_cache=make_cache
+            )
+            result = await loader.load_from_ticker(ticker)
+        
+        self._display_financials(result.facts, ticker, result.combiner)
 
     async def display_financials_from_cik(self, cik: int, use_cache: bool = True, make_cache: bool = True):
         """Display formatted financial statements for all available periods"""
-        facts = await self.facts_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
+        from edgarito.services.data_loader.company_data_loader import CompanyDataLoader
+        
+        async with aiohttp.ClientSession() as session:
+            loader = CompanyDataLoader(
+                session,
+                cache_dir=settings.cache_path,
+                download_dir="cache/downloads",
+                use_cache=use_cache,
+                make_cache=make_cache
+            )
+            result = await loader.load_from_cik(cik)
+        
         ticker = await self.find_ticker_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
-        self._display_financials(facts, ticker)
+        self._display_financials(result.facts, ticker, result.combiner)
+
+    async def analyze_red_flags_from_ticker(
+        self, 
+        ticker: str, 
+        granularity: Granularity,
+        use_cache: bool = True, 
+        make_cache: bool = True
+    ):
+        """Analyze company for financial red flags from ticker"""
+        facts = await self.facts_from_ticker(ticker, use_cache=use_cache, make_cache=make_cache)
+        
+        from edgarito.services.analysis.red_flags_service import RedFlagsService
+        
+        service = RedFlagsService(facts)
+        report = service.analyze(granularity)
+        
+        print(report)
+
+    async def analyze_red_flags_from_cik(
+        self, 
+        cik: int, 
+        granularity: Granularity,
+        use_cache: bool = True, 
+        make_cache: bool = True
+    ):
+        """Analyze company for financial red flags from CIK"""
+        facts = await self.facts_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
+        
+        from edgarito.services.analysis.red_flags_service import RedFlagsService
+        
+        service = RedFlagsService(facts)
+        report = service.analyze(granularity)
+        
+        print(report)
 
     def _display_financials(self, facts: CompanyFacts, identifier: str):
         """Internal method to format and display financial statements"""
@@ -366,5 +422,26 @@ if __name__ == "__main__":
             asyncio.run(cli.display_financials_from_ticker(ticker, use_cache, make_cache))
         elif cik:
             asyncio.run(cli.display_financials_from_cik(cik, use_cache, make_cache))
+
+    @app.command(context_settings=context_settings)
+    def redflags(
+        ticker: str = typer.Option(None, help="Ticker to analyze"),
+        cik: int = typer.Option(None, help="CIK to analyze"),
+        granularity: str = typer.Option("annual", help="Analysis granularity: 'annual' or 'quarterly'"),
+        use_cache: bool = typer.Option(True, help="Use cache"),
+        make_cache: bool = typer.Option(True, help="Make cache"),
+    ):
+        """Analyze company for financial red flags"""
+        cli = Cli()
+        if not ticker and not cik:
+            raise typer.Abort("Provide a valid ticker with --ticker or a CIK with --cik")
+        
+        # Parse granularity
+        gran = Granularity.ANNUAL if granularity.lower() == "annual" else Granularity.QUARTERLY
+        
+        if ticker:
+            asyncio.run(cli.analyze_red_flags_from_ticker(ticker, gran, use_cache, make_cache))
+        elif cik:
+            asyncio.run(cli.analyze_red_flags_from_cik(cik, gran, use_cache, make_cache))
 
     app()

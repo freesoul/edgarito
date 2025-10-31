@@ -11,6 +11,7 @@ from edgarito.schemas.reader.measurements import UnivariateMeasurements
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 from edgarito.enums.granularity import Granularity
+from edgarito.services.financial.ifrs_mapping import get_ifrs_concept
 
 
 class BaseStatementReader:
@@ -50,10 +51,13 @@ class BaseStatementReader:
         """
         Internal method to extract a GAAP concept as time series.
         
+        Supports both US-GAAP and IFRS companies. For IFRS companies, automatically
+        maps US-GAAP concept names to their IFRS equivalents.
+        
         Args:
             concept: US-GAAP concept name (e.g., "Assets", "Revenue")
             granularity: ANNUAL or QUARTERLY
-            filing_types: List of filing types to include (defaults to 10-K for annual, 10-K/10-Q for quarterly)
+            filing_types: List of filing types to include (defaults to 10-K/20-F for annual, 10-K/10-Q/20-F for quarterly)
             convert_fy_to_q4: Whether to convert FY periods to Q4 for quarterly data (default True).
                              Set to False for stock/point-in-time data like balance sheet.
         
@@ -62,22 +66,49 @@ class BaseStatementReader:
         """
         self._require_loaded()
         
-        if concept not in self._data.facts.us_gaap:
-            raise ValueError(f"Concept '{concept}' not found in company data")
+        # Determine if company uses US-GAAP or IFRS
+        use_ifrs = False
+        if not self._data.facts.us_gaap:
+            if self._data.facts.ifrs_full:
+                use_ifrs = True
+                # Map US-GAAP concept to IFRS equivalent
+                ifrs_concept = get_ifrs_concept(concept)
+                if not ifrs_concept:
+                    raise ValueError(f"Concept '{concept}' has no IFRS mapping")
+                concept = ifrs_concept
+            else:
+                raise ValueError(f"Company data has neither US-GAAP nor IFRS standards")
+        
+        # Get the appropriate facts dictionary
+        facts_dict = self._data.facts.ifrs_full if use_ifrs else self._data.facts.us_gaap
+        
+        if concept not in facts_dict:
+            standard = "IFRS" if use_ifrs else "US-GAAP"
+            raise ValueError(f"Concept '{concept}' not found in {standard} company data")
         
         # Default filing types based on granularity
         if filing_types is None:
             if granularity == Granularity.ANNUAL:
-                filing_types = [CoreFilingType.FILING_10K]
+                # Support both US and foreign companies
+                filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_20F]
             elif granularity == Granularity.QUARTERLY:
-                filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q]
+                filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q, CoreFilingType.FILING_20F]
             else:
                 raise ValueError(f"Unsupported granularity: {granularity}")
         
-        # Filter measurements by filing type
-        all_measurements = self._data.facts.us_gaap[concept].units.USD
+        # Get measurements - try USD first, then EUR for IFRS companies
+        all_measurements = facts_dict[concept].units.USD
+        if all_measurements is None and use_ifrs:
+            # Try EUR for IFRS companies (using getattr since EUR is in extra fields)
+            eur_data = getattr(facts_dict[concept].units, 'EUR', None)
+            if eur_data is not None:
+                # EUR data comes as list of dicts, need to convert to Measurement objects
+                from edgarito.schemas.edgar_responses.company_facts import Measurement
+                all_measurements = [Measurement(**m) if isinstance(m, dict) else m for m in eur_data]
+        
         if all_measurements is None:
-            raise ValueError(f"No USD measurements found for concept '{concept}'")
+            currency = "USD/EUR" if use_ifrs else "USD"
+            raise ValueError(f"No {currency} measurements found for concept '{concept}'")
         
         filtered_measurements = []
         for filing_type in filing_types:
