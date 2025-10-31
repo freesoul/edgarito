@@ -7,7 +7,6 @@ import aiohttp
 import urllib.parse
 
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.taxonomy_client.xbrl_taxonomy_client import TaxonomyClient
 
 from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
 from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, FilingRecent
@@ -65,7 +64,7 @@ class EDGARLowLevelClient:
 
     async def get_company_facts(self, cik: int, use_cache: bool = True, make_cache: bool = True) -> CompanyFacts:
         """
-        If taxonomy_url is provided, it will move deprecated facts to the us_gaap_deprecated field.
+        Fetch company facts (XBRL financial data) from SEC EDGAR.
         """
         cik_str = str(cik).zfill(10)
         raw_json = await self._fetch_json_with_retry_and_cache(

@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from edgarito.enums.edgar.filing_type import FilingType
+from edgarito.enums.edgar.core_filing_type import CoreFilingType
 
 
 class TransposedFiling(BaseModel):
@@ -28,8 +28,9 @@ class TransposedFiling(BaseModel):
     reportDate: Optional[datetime.date]
 
     @property
-    def parsed_type(self) -> Optional[FilingType]:
-        try:
-            return FilingType(self.form)
-        except ValueError:
-            return None
+    def parsed_type(self) -> Optional[CoreFilingType]:
+        """
+        Try to parse the form string into a CoreFilingType enum.
+        Returns None if the form type is not in the core filing types.
+        """
+        return CoreFilingType.try_from_string(self.form)

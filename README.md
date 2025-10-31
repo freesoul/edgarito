@@ -14,7 +14,7 @@ python -m pip install edgarito
 ```
 from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.enums.edgar.filing_type import FilingType
+from edgarito.enums.edgar.core_filing_type import CoreFilingType
 
 
 async def main():
@@ -44,7 +44,7 @@ async def main():
                 print(f"{fact_name} - {fact_info.label}:")
                 for measurement in fact_info.units.USD:
 
-                    if measurement.parsed_type != FilingType.FILING_10K:
+                    if measurement.parsed_type != CoreFilingType.FILING_10K:
                         continue
                     print(f"\t{measurement.fy}: {measurement.val}")
 

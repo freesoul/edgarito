@@ -5,7 +5,7 @@ from edgarito.schemas.edgar_responses.submission import CompanySubmissionsRespon
 
 from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
 
-from edgarito.enums.edgar.filing_type import FilingType
+from edgarito.enums.edgar.core_filing_type import CoreFilingType
 
 
 class SubmissionsClient:
@@ -28,7 +28,7 @@ class SubmissionsClient:
         return first
 
     async def get_all_submission_filings_transposed(
-        self, cik: int, filing_type: Optional[FilingType] = None, use_cache: bool = True, make_cache: bool = True
+        self, cik: int, filing_type: Optional[CoreFilingType] = None, use_cache: bool = True, make_cache: bool = True
     ) -> List[TransposedFiling]:
         """
         Returns the submissions in ascending order, from older to newer.
@@ -36,6 +36,6 @@ class SubmissionsClient:
         response = await self.get_all_submissions(cik, use_cache=use_cache, make_cache=make_cache)
         transposed = response.filings.recent.transpose()
         if filing_type:
-            transposed = [filing for filing in transposed if filing.parsed_type == filing_type]
+            transposed = [filing for filing in transposed if filing.form == filing_type.value]
 
         return sorted(transposed, key=lambda x: x.filingDate)
