@@ -9,10 +9,12 @@ from edgarito.schemas.edgar_responses.company_facts import Measurement
 class MeasurementPeriod:
     year: int
     fp: FiscalPeriod
+    frame: Optional[str]
 
-    def __init__(self, year: int, fp: FiscalPeriod):
+    def __init__(self, year: int, fp: FiscalPeriod, frame: Optional[str] = None):
         self.year = year
         self.fp = fp
+        self.frame = frame
 
     def __eq__(self, other: "MeasurementPeriod"):
         return self.year == other.year and self.fp == other.fp
@@ -77,7 +79,7 @@ class UnivariateMeasurements:
         periods = []
         for measurement in measurements:
             values.append(measurement.val)
-            periods.append(MeasurementPeriod(year=measurement.calendar_year, fp=measurement.fp))
+            periods.append(MeasurementPeriod(year=measurement.calendar_year, fp=measurement.fp, frame=measurement.frame))
 
         return UnivariateMeasurements(concept=concept, granularity=granularity, values=values, periods=periods)
 

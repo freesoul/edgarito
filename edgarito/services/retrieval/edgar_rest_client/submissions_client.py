@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from edgarito.schemas.edgar_responses.submission import CompanySubmissionsResponse, TransposedFiling
 
-from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.retrieval.edgar_rest_client.low_level_client import EDGARLowLevelClient
 
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 

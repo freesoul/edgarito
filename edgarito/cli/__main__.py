@@ -1,7 +1,7 @@
 import pathlib
 import logging
 import aiohttp
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import asyncio
 
 import typer
@@ -9,10 +9,10 @@ import typer
 from edgarito.cli.logger import configure_logger
 from edgarito.cli.settings import settings
 
-from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.retrieval.edgar_rest_client.low_level_client import EDGARLowLevelClient
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.edgar_rest_client.submissions_client import SubmissionsClient
-from edgarito.services.downloader.download_service import DownloadService
+from edgarito.services.retrieval.edgar_rest_client.submissions_client import SubmissionsClient
+from edgarito.services.retrieval.downloader.download_service import DownloadService
 
 
 from edgarito.schemas.edgar_responses.company_ticker import CompanyTickerResponse
@@ -22,6 +22,8 @@ from edgarito.schemas.edgar_responses.company_facts import CompanyFacts
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 from edgarito.enums.granularity import Granularity
 
+from edgarito.services.retrieval.company_data_loader import CompanyDataLoader
+from edgarito.services.financial.statements import FinancialStatements
 
 class Cli:
 
@@ -95,10 +97,19 @@ class Cli:
         return await self.download_from_cik(resolved_cik, type=type, use_cache=use_cache, make_cache=make_cache, limit=limit)
 
     async def facts_from_cik(self, cik: int, use_cache: bool = True, make_cache: bool = True) -> CompanyFacts:
-        """ """
-        async with EDGARLowLevelClient(cache=self._cache, user_agent=settings.user_agent) as client:
-            facts = await client.get_company_facts(cik, use_cache=use_cache, make_cache=make_cache)
-            return facts
+        """Load company facts using CompanyDataLoader (includes 6-K data integration)"""
+        
+        async with aiohttp.ClientSession(headers={"User-Agent": settings.user_agent, "Accept-Encoding": "gzip, deflate"}) as session:
+            loader = CompanyDataLoader(
+                session,
+                cache_dir=settings.cache_path,
+                download_dir=f"{settings.cache_path}/downloads",
+                user_agent=settings.user_agent,
+                use_cache=use_cache,
+                make_cache=make_cache
+            )
+            result = await loader.load_from_cik(cik)
+            return result.facts
 
     async def facts_from_ticker(self, ticker: str, use_cache: bool = True, make_cache: bool = True) -> CompanyFacts:
         cik = await self.cik_from_ticker(ticker, use_cache=use_cache, make_cache=make_cache)
@@ -106,36 +117,36 @@ class Cli:
 
     async def display_financials_from_ticker(self, ticker: str, use_cache: bool = True, make_cache: bool = True):
         """Display formatted financial statements for all available periods"""
-        from edgarito.services.data_loader.company_data_loader import CompanyDataLoader
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers={"User-Agent": settings.user_agent, "Accept-Encoding": "gzip, deflate"}) as session:
             loader = CompanyDataLoader(
                 session, 
                 cache_dir=settings.cache_path,
-                download_dir="cache/downloads",
+                download_dir=f"{settings.cache_path}/downloads",
+                user_agent=settings.user_agent,
                 use_cache=use_cache,
                 make_cache=make_cache
             )
             result = await loader.load_from_ticker(ticker)
         
-        self._display_financials(result.facts, ticker, result.combiner)
+        self._display_financials(result.facts, ticker)
 
     async def display_financials_from_cik(self, cik: int, use_cache: bool = True, make_cache: bool = True):
         """Display formatted financial statements for all available periods"""
-        from edgarito.services.data_loader.company_data_loader import CompanyDataLoader
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers={"User-Agent": settings.user_agent, "Accept-Encoding": "gzip, deflate"}) as session:
             loader = CompanyDataLoader(
                 session,
                 cache_dir=settings.cache_path,
-                download_dir="cache/downloads",
+                download_dir=f"{settings.cache_path}/downloads",
+                user_agent=settings.user_agent,
                 use_cache=use_cache,
                 make_cache=make_cache
             )
             result = await loader.load_from_cik(cik)
         
         ticker = await self.find_ticker_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
-        self._display_financials(result.facts, ticker, result.combiner)
+        self._display_financials(result.facts, ticker)
 
     async def analyze_red_flags_from_ticker(
         self, 
@@ -173,8 +184,6 @@ class Cli:
 
     def _display_financials(self, facts: CompanyFacts, identifier: str):
         """Internal method to format and display financial statements"""
-        from edgarito.services.financial.statements import FinancialStatements
-        from edgarito.enums.granularity import Granularity
         
         statements = FinancialStatements(facts)
         

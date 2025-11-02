@@ -1,1 +1,0 @@
-from secedgar.parser import MetaParser  # Refactorize this.

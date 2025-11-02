@@ -15,13 +15,19 @@ from typing import Optional, List, Dict, Any
 from bs4 import BeautifulSoup
 from decimal import Decimal
 
+from edgarito.services.retrieval.parser.base_document_extractor import (
+    BaseDocumentExtractor,
+    ExtractedDocument
+)
 
-class Filing6KParser:
+
+class Filing6KParser(BaseDocumentExtractor):
     """Parser for 6-K filings with HTML press release exhibits."""
 
-    @staticmethod
-    def extract_exhibit(txt_content: str, exhibit_pattern: str = "EX-99") -> Optional[str]:
+    def extract_exhibit(self, txt_content: str, exhibit_pattern: str = "EX-99") -> Optional[str]:
         """Extract exhibit document from SEC .txt submission.
+        
+        Uses the base class document extraction logic to find Exhibit 99.x documents.
         
         Args:
             txt_content: Full text content of SEC submission .txt file
@@ -35,28 +41,11 @@ class Filing6KParser:
             <DOCUMENT><TYPE>6-K</TYPE>...cover page...</DOCUMENT>
             <DOCUMENT><TYPE>EX-99.1</TYPE>...press release...</DOCUMENT>
         """
-        # Pattern to find document blocks with matching exhibit type
-        # SEC format: <TYPE>EX-99.1 (no closing tag, on separate line)
-        # Look for <TYPE>EX-99.x followed by <TEXT> tag, extract until </TEXT> or </DOCUMENT>
+        # Use base class to extract document by type (prefix match)
+        doc = self.extract_document_by_type(txt_content, exhibit_pattern, exact_match=False)
         
-        # Pattern: Find <TYPE>EX-99.x line, then find <TEXT> tag, extract content until closing tag
-        # The format looks like:
-        # <TYPE>EX-99.1
-        # <SEQUENCE>2
-        # <FILENAME>...
-        # <TEXT>
-        # ...content...
-        # </TEXT>
-        # </DOCUMENT>
-        
-        pattern = rf'<TYPE>({exhibit_pattern}(?:\.\d+)?)\s+.*?<TEXT>\s*(.*?)(?:</TEXT>|</DOCUMENT>)'
-        
-        matches = re.findall(pattern, txt_content, re.DOTALL | re.IGNORECASE)
-        
-        if matches:
-            # Return content of first matching exhibit (usually EX-99.1)
-            exhibit_content = matches[0][1].strip()
-            return exhibit_content
+        if doc:
+            return doc.content
         
         return None
 
@@ -218,8 +207,7 @@ class Filing6KParser:
         
         return metrics
 
-    @staticmethod
-    def parse_6k_filing(txt_content: str) -> Dict[str, Any]:
+    def parse_6k_filing(self, txt_content: str) -> Dict[str, Any]:
         """Complete parsing pipeline for 6-K filing.
         
         Args:
@@ -239,20 +227,20 @@ class Filing6KParser:
             parser = Filing6KParser()
             metrics = parser.parse_6k_filing(txt_content)
         """
-        # Step 1: Extract Exhibit 99.x (press release)
-        exhibit_html = Filing6KParser.extract_exhibit(txt_content, exhibit_pattern="EX-99")
+        # Step 1: Extract Exhibit 99.x (press release) using base class functionality
+        exhibit_html = self.extract_exhibit(txt_content, exhibit_pattern="EX-99")
         
         if not exhibit_html:
             return {"error": "No Exhibit 99.x found in filing"}
         
         # Step 2: Parse HTML tables
-        tables = Filing6KParser.parse_html_tables(exhibit_html)
+        tables = self.parse_html_tables(exhibit_html)
         
         if not tables:
             return {"error": "No HTML tables found in exhibit"}
         
         # Step 3: Extract financial metrics
-        metrics = Filing6KParser.extract_financial_metrics(tables)
+        metrics = self.extract_financial_metrics(tables)
         
         return {
             "success": True,

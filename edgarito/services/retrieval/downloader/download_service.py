@@ -8,6 +8,7 @@ import aiohttp
 import pathlib
 
 from edgarito.schemas.edgar_responses.submission import TransposedFiling
+from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 
 class DownloadOptions(enum.Enum):
@@ -17,10 +18,16 @@ class DownloadOptions(enum.Enum):
 
 class DownloadService:
 
-    def __init__(self, session: aiohttp.ClientSession, download_root_dir: Union[str, pathlib.Path]):
+    def __init__(
+        self, 
+        session: aiohttp.ClientSession, 
+        download_root_dir: Union[str, pathlib.Path],
+        cache: Optional[FileSystemCache] = None
+    ):
         self._logger = logging.getLogger(__class__.__name__)
         self._session = session
         self.download_root_dir = pathlib.Path(download_root_dir)
+        self._cache = cache
         os.makedirs(self.download_root_dir, exist_ok=True)
 
     async def download_multiple(
@@ -50,10 +57,17 @@ class DownloadService:
     async def download(
         self, cik: int, accession_number: str, file_to_download: str, custom_save_path: Optional[Union[str, pathlib.Path]] = None
     ) -> pathlib.Path:
-        content = await self.fetch(cik=cik, accession_number=accession_number, document_name=file_to_download)
         download_dir = custom_save_path if custom_save_path else (self.download_root_dir / str(cik).zfill(10) / accession_number)
-        os.makedirs(download_dir, exist_ok=True)
         download_file_path = download_dir / file_to_download
+        
+        # Check if file already exists (cache)
+        if download_file_path.exists():
+            self._logger.debug(f"Using cached file: {download_file_path}")
+            return download_file_path
+        
+        # Download from SEC
+        content = await self.fetch(cik=cik, accession_number=accession_number, document_name=file_to_download)
+        os.makedirs(download_dir, exist_ok=True)
         with open(download_file_path, "wb") as file:
             file.write(content)
         return download_file_path

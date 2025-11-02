@@ -12,7 +12,7 @@ python -m pip install edgarito
 # Example usage of the async API
 
 ```
-from edgarito.services.edgar_rest_client.low_level_client import EDGARLowLevelClient
+from edgarito.services.retrieval.edgar_rest_client.low_level_client import EDGARLowLevelClient
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 
@@ -61,9 +61,9 @@ if __name__ == "__main__":
 - Find submissions `python -m edgarito.cli submissions --cik 320193 --type 10-K`
 
 ```
-[2025-03-01 12:37:41,330][INFO][edgarito.services.edgar_rest_client.submissions_client] Got 1000 filings for CIK 320193
-[2025-03-01 12:37:41,330][INFO][edgarito.services.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
-[2025-03-01 12:37:41,330][INFO][edgarito.services.edgar_rest_client.submissions_client] Got 1125 additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
+[2025-03-01 12:37:41,330][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1000 filings for CIK 320193
+[2025-03-01 12:37:41,330][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
+[2025-03-01 12:37:41,330][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1125 additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
 [2025-03-01 12:37:41,346][INFO][Cli] 1994-12-13         0000320193-94-000016    10-K (10-K)
 [2025-03-01 12:37:41,346][INFO][Cli] 1995-12-19         0000320193-95-000016    10-K (10-K)
 [2025-03-01 12:37:41,346][INFO][Cli] 1996-12-19         0000320193-96-000023    10-K (10-K)
@@ -99,9 +99,9 @@ if __name__ == "__main__":
 
 ```
 [2025-03-01 12:37:03,588][INFO][Cli] CIK: 320193
-[2025-03-01 12:37:03,590][INFO][edgarito.services.edgar_rest_client.submissions_client] Got 1000 filings for CIK 320193
-[2025-03-01 12:37:03,590][INFO][edgarito.services.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
-[2025-03-01 12:37:03,592][INFO][edgarito.services.edgar_rest_client.submissions_client] Got 1125 additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
+[2025-03-01 12:37:03,590][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1000 filings for CIK 320193
+[2025-03-01 12:37:03,590][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
+[2025-03-01 12:37:03,592][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1125 additional filings for name='CIK0000320193-submissions-001.json' filingCount=1125 filingFrom=datetime.date(1994, 1, 26) filingTo=datetime.date(2014, 5, 28)
 [2025-03-01 12:37:03,601][INFO][Cli] 2020-10-30         0000320193-20-000096    10-K (XBRL)
 [2025-03-01 12:37:03,601][INFO][Cli] 2021-10-29         0000320193-21-000105    10-K (XBRL)
 [2025-03-01 12:37:03,602][INFO][Cli] 2022-10-28         0000320193-22-000108    10-K (XBRL)

@@ -4,6 +4,7 @@ Base class for financial statement readers.
 All readers inherit from this to ensure consistent interface and access to company facts data.
 """
 import json
+import logging
 from typing import Optional
 
 from edgarito.schemas.edgar_responses.company_facts import CompanyFacts, Measurement
@@ -12,6 +13,8 @@ from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 from edgarito.enums.granularity import Granularity
 from edgarito.services.financial.ifrs_mapping import get_ifrs_concept
+
+logger = logging.getLogger(__name__)
 
 
 class BaseStatementReader:
@@ -92,7 +95,8 @@ class BaseStatementReader:
                 # Support both US and foreign companies
                 filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_20F]
             elif granularity == Granularity.QUARTERLY:
-                filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q, CoreFilingType.FILING_20F]
+                # Support US companies (10-Q), foreign companies (6-K), and annual reports
+                filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q, CoreFilingType.FILING_20F, CoreFilingType.FILING_6K]
             else:
                 raise ValueError(f"Unsupported granularity: {granularity}")
         
@@ -113,6 +117,7 @@ class BaseStatementReader:
         filtered_measurements = []
         for filing_type in filing_types:
             filtered = self._filter_measurements(all_measurements, filing_type)
+            logger.debug(f"Filtered {len(filtered)} measurements for filing_type={filing_type.value} (concept={concept})")
             filtered_measurements.extend(filtered)
         
         # Create univariate measurements
@@ -156,6 +161,7 @@ class BaseStatementReader:
             
             # Ensure we have calendar year
             if measurement.calendar_year is None:
+                logger.debug(f"Skipping measurement without calendar_year: end={measurement.end}, start={measurement.start}, form={measurement.form}")
                 continue
             
             # Note: We don't filter by frame here because YTD cumulative values
@@ -213,6 +219,11 @@ class BaseStatementReader:
         
         for i, period in enumerate(univariate.periods):
             year = period.year
+            
+            # Skip conversion for measurements that already have individual quarter data
+            # Frame ending in "I" indicates "instant" (individual quarter, not YTD cumulative)
+            if period.frame and period.frame.endswith("I"):
+                continue
             
             # Convert Q2 YTD to individual Q2
             if period.fp == FiscalPeriod.Q2:
