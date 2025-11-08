@@ -218,20 +218,41 @@ class RedFlagsService:
             latest_period = total_debt.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 1. Debt/Equity > threshold
+            # 1. Debt/Equity with tiered severity
             if total_debt.values and equity.values:
                 debt = total_debt.values[-1]
                 eq = equity.values[-1]
-                if eq > 0:
+                
+                # Check for negative equity first (most critical)
+                if eq <= 0:
+                    flags.append(RedFlag(
+                        category="Balance Sheet",
+                        severity=RedFlagSeverity.CRITICAL,
+                        title="Negative or Zero Stockholders' Equity",
+                        description="Technically insolvent - liabilities exceed assets, bankruptcy risk",
+                        current_value=eq / 1e9,
+                        period=period_str
+                    ))
+                elif eq > 0:
                     debt_to_equity = debt / eq
-                    if debt_to_equity > self.thresholds.debt_to_equity_ratio:
+                    if debt_to_equity > self.thresholds.debt_to_equity_ratio_critical:
+                        flags.append(RedFlag(
+                            category="Balance Sheet",
+                            severity=RedFlagSeverity.CRITICAL,
+                            title="Extremely High Debt-to-Equity Ratio",
+                            description="Severe overleveraging - debt more than 2x equity",
+                            current_value=debt_to_equity,
+                            threshold=self.thresholds.debt_to_equity_ratio_critical,
+                            period=period_str
+                        ))
+                    elif debt_to_equity > self.thresholds.debt_to_equity_ratio_warning:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.WARNING,
                             title="High Debt-to-Equity Ratio",
                             description="Capital structure too leveraged - debt exceeds equity",
                             current_value=debt_to_equity,
-                            threshold=self.thresholds.debt_to_equity_ratio,
+                            threshold=self.thresholds.debt_to_equity_ratio_warning,
                             period=period_str
                         ))
             
@@ -249,24 +270,34 @@ class RedFlagsService:
                         period=period_str
                     ))
             
-            # 3. Current Ratio < threshold
+            # 3. Current Ratio with tiered severity
             if current_assets.values and current_liabilities.values:
                 curr_assets = current_assets.values[-1]
                 curr_liab = current_liabilities.values[-1]
                 if curr_liab > 0:
                     current_ratio = curr_assets / curr_liab
-                    if current_ratio < self.thresholds.current_ratio:
+                    if current_ratio < self.thresholds.current_ratio_critical:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.CRITICAL,
-                            title="Low Current Ratio",
-                            description="Potential liquidity problems - current assets < current liabilities",
+                            title="Critically Low Current Ratio",
+                            description="Severe liquidity crisis - current assets below current liabilities",
                             current_value=current_ratio,
-                            threshold=self.thresholds.current_ratio,
+                            threshold=self.thresholds.current_ratio_critical,
+                            period=period_str
+                        ))
+                    elif current_ratio < self.thresholds.current_ratio_warning:
+                        flags.append(RedFlag(
+                            category="Balance Sheet",
+                            severity=RedFlagSeverity.WARNING,
+                            title="Low Current Ratio",
+                            description="Potential liquidity problems - limited ability to meet short-term obligations",
+                            current_value=current_ratio,
+                            threshold=self.thresholds.current_ratio_warning,
                             period=period_str
                         ))
             
-            # 4. Quick Ratio < threshold
+            # 4. Quick Ratio with tiered severity
             try:
                 cash = self.balance_sheet.get_cash_and_equivalents(granularity)
                 receivables = self.balance_sheet.get_accounts_receivable(granularity)
@@ -276,14 +307,24 @@ class RedFlagsService:
                     curr_liab = current_liabilities.values[-1]
                     if curr_liab > 0:
                         quick_ratio = quick_assets / curr_liab
-                        if quick_ratio < self.thresholds.quick_ratio:
+                        if quick_ratio < self.thresholds.quick_ratio_critical:
+                            flags.append(RedFlag(
+                                category="Balance Sheet",
+                                severity=RedFlagSeverity.CRITICAL,
+                                title="Critically Low Quick Ratio",
+                                description="Severe liquidity - cannot meet immediate obligations without selling inventory",
+                                current_value=quick_ratio,
+                                threshold=self.thresholds.quick_ratio_critical,
+                                period=period_str
+                            ))
+                        elif quick_ratio < self.thresholds.quick_ratio_warning:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.WARNING,
                                 title="Low Quick Ratio",
-                                description="Cannot meet short-term obligations without selling inventory",
+                                description="Cannot comfortably meet short-term obligations without selling inventory",
                                 current_value=quick_ratio,
-                                threshold=self.thresholds.quick_ratio,
+                                threshold=self.thresholds.quick_ratio_warning,
                                 period=period_str
                             ))
             except ValueError:
@@ -303,16 +344,16 @@ class RedFlagsService:
                     if tangible_book_value < 0:
                         flags.append(RedFlag(
                             category="Balance Sheet",
-                            severity=RedFlagSeverity.WARNING,
+                            severity=RedFlagSeverity.CRITICAL,
                             title="Negative Tangible Book Value",
-                            description="High intangibles/goodwill masking weak core assets",
+                            description="High intangibles/goodwill masking weak core assets - insolvency risk",
                             current_value=tangible_book_value / 1e9,
                             period=period_str
                         ))
             except ValueError:
                 pass
             
-            # 6. Interest Coverage < 2x
+            # 6. Interest Coverage with tiered severity
             try:
                 operating_income = self.income_statement.get_operating_income(granularity)
                 interest_expense = self.income_statement.get_interest_expense(granularity)
@@ -323,14 +364,24 @@ class RedFlagsService:
                     
                     if interest > 0:
                         coverage = ebit / interest
-                        if coverage < self.thresholds.interest_coverage:
+                        if coverage < self.thresholds.interest_coverage_critical:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.CRITICAL,
-                                title="Low Interest Coverage",
-                                description="Risk of default - EBIT < 2x interest expense",
+                                title="Critically Low Interest Coverage",
+                                description="Imminent default risk - EBIT barely covers interest expense",
                                 current_value=coverage,
-                                threshold=self.thresholds.interest_coverage,
+                                threshold=self.thresholds.interest_coverage_critical,
+                                period=period_str
+                            ))
+                        elif coverage < self.thresholds.interest_coverage_warning:
+                            flags.append(RedFlag(
+                                category="Balance Sheet",
+                                severity=RedFlagSeverity.WARNING,
+                                title="Low Interest Coverage",
+                                description="Risk of default - insufficient EBIT cushion for interest payments",
+                                current_value=coverage,
+                                threshold=self.thresholds.interest_coverage_warning,
                                 period=period_str
                             ))
             except ValueError:
@@ -374,6 +425,18 @@ class RedFlagsService:
             latest_period = ocf.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
+            # 0. Negative Operating Cash Flow (CRITICAL)
+            if ocf.values and ocf.values[-1] < 0:
+                flags.append(RedFlag(
+                    category="Cash Flow",
+                    severity=RedFlagSeverity.CRITICAL,
+                    title="Negative Operating Cash Flow",
+                    description="Burning cash from operations - unsustainable without financing",
+                    current_value=ocf.values[-1] / 1e9,
+                    threshold=0.0,
+                    period=period_str
+                ))
+            
             # 1. Operating Cash Flow < Net Income consistently
             if len(ocf.values) >= 3 and len(net_income.values) >= 3:
                 # Check last 3 periods
@@ -383,9 +446,9 @@ class RedFlagsService:
                 if ocf_below_count >= 2:
                     flags.append(RedFlag(
                         category="Cash Flow",
-                        severity=RedFlagSeverity.WARNING,
+                        severity=RedFlagSeverity.CRITICAL,
                         title="OCF Consistently Below Net Income",
-                        description="Earnings quality issues - profits not converting to cash",
+                        description="Earnings quality issues - profits not converting to cash repeatedly",
                         current_value=ocf.values[-1] / net_income.values[-1] if net_income.values[-1] != 0 else 0,
                         threshold=1.0,
                         period=f"Last 3 periods"
@@ -544,7 +607,18 @@ class RedFlagsService:
                 om_current = (operating_income.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
                 om_prev = (operating_income.values[-3] / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
                 
-                if om_current < om_prev - 2:  # 2% decline threshold
+                # Check for negative operating margin (CRITICAL)
+                if om_current < 0:
+                    flags.append(RedFlag(
+                        category="Profitability",
+                        severity=RedFlagSeverity.CRITICAL,
+                        title="Negative Operating Margin",
+                        description="Operating losses - core business not profitable",
+                        current_value=om_current,
+                        threshold=0.0,
+                        period=period_str
+                    ))
+                elif om_current < om_prev - 2:  # 2% decline threshold
                     flags.append(RedFlag(
                         category="Profitability",
                         severity=RedFlagSeverity.WARNING,
@@ -555,11 +629,21 @@ class RedFlagsService:
                         period=f"{revenue.periods[-3].year}-{latest_period.year}"
                     ))
             
-            # 3. Net margin < 3%
+            # 3. Net margin checks (negative = CRITICAL, low = INFO)
             if revenue.values and net_income.values:
                 net_margin = (net_income.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
                 
-                if 0 < net_margin < 3:
+                if net_margin < 0:
+                    flags.append(RedFlag(
+                        category="Profitability",
+                        severity=RedFlagSeverity.CRITICAL,
+                        title="Negative Net Margin (Losses)",
+                        description="Company losing money - burning through capital",
+                        current_value=net_margin,
+                        threshold=0.0,
+                        period=period_str
+                    ))
+                elif 0 < net_margin < self.thresholds.net_margin_percent:
                     flags.append(RedFlag(
                         category="Profitability",
                         severity=RedFlagSeverity.INFO,
@@ -570,7 +654,7 @@ class RedFlagsService:
                         period=period_str
                     ))
             
-            # 4. ROE < 10%
+            # 4. ROE checks (negative = CRITICAL, low = INFO)
             try:
                 equity = self.balance_sheet.get_stockholders_equity(granularity)
                 
@@ -579,7 +663,17 @@ class RedFlagsService:
                     if avg_equity > 0:
                         roe = (net_income.values[-1] / avg_equity) * 100
                         
-                        if 0 < roe < self.thresholds.roe_percent:
+                        if roe < 0:
+                            flags.append(RedFlag(
+                                category="Profitability",
+                                severity=RedFlagSeverity.CRITICAL,
+                                title="Negative Return on Equity",
+                                description="Destroying shareholder value - losses eating into equity",
+                                current_value=roe,
+                                threshold=0.0,
+                                period=period_str
+                            ))
+                        elif 0 < roe < self.thresholds.roe_percent:
                             flags.append(RedFlag(
                                 category="Profitability",
                                 severity=RedFlagSeverity.INFO,
@@ -655,12 +749,22 @@ class RedFlagsService:
             latest_period = revenue.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 1. Revenue CAGR < inflation over 5 years
+            # 1. Revenue CAGR checks (severe decline = CRITICAL, stagnation = INFO)
             if len(revenue.values) >= 5:
                 years = 5 if granularity == Granularity.ANNUAL else 5/4  # Adjust for quarterly
                 cagr = ((revenue.values[-1] / revenue.values[-5]) ** (1/years) - 1) * 100
                 
-                if cagr < self.thresholds.revenue_cagr_inflation:
+                if cagr < -20:  # Severe revenue decline (>20% CAGR)
+                    flags.append(RedFlag(
+                        category="Growth",
+                        severity=RedFlagSeverity.CRITICAL,
+                        title="Severe Revenue Decline",
+                        description="Business collapsing - catastrophic revenue contraction",
+                        current_value=cagr,
+                        threshold=-20.0,
+                        period=f"{revenue.periods[-5].year}-{latest_period.year}"
+                    ))
+                elif cagr < self.thresholds.revenue_cagr_inflation:
                     flags.append(RedFlag(
                         category="Growth",
                         severity=RedFlagSeverity.INFO,
@@ -671,22 +775,32 @@ class RedFlagsService:
                         period=f"{revenue.periods[-5].year}-{latest_period.year}"
                     ))
             
-            # 2. High or rising SG&A % of revenue
+            # 2. High or rising SG&A % of revenue with tiered severity
             try:
                 sga = self.income_statement.get_selling_general_administrative_expense(granularity)
                 
                 if sga.values and revenue.values:
                     sga_pct = (sga.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
                     
-                    # Check if SG&A > threshold % of revenue
-                    if sga_pct > self.thresholds.sga_percent_revenue:
+                    # Check SG&A thresholds
+                    if sga_pct > self.thresholds.sga_percent_revenue_warning:
                         flags.append(RedFlag(
                             category="Growth",
                             severity=RedFlagSeverity.WARNING,
                             title="High SG&A Expenses",
-                            description="Bloated overhead - SG&A exceeds threshold % of revenue",
+                            description="Bloated overhead - SG&A exceeds 30% of revenue",
                             current_value=sga_pct,
-                            threshold=self.thresholds.sga_percent_revenue,
+                            threshold=self.thresholds.sga_percent_revenue_warning,
+                            period=period_str
+                        ))
+                    elif sga_pct > self.thresholds.sga_percent_revenue_info:
+                        flags.append(RedFlag(
+                            category="Growth",
+                            severity=RedFlagSeverity.INFO,
+                            title="Elevated SG&A Expenses",
+                            description="SG&A expenses moderately high relative to revenue",
+                            current_value=sga_pct,
+                            threshold=self.thresholds.sga_percent_revenue_info,
                             period=period_str
                         ))
                     

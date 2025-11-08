@@ -6,11 +6,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RedFlagsThresholds(BaseModel):
     """Configurable thresholds for red flag detection"""
     
-    # Balance Sheet Health
-    debt_to_equity_ratio: float = Field(default=1.0, description="Debt/Equity threshold")
-    current_ratio: float = Field(default=1.0, description="Current ratio threshold")
-    quick_ratio: float = Field(default=0.8, description="Quick ratio threshold")
-    interest_coverage: float = Field(default=2.0, description="Interest coverage threshold")
+    # Balance Sheet Health - Tiered thresholds
+    debt_to_equity_ratio_warning: float = Field(default=1.0, description="D/E WARNING threshold")
+    debt_to_equity_ratio_critical: float = Field(default=2.0, description="D/E CRITICAL threshold")
+    
+    current_ratio_critical: float = Field(default=1.0, description="Current ratio CRITICAL threshold")
+    current_ratio_warning: float = Field(default=1.5, description="Current ratio WARNING threshold")
+    
+    quick_ratio_warning: float = Field(default=1.0, description="Quick ratio WARNING threshold")
+    quick_ratio_critical: float = Field(default=0.5, description="Quick ratio CRITICAL threshold")
+    
+    interest_coverage_critical: float = Field(default=1.5, description="Interest coverage CRITICAL threshold")
+    interest_coverage_warning: float = Field(default=3.0, description="Interest coverage WARNING threshold")
     
     # Cash Flow Quality
     stock_comp_percent_ocf: float = Field(default=10.0, description="Stock comp as % of OCF")
@@ -23,7 +30,8 @@ class RedFlagsThresholds(BaseModel):
     
     # Growth & Sustainability
     revenue_cagr_inflation: float = Field(default=3.0, description="Revenue CAGR threshold")
-    sga_percent_revenue: float = Field(default=40.0, description="SG&A as % of revenue")
+    sga_percent_revenue_warning: float = Field(default=30.0, description="SG&A WARNING threshold")
+    sga_percent_revenue_info: float = Field(default=25.0, description="SG&A INFO threshold")
     sga_increase_threshold: float = Field(default=3.0, description="SG&A increase %")
     revenue_growth_for_rd_check: float = Field(default=5.0, description="Revenue growth for R&D check")
     rd_decline_threshold: float = Field(default=-5.0, description="R&D decline threshold")

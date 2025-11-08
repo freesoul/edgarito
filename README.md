@@ -43,10 +43,13 @@ python -m edgarito.cli financials --ticker AAPL
 ### Analyze Red Flags
 
 ```bash
-# Detect potential accounting issues and financial risks
+# Detect potential accounting issues and financial risks (quarterly recommended for recent data)
 python -m edgarito.cli redflags --ticker TSLA --granularity quarterly
 
-# Analyzes 25+ red flags across 5 categories:
+# Use annual for longer-term trend analysis
+python -m edgarito.cli redflags --ticker AAPL --granularity annual
+
+# Analyzes 30+ red flags across 5 categories:
 # - Balance Sheet Health (debt, liquidity, asset quality)
 # - Cash Flow Quality (FCF, dividends, dilution)
 # - Profitability & Income Quality (margins, returns)
@@ -247,35 +250,40 @@ taxonomy_url=https://xbrl.fasb.org/us-gaap/2025/elts/us-gaap-2025.xsd
 
 ### Customizing Red Flags Thresholds
 
-All red flag thresholds are configurable via environment variables using the `red_flags__` prefix with double underscore:
+All red flag thresholds are configurable via environment variables using the `red_flags__` prefix with double underscore.
+
+**Tiered Severity Levels:** Many thresholds have multiple tiers (critical/warning/info) for more actionable alerts:
 
 ```properties
-# Balance Sheet thresholds
-red_flags__debt_to_equity_ratio=1.5          # Default: 1.0
-red_flags__current_ratio=0.8                 # Default: 1.0
-red_flags__quick_ratio=0.7                   # Default: 0.8
-red_flags__interest_coverage=3.0             # Default: 2.0
+# Balance Sheet - Tiered thresholds
+red_flags__debt_to_equity_ratio_warning=1.0       # Warning if D/E > 1.0
+red_flags__debt_to_equity_ratio_critical=2.0      # Critical if D/E > 2.0
 
-# Cash Flow thresholds
-red_flags__stock_comp_percent_ocf=15.0       # Default: 10.0
+red_flags__current_ratio_critical=1.0             # Critical if < 1.0
+red_flags__current_ratio_warning=1.5              # Warning if < 1.5
 
-# Profitability thresholds
-red_flags__net_margin_percent=5.0            # Default: 3.0
-red_flags__roe_percent=12.0                  # Default: 10.0
-red_flags__roic_percent=8.0                  # Default: 7.0
+red_flags__quick_ratio_critical=0.5               # Critical if < 0.5
+red_flags__quick_ratio_warning=1.0                # Warning if < 1.0
 
-# Growth thresholds
-red_flags__revenue_cagr_inflation=4.0        # Default: 3.0
-red_flags__sga_percent_revenue=35.0          # Default: 40.0
+red_flags__interest_coverage_critical=1.5         # Critical if < 1.5 (default risk)
+red_flags__interest_coverage_warning=3.0          # Warning if < 3.0
 
-# Valuation thresholds
-red_flags__price_to_sales=8.0                # Default: 10.0
-red_flags__peg_ratio=2.5                     # Default: 2.0
-red_flags__ev_to_ebitda=12.0                 # Default: 15.0
-red_flags__short_interest_percent=15.0       # Default: 10.0
+# Growth - Tiered thresholds
+red_flags__sga_percent_revenue_info=25.0          # Info if SG&A > 25%
+red_flags__sga_percent_revenue_warning=30.0       # Warning if SG&A > 30%
+
+# Single-level thresholds (info level)
+red_flags__stock_comp_percent_ocf=10.0            # Default: 10.0
+red_flags__net_margin_percent=3.0                 # Default: 3.0
+red_flags__roe_percent=10.0                       # Default: 10.0
+red_flags__roic_percent=7.0                       # Default: 7.0
+red_flags__revenue_cagr_inflation=3.0             # Default: 3.0
+red_flags__price_to_sales=10.0                    # Default: 10.0
+red_flags__peg_ratio=2.0                          # Default: 2.0
+red_flags__ev_to_ebitda=15.0                      # Default: 15.0
 ```
 
-See `.cli.env` for a complete list of all 25+ configurable thresholds with descriptions.
+See `.cli.env` for a complete list of all 30+ configurable thresholds with descriptions.
 
 ## Data Quality
 
