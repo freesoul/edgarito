@@ -43,11 +43,13 @@ python -m edgarito.cli financials --ticker AAPL
 ### Analyze Red Flags
 
 ```bash
-# Detect potential accounting issues and financial risks (quarterly recommended for recent data)
-python -m edgarito.cli redflags --ticker TSLA --granularity quarterly
+# Detect potential accounting issues and financial risks
+# Automatically uses quarterly data for recent trends and annual data for long-term patterns
+python -m edgarito.cli redflags --ticker TSLA
 
-# Use annual for longer-term trend analysis
-python -m edgarito.cli redflags --ticker AAPL --granularity annual
+# The analysis intelligently combines:
+# - Quarterly: Current liquidity, recent margins, latest cash flow
+# - Annual: 5-year revenue CAGR, long-term profitability trends
 
 # Analyzes 30+ red flags across 5 categories:
 # - Balance Sheet Health (debt, liquidity, asset quality)

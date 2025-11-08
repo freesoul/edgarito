@@ -163,12 +163,15 @@ class RedFlagsService:
             thresholds = RedFlagsThresholds()
         self.thresholds = thresholds
     
-    def analyze(self, granularity: Granularity = Granularity.ANNUAL) -> RedFlagReport:
+    def analyze(self) -> RedFlagReport:
         """
-        Run complete red flags analysis.
+        Run complete red flags analysis using both quarterly and annual data where appropriate.
         
-        Args:
-            granularity: ANNUAL or QUARTERLY analysis
+        Strategy:
+        - Balance Sheet & Cash Flow: Use QUARTERLY for most recent liquidity/solvency
+        - Profitability: Use QUARTERLY for current margins, ANNUAL for trend analysis
+        - Growth: Use ANNUAL for long-term CAGR (5+ years)
+        - Valuation: Use QUARTERLY (most recent data)
         
         Returns:
             Complete red flag report
@@ -178,12 +181,12 @@ class RedFlagsService:
             company_name=self.facts.entityName
         )
         
-        # Run all analyses
-        report.balance_sheet_flags = self._analyze_balance_sheet(granularity)
-        report.cash_flow_flags = self._analyze_cash_flow(granularity)
-        report.profitability_flags = self._analyze_profitability(granularity)
-        report.growth_flags = self._analyze_growth(granularity)
-        report.valuation_flags = self._analyze_valuation(granularity)
+        # Run all analyses with appropriate granularity
+        report.balance_sheet_flags = self._analyze_balance_sheet(Granularity.QUARTERLY)
+        report.cash_flow_flags = self._analyze_cash_flow(Granularity.QUARTERLY)
+        report.profitability_flags = self._analyze_profitability(Granularity.QUARTERLY)
+        report.growth_flags = self._analyze_growth(Granularity.ANNUAL)  # Long-term trends
+        report.valuation_flags = self._analyze_valuation(Granularity.QUARTERLY)
         
         # Count flags by severity
         for flag in report.all_flags:
@@ -425,32 +428,53 @@ class RedFlagsService:
             latest_period = ocf.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 0. Negative Operating Cash Flow (CRITICAL)
-            if ocf.values and ocf.values[-1] < 0:
-                flags.append(RedFlag(
-                    category="Cash Flow",
-                    severity=RedFlagSeverity.CRITICAL,
-                    title="Negative Operating Cash Flow",
-                    description="Burning cash from operations - unsustainable without financing",
-                    current_value=ocf.values[-1] / 1e9,
-                    threshold=0.0,
-                    period=period_str
-                ))
+            # 0. Negative Operating Cash Flow (severity depends on granularity and persistence)
+            if ocf.values:
+                if granularity == Granularity.ANNUAL:
+                    # Annual negative OCF is very concerning
+                    if ocf.values[-1] < 0:
+                        flags.append(RedFlag(
+                            category="Cash Flow",
+                            severity=RedFlagSeverity.CRITICAL,
+                            title="Negative Operating Cash Flow (Full Year)",
+                            description="Burning cash from operations for entire year - unsustainable",
+                            current_value=ocf.values[-1] / 1e9,
+                            threshold=0.0,
+                            period=period_str
+                        ))
+                else:
+                    # Quarterly: only flag if negative for 2+ consecutive quarters
+                    if len(ocf.values) >= 2 and ocf.values[-1] < 0 and ocf.values[-2] < 0:
+                        flags.append(RedFlag(
+                            category="Cash Flow",
+                            severity=RedFlagSeverity.CRITICAL,
+                            title="Negative Operating Cash Flow (Multiple Quarters)",
+                            description="Burning cash from operations for 2+ quarters - concerning trend",
+                            current_value=ocf.values[-1] / 1e9,
+                            threshold=0.0,
+                            period=f"Last 2 quarters"
+                        ))
             
-            # 1. Operating Cash Flow < Net Income consistently
+            # 1. Operating Cash Flow < Net Income consistently (WARNING, not CRITICAL)
             if len(ocf.values) >= 3 and len(net_income.values) >= 3:
                 # Check last 3 periods
                 ocf_below_count = sum(1 for i in range(-3, 0) 
                                      if ocf.values[i] < net_income.values[i])
                 
-                if ocf_below_count >= 2:
+                # Also check if the cumulative gap is significant (>20% on average)
+                avg_ocf = sum(ocf.values[-3:]) / 3
+                avg_ni = sum(net_income.values[-3:]) / 3
+                ocf_ni_ratio = avg_ocf / avg_ni if avg_ni != 0 else 0
+                
+                # Only flag if OCF is below in at least 2 of 3 periods AND average is significantly below
+                if ocf_below_count >= 2 and ocf_ni_ratio < 0.8:
                     flags.append(RedFlag(
                         category="Cash Flow",
-                        severity=RedFlagSeverity.CRITICAL,
+                        severity=RedFlagSeverity.WARNING,
                         title="OCF Consistently Below Net Income",
-                        description="Earnings quality issues - profits not converting to cash repeatedly",
-                        current_value=ocf.values[-1] / net_income.values[-1] if net_income.values[-1] != 0 else 0,
-                        threshold=1.0,
+                        description="Earnings quality concerns - profits not converting to cash (avg OCF < 80% of Net Income)",
+                        current_value=ocf_ni_ratio * 100,
+                        threshold=80.0,
                         period=f"Last 3 periods"
                     ))
             

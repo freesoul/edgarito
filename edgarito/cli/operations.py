@@ -155,7 +155,6 @@ class CliOperations:
     async def analyze_red_flags_from_ticker(
         self, 
         ticker: str, 
-        granularity: Granularity,
         use_cache: bool = True, 
         make_cache: bool = True
     ):
@@ -181,14 +180,13 @@ class CliOperations:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
         service = RedFlagsService(facts, market_data=market_data, thresholds=settings.red_flags)
-        report = service.analyze(granularity)
+        report = service.analyze()  # No granularity - uses intelligent defaults
         
         print(report)
 
     async def analyze_red_flags_from_cik(
         self, 
         cik: int, 
-        granularity: Granularity,
         use_cache: bool = True, 
         make_cache: bool = True
     ):
@@ -217,6 +215,6 @@ class CliOperations:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
         service = RedFlagsService(facts, market_data=market_data, thresholds=settings.red_flags)
-        report = service.analyze(granularity)
+        report = service.analyze()  # No granularity - uses intelligent defaults
         
         print(report)

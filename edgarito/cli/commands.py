@@ -111,21 +111,17 @@ def create_app() -> typer.Typer:
     def redflags(
         ticker: str = typer.Option(None, help="Ticker to analyze"),
         cik: int = typer.Option(None, help="CIK to analyze"),
-        granularity: str = typer.Option("quarterly", help="Analysis granularity: 'quarterly' (default, most recent) or 'annual'"),
         use_cache: bool = typer.Option(True, help="Use cache"),
         make_cache: bool = typer.Option(True, help="Make cache"),
     ):
-        """Analyze company for financial red flags."""
+        """Analyze company for financial red flags (automatically uses quarterly + annual data)."""
         operations = CliOperations()
         if not ticker and not cik:
             raise typer.Abort("Provide a valid ticker with --ticker or a CIK with --cik")
         
-        # Parse granularity
-        gran = Granularity.ANNUAL if granularity.lower() == "annual" else Granularity.QUARTERLY
-        
         if ticker:
-            asyncio.run(operations.analyze_red_flags_from_ticker(ticker, gran, use_cache, make_cache))
+            asyncio.run(operations.analyze_red_flags_from_ticker(ticker, use_cache, make_cache))
         elif cik:
-            asyncio.run(operations.analyze_red_flags_from_cik(cik, gran, use_cache, make_cache))
+            asyncio.run(operations.analyze_red_flags_from_cik(cik, use_cache, make_cache))
 
     return app
