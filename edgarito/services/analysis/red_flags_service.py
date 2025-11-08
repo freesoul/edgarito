@@ -113,14 +113,16 @@ class RedFlagReport:
 class RedFlagsService:
     """Service for detecting financial red flags"""
     
-    def __init__(self, facts: CompanyFacts):
+    def __init__(self, facts: CompanyFacts, market_cap: Optional[float] = None):
         """
         Initialize red flags service.
         
         Args:
             facts: Company facts data from SEC
+            market_cap: Current market capitalization (optional, from external source)
         """
         self.facts = facts
+        self.market_cap = market_cap
         self.balance_sheet = BalanceSheetReader(facts)
         self.income_statement = IncomeStatementReader(facts)
         self.cash_flow = CashFlowStatementReader(facts)
@@ -178,21 +180,7 @@ class RedFlagsService:
             latest_period = total_debt.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 1. Debt > Market Cap
-            if self.market_cap and total_debt.values:
-                debt = total_debt.values[-1]
-                if debt > self.market_cap:
-                    flags.append(RedFlag(
-                        category="Balance Sheet",
-                        severity=RedFlagSeverity.CRITICAL,
-                        title="Debt exceeds Market Capitalization",
-                        description="Total debt is higher than market cap - indicates high leverage risk",
-                        current_value=debt / self.market_cap,
-                        threshold=1.0,
-                        period=period_str
-                    ))
-            
-            # 2. Debt/Equity > 1.0
+            # 1. Debt/Equity > 1.0
             if total_debt.values and equity.values:
                 debt = total_debt.values[-1]
                 eq = equity.values[-1]
@@ -208,6 +196,20 @@ class RedFlagsService:
                             threshold=1.0,
                             period=period_str
                         ))
+            
+            # 2. Debt > Market Cap (if available)
+            if self.market_cap and total_debt.values:
+                debt = total_debt.values[-1]
+                if debt > self.market_cap:
+                    flags.append(RedFlag(
+                        category="Balance Sheet",
+                        severity=RedFlagSeverity.CRITICAL,
+                        title="Debt exceeds Market Capitalization",
+                        description=f"Total debt (${debt:,.0f}) exceeds company's market value (${self.market_cap:,.0f})",
+                        current_value=debt,
+                        threshold=self.market_cap,
+                        period=period_str
+                    ))
             
             # 3. Current Ratio < 1.0
             if current_assets.values and current_liabilities.values:

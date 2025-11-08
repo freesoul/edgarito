@@ -23,13 +23,30 @@ class IncomeStatementReader(BaseStatementReader):
         """
         Total revenue (also called sales or turnover).
         
+        Companies may use different revenue concept names depending on their
+        reporting period and accounting standards changes. This method tries
+        multiple common revenue concepts to ensure comprehensive data coverage.
+        
         Args:
             granularity: ANNUAL or QUARTERLY
         
         Returns:
             Time series of revenue
         """
-        return self._get_concept("RevenueFromContractWithCustomerExcludingAssessedTax", granularity)
+        # Try multiple revenue concepts in order of preference:
+        # 1. RevenueFromContractWithCustomerExcludingAssessedTax (newer ASC 606 standard)
+        # 2. Revenues (traditional/older filings)
+        # 3. RevenueFromContractWithCustomerIncludingAssessedTax (alternative ASC 606)
+        # 4. SalesRevenueNet (some companies use this)
+        return self._get_concept_with_fallbacks(
+            concepts=[
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "SalesRevenueNet"
+            ],
+            granularity=granularity
+        )
     
     def get_cost_of_revenue(self, granularity: Granularity) -> UnivariateMeasurements:
         """

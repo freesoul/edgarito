@@ -1,3 +1,22 @@
+We forget about IRFS for now and focus on GAAP
+
+Next steps :
+- Add more red flags
+- Update readme
+- Add cache for all cli...
+ python -m edgarito.cli redflags --ticker GOOG
+>> 
+[2025-11-08 16:52:50,975][INFO][CliOperations] CIK: 1652044
+[2025-11-08 16:52:51,046][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1003 filings for CIK 1652044
+[2025-11-08 16:52:51,046][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0001652044-submissions-001.json' filingCount=1395 filingFrom=datetime.date(2015, 10, 2) filingTo=datetime.date(2022, 4, 2)
+[2025-11-08 16:52:51,048][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1395 additional filings for name='CIK0001652044-submissions-001.json' filingCount=1395 filingFrom=datetime.date(2015, 10, 2) filingTo=datetime.date(2022, 4, 2)
+[2025-11-08 16:52:51,311][INFO][edgarito.services.market.yahoo_finance_service] Fetching market data for ticker: GOOG
+[2025-11-08 16:52:51,869][INFO][edgarito.services.market.yahoo_finance_service] Successfully fetched market data for GOOG: market_cap=$3,369,345,744,896, price=$279.70
+[2025-11-08 16:52:51,869][INFO][CliOperations] Fetched market cap for GOOG: $3,369,345,744,896
+[2025-11-08 16:52:51,882][INFO][edgarito.services.financial.base_reader] Using concepts ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues'] with data from 18 periods
+-----------------
+
+
 1 - Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
 2 - Factorize cli
 3 - Extend the red flags :

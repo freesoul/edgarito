@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple, Iterator
+import datetime
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -7,14 +8,34 @@ from edgarito.schemas.edgar_responses.company_facts import Measurement
 
 
 class MeasurementPeriod:
-    year: int
+    """
+    Represents a fiscal period with its assigned fiscal year and actual end date.
+    
+    Important: fiscal year != calendar year for companies with Jan/Feb year-ends!
+    
+    Example (NVDA):
+    - Q2 ending July 2025 -> fiscal_year=2026, end_date=2025-07-27
+    - Because NVDA's fiscal 2026 runs Feb 2025 - Jan 2026
+    """
+    year: int  # Fiscal year (not necessarily the calendar year!)
     fp: FiscalPeriod
     frame: Optional[str]
+    end_date: Optional[datetime.date]  # Actual end date of the period
+    duration_days: Optional[int]  # Duration in days (for detecting YTD vs individual quarters)
 
-    def __init__(self, year: int, fp: FiscalPeriod, frame: Optional[str] = None):
+    def __init__(
+        self, 
+        year: int, 
+        fp: FiscalPeriod, 
+        frame: Optional[str] = None, 
+        end_date: Optional[datetime.date] = None,
+        duration_days: Optional[int] = None
+    ):
         self.year = year
         self.fp = fp
         self.frame = frame
+        self.end_date = end_date
+        self.duration_days = duration_days
 
     def __eq__(self, other: "MeasurementPeriod"):
         return self.year == other.year and self.fp == other.fp
@@ -74,12 +95,70 @@ class UnivariateMeasurements:
 
     @staticmethod
     def from_measurements(concept: str, granularity: Granularity, measurements: List[Measurement]) -> "UnivariateMeasurements":
-        concept = concept
+        """
+        Convert raw SEC measurements into UnivariateMeasurements with proper fiscal year assignment.
+        
+        CRITICAL: Fiscal year assignment logic
+        ======================================
+        Need to detect company's fiscal year end month to assign periods correctly.
+        
+        Companies with Jan/Feb fiscal year ends (like NVDA):
+        - Fiscal 2025 runs Feb 2024 - Jan 2025
+        - Q1 ending Apr 2024 → fiscal 2025 (not 2024!)
+        
+        Companies with other fiscal year ends (like AAPL ending Sep):
+        - Fiscal 2024 runs Oct 2023 - Sep 2024
+        - Q1 ending Dec 2023 → fiscal 2024
+        
+        Algorithm:
+        1. Detect fiscal year end month from FY periods in the data
+        2. If FY ends in Jan/Feb: periods after Feb belong to next FY
+        3. Otherwise: use end date year as fiscal year
+        """
         values = []
         periods = []
+        
+        # First pass: detect fiscal year end month from annual periods
+        fiscal_year_end_month = None
+        for m in measurements:
+            if m.fp and m.fp.value == 'FY':
+                fiscal_year_end_month = m.end.month
+                break  # Found it, stop searching
+        
+        # If no FY periods found, look at any period to guess
+        if fiscal_year_end_month is None and measurements:
+            # Use SEC's fy field if available, or default to calendar year
+            # For safety, assume calendar year (December end) if we can't determine
+            fiscal_year_end_month = 12
+        
         for measurement in measurements:
             values.append(measurement.val)
-            periods.append(MeasurementPeriod(year=measurement.calendar_year, fp=measurement.fp, frame=measurement.frame))
+            
+            # Assign fiscal year based on end date and company's fiscal year end
+            end_date = measurement.end
+            
+            if fiscal_year_end_month <= 2:
+                # Company has Jan/Feb fiscal year end (like NVDA)
+                if end_date.month <= 2:
+                    fiscal_year = end_date.year
+                else:
+                    # Period after Feb belongs to next fiscal year
+                    fiscal_year = end_date.year + 1
+            else:
+                # Company has normal fiscal year (Mar-Dec end)
+                # Use the year of the end date
+                fiscal_year = end_date.year
+            
+            # Calculate duration in days (0 if no start date, e.g., balance sheet items)
+            duration_days = (end_date - measurement.start).days if measurement.start else 0
+            
+            periods.append(MeasurementPeriod(
+                year=fiscal_year,
+                fp=measurement.fp,
+                frame=measurement.frame,
+                end_date=end_date,
+                duration_days=duration_days
+            ))
 
         return UnivariateMeasurements(concept=concept, granularity=granularity, values=values, periods=periods)
 
