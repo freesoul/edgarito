@@ -10,7 +10,8 @@ Edgarito provides an async client for the SEC EDGAR REST API with structured Pyd
 - 📊 **Financial Statement Readers** - Extract and normalize data from Balance Sheets, Income Statements, and Cash Flow Statements
 - 🔍 **Smart Data Handling** - Robust deduplication of repeated filings, amendments, and year-over-year comparatives
 - 📈 **Financial Metrics** - Compute ratios like FCF, ROE, profit margins, asset turnover, and more
-- ⚠️ **Red Flag Detection** - Automated analysis to identify potential accounting issues and financial risks
+- ⚠️ **Red Flag Detection** - 25+ automated checks across balance sheet, cash flow, profitability, growth, and valuation
+- 🌐 **Market Data Integration** - Yahoo Finance integration for valuation metrics and market sentiment
 - 💾 **Intelligent Caching** - FileSystem cache to comply with SEC rate limits and optimize performance
 - 🎯 **Clean Data Models** - All responses structured with Pydantic schemas for type safety
 - 🖥️ **Rich CLI** - Command-line interface for quick financial data exploration
@@ -45,11 +46,12 @@ python -m edgarito.cli financials --ticker AAPL
 # Detect potential accounting issues and financial risks
 python -m edgarito.cli redflags --ticker TSLA --granularity quarterly
 
-# Analyzes:
-# - Revenue quality issues
-# - Earnings manipulation indicators
-# - Cash flow concerns
-# - Balance sheet red flags
+# Analyzes 25+ red flags across 5 categories:
+# - Balance Sheet Health (debt, liquidity, asset quality)
+# - Cash Flow Quality (FCF, dividends, dilution)
+# - Profitability & Income Quality (margins, returns)
+# - Growth & Sustainability (revenue trends, R&D, expenses)
+# - Valuation Concerns (market multiples, short interest, insider ownership)
 ```
 
 ### Search and Download Filings
@@ -196,13 +198,84 @@ The `FinancialMetrics` class calculates key ratios:
 
 ### Red Flag Detection
 
-Automated analysis identifies potential issues:
+Automated analysis identifies potential issues across multiple categories:
 
-- Revenue quality problems (unusual growth patterns)
-- Earnings manipulation indicators (accruals quality)
-- Cash flow concerns (negative FCF, FCF < Net Income)
-- Balance sheet issues (declining margins, rising DSO)
-- Accounting red flags (unusual asset growth patterns)
+**Balance Sheet Health:**
+- High debt-to-equity ratios
+- Liquidity concerns (current/quick ratios)
+- Negative tangible book value
+- Rising liabilities vs assets
+
+**Cash Flow Quality:**
+- Operating cash flow < Net Income
+- Negative free cash flow
+- Unsustainable dividends
+- High stock-based compensation
+- Frequent share issuance
+
+**Profitability & Income Quality:**
+- Declining gross/operating margins
+- Low net margins
+- Poor capital efficiency (ROE, ROIC)
+- Volatile earnings patterns
+
+**Growth & Sustainability:**
+- Revenue growth below inflation
+- High or rising SG&A expenses
+- Declining R&D investment
+
+**Valuation Concerns** (with Yahoo Finance integration):
+- High P/S, P/E, P/B ratios
+- Excessive dividend yields
+- High PEG ratios (overpriced growth)
+- Elevated EV/EBITDA multiples
+- High short interest (>10%)
+- Low insider ownership (<2%)
+
+## Configuration
+
+Edgarito can be configured via a `.cli.env` file in your project root:
+
+```properties
+# Required
+cache_path=./cache
+user_agent=Your Name (your-email@example.com)
+
+# Optional
+taxonomy_url=https://xbrl.fasb.org/us-gaap/2025/elts/us-gaap-2025.xsd
+```
+
+### Customizing Red Flags Thresholds
+
+All red flag thresholds are configurable via environment variables using the `red_flags__` prefix with double underscore:
+
+```properties
+# Balance Sheet thresholds
+red_flags__debt_to_equity_ratio=1.5          # Default: 1.0
+red_flags__current_ratio=0.8                 # Default: 1.0
+red_flags__quick_ratio=0.7                   # Default: 0.8
+red_flags__interest_coverage=3.0             # Default: 2.0
+
+# Cash Flow thresholds
+red_flags__stock_comp_percent_ocf=15.0       # Default: 10.0
+
+# Profitability thresholds
+red_flags__net_margin_percent=5.0            # Default: 3.0
+red_flags__roe_percent=12.0                  # Default: 10.0
+red_flags__roic_percent=8.0                  # Default: 7.0
+
+# Growth thresholds
+red_flags__revenue_cagr_inflation=4.0        # Default: 3.0
+red_flags__sga_percent_revenue=35.0          # Default: 40.0
+
+# Valuation thresholds
+red_flags__price_to_sales=8.0                # Default: 10.0
+red_flags__peg_ratio=2.5                     # Default: 2.0
+red_flags__ev_to_ebitda=12.0                 # Default: 15.0
+red_flags__short_interest_percent=15.0       # Default: 10.0
+```
+
+See `.cli.env` for a complete list of all 25+ configurable thresholds with descriptions.
 
 ## Data Quality
 
@@ -218,6 +291,7 @@ Edgarito prioritizes data accuracy with:
 - Python 3.8+
 - aiohttp
 - pydantic
+- yfinance (for market data)
 - typer (for CLI)
 
 ## Project Structure

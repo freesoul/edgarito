@@ -14,6 +14,7 @@ from edgarito.services.financial.balance_sheet_reader import BalanceSheetReader
 from edgarito.services.financial.income_statement_reader import IncomeStatementReader
 from edgarito.services.financial.cash_flow_reader import CashFlowStatementReader
 from edgarito.schemas.market_data import MarketData
+from edgarito.cli.settings import RedFlagsThresholds
 
 
 class RedFlagSeverity(Enum):
@@ -136,7 +137,8 @@ class RedFlagsService:
         self, 
         facts: CompanyFacts, 
         market_cap: Optional[float] = None,
-        market_data: Optional[MarketData] = None
+        market_data: Optional[MarketData] = None,
+        thresholds: Optional['RedFlagsThresholds'] = None
     ):
         """
         Initialize red flags service.
@@ -145,6 +147,7 @@ class RedFlagsService:
             facts: Company facts data from SEC
             market_cap: Current market capitalization (optional, deprecated - use market_data)
             market_data: Complete market data including cap, valuation metrics, etc.
+            thresholds: Configurable thresholds for red flag detection (optional, uses defaults if None)
         """
         self.facts = facts
         self.market_data = market_data
@@ -153,6 +156,12 @@ class RedFlagsService:
         self.balance_sheet = BalanceSheetReader(facts)
         self.income_statement = IncomeStatementReader(facts)
         self.cash_flow = CashFlowStatementReader(facts)
+        
+        # Import here to avoid circular dependency
+        if thresholds is None:
+            from edgarito.cli.settings import RedFlagsThresholds
+            thresholds = RedFlagsThresholds()
+        self.thresholds = thresholds
     
     def analyze(self, granularity: Granularity = Granularity.ANNUAL) -> RedFlagReport:
         """
@@ -209,20 +218,20 @@ class RedFlagsService:
             latest_period = total_debt.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 1. Debt/Equity > 1.0
+            # 1. Debt/Equity > threshold
             if total_debt.values and equity.values:
                 debt = total_debt.values[-1]
                 eq = equity.values[-1]
                 if eq > 0:
                     debt_to_equity = debt / eq
-                    if debt_to_equity > 1.0:
+                    if debt_to_equity > self.thresholds.debt_to_equity_ratio:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.WARNING,
                             title="High Debt-to-Equity Ratio",
                             description="Capital structure too leveraged - debt exceeds equity",
                             current_value=debt_to_equity,
-                            threshold=1.0,
+                            threshold=self.thresholds.debt_to_equity_ratio,
                             period=period_str
                         ))
             
@@ -240,24 +249,24 @@ class RedFlagsService:
                         period=period_str
                     ))
             
-            # 3. Current Ratio < 1.0
+            # 3. Current Ratio < threshold
             if current_assets.values and current_liabilities.values:
                 curr_assets = current_assets.values[-1]
                 curr_liab = current_liabilities.values[-1]
                 if curr_liab > 0:
                     current_ratio = curr_assets / curr_liab
-                    if current_ratio < 1.0:
+                    if current_ratio < self.thresholds.current_ratio:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.CRITICAL,
                             title="Low Current Ratio",
                             description="Potential liquidity problems - current assets < current liabilities",
                             current_value=current_ratio,
-                            threshold=1.0,
+                            threshold=self.thresholds.current_ratio,
                             period=period_str
                         ))
             
-            # 4. Quick Ratio < 0.8
+            # 4. Quick Ratio < threshold
             try:
                 cash = self.balance_sheet.get_cash_and_equivalents(granularity)
                 receivables = self.balance_sheet.get_accounts_receivable(granularity)
@@ -267,14 +276,14 @@ class RedFlagsService:
                     curr_liab = current_liabilities.values[-1]
                     if curr_liab > 0:
                         quick_ratio = quick_assets / curr_liab
-                        if quick_ratio < 0.8:
+                        if quick_ratio < self.thresholds.quick_ratio:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.WARNING,
                                 title="Low Quick Ratio",
                                 description="Cannot meet short-term obligations without selling inventory",
                                 current_value=quick_ratio,
-                                threshold=0.8,
+                                threshold=self.thresholds.quick_ratio,
                                 period=period_str
                             ))
             except ValueError:
@@ -314,14 +323,14 @@ class RedFlagsService:
                     
                     if interest > 0:
                         coverage = ebit / interest
-                        if coverage < 2.0:
+                        if coverage < self.thresholds.interest_coverage:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.CRITICAL,
                                 title="Low Interest Coverage",
                                 description="Risk of default - EBIT < 2x interest expense",
                                 current_value=coverage,
-                                threshold=2.0,
+                                threshold=self.thresholds.interest_coverage,
                                 period=period_str
                             ))
             except ValueError:
@@ -457,14 +466,14 @@ class RedFlagsService:
                     
                     if ocf_val > 0:
                         sbc_pct = sbc_val / ocf_val
-                        if sbc_pct > 0.10:
+                        if sbc_pct > (self.thresholds.stock_comp_percent_ocf / 100):
                             flags.append(RedFlag(
                                 category="Cash Flow",
                                 severity=RedFlagSeverity.WARNING,
                                 title="High Stock-Based Compensation",
                                 description="Dilution disguised as expense - impacts shareholder value",
                                 current_value=sbc_pct * 100,
-                                threshold=10.0,
+                                threshold=self.thresholds.stock_comp_percent_ocf,
                                 period=period_str
                             ))
             except ValueError:
@@ -570,14 +579,14 @@ class RedFlagsService:
                     if avg_equity > 0:
                         roe = (net_income.values[-1] / avg_equity) * 100
                         
-                        if 0 < roe < 10:
+                        if 0 < roe < self.thresholds.roe_percent:
                             flags.append(RedFlag(
                                 category="Profitability",
                                 severity=RedFlagSeverity.INFO,
                                 title="Low Return on Equity",
                                 description="Poor capital efficiency - not generating adequate returns",
                                 current_value=roe,
-                                threshold=10.0,
+                                threshold=self.thresholds.roe_percent,
                                 period=period_str
                             ))
             except ValueError:
@@ -646,19 +655,19 @@ class RedFlagsService:
             latest_period = revenue.periods[-1]
             period_str = f"{latest_period.year} {latest_period.fp.value}"
             
-            # 1. Revenue CAGR < inflation over 5 years (using 3% as inflation proxy)
+            # 1. Revenue CAGR < inflation over 5 years
             if len(revenue.values) >= 5:
                 years = 5 if granularity == Granularity.ANNUAL else 5/4  # Adjust for quarterly
                 cagr = ((revenue.values[-1] / revenue.values[-5]) ** (1/years) - 1) * 100
                 
-                if cagr < 3.0:
+                if cagr < self.thresholds.revenue_cagr_inflation:
                     flags.append(RedFlag(
                         category="Growth",
                         severity=RedFlagSeverity.INFO,
                         title="Revenue Growth Below Inflation",
                         description="Stagnation - revenue barely keeping up with inflation",
                         current_value=cagr,
-                        threshold=3.0,
+                        threshold=self.thresholds.revenue_cagr_inflation,
                         period=f"{revenue.periods[-5].year}-{latest_period.year}"
                     ))
             
@@ -669,15 +678,15 @@ class RedFlagsService:
                 if sga.values and revenue.values:
                     sga_pct = (sga.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
                     
-                    # Check if SG&A > 40% of revenue
-                    if sga_pct > 40:
+                    # Check if SG&A > threshold % of revenue
+                    if sga_pct > self.thresholds.sga_percent_revenue:
                         flags.append(RedFlag(
                             category="Growth",
                             severity=RedFlagSeverity.WARNING,
                             title="High SG&A Expenses",
-                            description="Bloated overhead - SG&A exceeds 40% of revenue",
+                            description="Bloated overhead - SG&A exceeds threshold % of revenue",
                             current_value=sga_pct,
-                            threshold=40.0,
+                            threshold=self.thresholds.sga_percent_revenue,
                             period=period_str
                         ))
                     
@@ -685,7 +694,7 @@ class RedFlagsService:
                     if len(sga.values) >= 3 and len(revenue.values) >= 3:
                         sga_pct_prev = (sga.values[-3] / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
                         
-                        if sga_pct > sga_pct_prev + 3:  # 3% increase threshold
+                        if sga_pct > sga_pct_prev + self.thresholds.sga_increase_threshold:
                             flags.append(RedFlag(
                                 category="Growth",
                                 severity=RedFlagSeverity.INFO,
@@ -707,7 +716,7 @@ class RedFlagsService:
                     rev_growth = ((revenue.values[-1] - revenue.values[-3]) / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
                     
                     # If revenue is growing but R&D is declining
-                    if rev_growth > 5 and rd_growth < -5:
+                    if rev_growth > self.thresholds.revenue_growth_for_rd_check and rd_growth < self.thresholds.rd_decline_threshold:
                         flags.append(RedFlag(
                             category="Growth",
                             severity=RedFlagSeverity.WARNING,
@@ -752,17 +761,17 @@ class RedFlagsService:
                 ttm_revenue = revenue.values[-1]
                 ttm_net_income = net_income.values[-1]
             
-            # 1. P/S ratio > 10
+            # 1. P/S ratio > threshold
             price_to_sales = self.market_cap / ttm_revenue if ttm_revenue != 0 else 0
             
-            if price_to_sales > 10:
+            if price_to_sales > self.thresholds.price_to_sales:
                 flags.append(RedFlag(
                     category="Valuation",
                     severity=RedFlagSeverity.INFO,
                     title="High Price-to-Sales Ratio",
                     description="Needs massive growth to justify valuation - speculative pricing",
                     current_value=price_to_sales,
-                    threshold=10.0,
+                    threshold=self.thresholds.price_to_sales,
                     period=period_str
                 ))
             
@@ -770,20 +779,20 @@ class RedFlagsService:
             if ttm_net_income > 0:
                 pe_ratio = self.market_cap / ttm_net_income
                 
-                # PE < 5 with low growth
-                if pe_ratio < 5:
+                # PE < threshold with low growth
+                if pe_ratio < self.thresholds.pe_ratio_low:
                     # Check if revenue growth is low
                     if len(revenue.values) >= 3:
                         rev_growth = ((revenue.values[-1] - revenue.values[-3]) / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
                         
-                        if rev_growth < 5:
+                        if rev_growth < self.thresholds.revenue_growth_for_rd_check:
                             flags.append(RedFlag(
                                 category="Valuation",
                                 severity=RedFlagSeverity.INFO,
                                 title="Very Low P/E Without Growth Catalyst",
                                 description="Might be a value trap - low valuation with stagnant growth",
                                 current_value=pe_ratio,
-                                threshold=5.0,
+                                threshold=self.thresholds.pe_ratio_low,
                                 period=period_str
                             ))
             
@@ -802,20 +811,20 @@ class RedFlagsService:
                             roe = (ttm_net_income / avg_equity) * 100 if avg_equity > 0 else 0
                             
                             # High P/B without high ROE
-                            if pb_ratio > 5 and roe < 15:
+                            if pb_ratio > self.thresholds.price_to_book and roe < self.thresholds.roe_for_pb_check:
                                 flags.append(RedFlag(
                                     category="Valuation",
                                     severity=RedFlagSeverity.INFO,
                                     title="High Price-to-Book Without High ROE",
                                     description="Speculative pricing - valuation not supported by returns",
                                     current_value=pb_ratio,
-                                    threshold=5.0,
+                                    threshold=self.thresholds.price_to_book,
                                     period=period_str
                                 ))
             except ValueError:
                 pass
             
-            # 4. Dividend yield > 8% (if dividends paid)
+            # 4. Dividend yield > threshold (if dividends paid)
             try:
                 dividends = self.cash_flow.get_dividends_paid(granularity)
                 
@@ -829,14 +838,14 @@ class RedFlagsService:
                     if annual_dividend > 0:
                         dividend_yield = (annual_dividend / self.market_cap) * 100
                         
-                        if dividend_yield > 8:
+                        if dividend_yield > self.thresholds.dividend_yield:
                             flags.append(RedFlag(
                                 category="Valuation",
                                 severity=RedFlagSeverity.WARNING,
                                 title="Extremely High Dividend Yield",
                                 description="Market pricing in dividend cut - yield too good to be true",
                                 current_value=dividend_yield,
-                                threshold=8.0,
+                                threshold=self.thresholds.dividend_yield,
                                 period=period_str
                             ))
             except ValueError:
@@ -844,55 +853,55 @@ class RedFlagsService:
             
             # ========== Yahoo Finance Enhanced Checks ==========
             
-            # 5. PEG Ratio > 2.0 (if available from Yahoo Finance)
+            # 5. PEG Ratio > threshold (if available from Yahoo Finance)
             if self.market_data and self.market_data.peg_ratio:
-                if self.market_data.peg_ratio > 2.0:
+                if self.market_data.peg_ratio > self.thresholds.peg_ratio:
                     flags.append(RedFlag(
                         category="Valuation",
                         severity=RedFlagSeverity.INFO,
                         title="High PEG Ratio",
                         description="Overpriced relative to growth - paying too much for earnings growth",
                         current_value=self.market_data.peg_ratio,
-                        threshold=2.0,
+                        threshold=self.thresholds.peg_ratio,
                         period=period_str
                     ))
             
-            # 6. EV/EBITDA > 15x (if available from Yahoo Finance)
+            # 6. EV/EBITDA > threshold (if available from Yahoo Finance)
             if self.market_data and self.market_data.ev_to_ebitda:
-                if self.market_data.ev_to_ebitda > 15:
+                if self.market_data.ev_to_ebitda > self.thresholds.ev_to_ebitda:
                     flags.append(RedFlag(
                         category="Valuation",
                         severity=RedFlagSeverity.INFO,
                         title="High Enterprise Value / EBITDA",
                         description="Expensive valuation - needs hyper-growth to justify EV multiple",
                         current_value=self.market_data.ev_to_ebitda,
-                        threshold=15.0,
+                        threshold=self.thresholds.ev_to_ebitda,
                         period=period_str
                     ))
             
-            # 7. High short interest > 10% (market skepticism)
+            # 7. High short interest > threshold (market skepticism)
             if self.market_data and self.market_data.short_percent_float:
-                if self.market_data.short_percent_float > 10:
+                if self.market_data.short_percent_float > self.thresholds.short_interest_percent:
                     flags.append(RedFlag(
                         category="Valuation",
                         severity=RedFlagSeverity.WARNING,
                         title="High Short Interest",
                         description="Market skepticism - significant bearish positioning by traders",
                         current_value=self.market_data.short_percent_float,
-                        threshold=10.0,
+                        threshold=self.thresholds.short_interest_percent,
                         period="Current"
                     ))
             
-            # 8. Low insider ownership < 2% (lack of confidence)
+            # 8. Low insider ownership < threshold (lack of confidence)
             if self.market_data and self.market_data.insider_ownership_percent is not None:
-                if self.market_data.insider_ownership_percent < 2:
+                if self.market_data.insider_ownership_percent < self.thresholds.insider_ownership_percent:
                     flags.append(RedFlag(
                         category="Valuation",
                         severity=RedFlagSeverity.INFO,
                         title="Low Insider Ownership",
                         description="Lack of skin in the game - insiders own minimal stake",
                         current_value=self.market_data.insider_ownership_percent,
-                        threshold=2.0,
+                        threshold=self.thresholds.insider_ownership_percent,
                         period="Current"
                     ))
             

@@ -1,13 +1,3 @@
--------------------
-
-
-Make the red flags thresholds configurable with an .env file (with pydantic_settings)
-
-
-
--------------------
-
-
 We forget about IRFS for now and focus on GAAP
 - Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
 

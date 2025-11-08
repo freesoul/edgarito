@@ -164,6 +164,7 @@ class CliOperations:
         
         from edgarito.services.analysis.red_flags_service import RedFlagsService
         from edgarito.services.market.yahoo_finance_service import YahooFinanceService
+        from edgarito.cli.settings import settings
         
         # Try to get market data from Yahoo Finance with caching
         yahoo_service = YahooFinanceService(cache=self._cache)
@@ -179,7 +180,7 @@ class CliOperations:
         else:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
-        service = RedFlagsService(facts, market_data=market_data)
+        service = RedFlagsService(facts, market_data=market_data, thresholds=settings.red_flags)
         report = service.analyze(granularity)
         
         print(report)
@@ -196,6 +197,7 @@ class CliOperations:
         
         from edgarito.services.analysis.red_flags_service import RedFlagsService
         from edgarito.services.market.yahoo_finance_service import YahooFinanceService
+        from edgarito.cli.settings import settings
         
         # Resolve ticker from CIK
         ticker = await self.find_ticker_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
@@ -214,7 +216,7 @@ class CliOperations:
         else:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
-        service = RedFlagsService(facts, market_data=market_data)
+        service = RedFlagsService(facts, market_data=market_data, thresholds=settings.red_flags)
         report = service.analyze(granularity)
         
         print(report)
