@@ -13,6 +13,7 @@ from edgarito.enums.granularity import Granularity
 from edgarito.services.financial.balance_sheet_reader import BalanceSheetReader
 from edgarito.services.financial.income_statement_reader import IncomeStatementReader
 from edgarito.services.financial.cash_flow_reader import CashFlowStatementReader
+from edgarito.schemas.market_data import MarketData
 
 
 class RedFlagSeverity(Enum):
@@ -57,6 +58,8 @@ class RedFlagReport:
     balance_sheet_flags: List[RedFlag] = field(default_factory=list)
     cash_flow_flags: List[RedFlag] = field(default_factory=list)
     profitability_flags: List[RedFlag] = field(default_factory=list)
+    growth_flags: List[RedFlag] = field(default_factory=list)
+    valuation_flags: List[RedFlag] = field(default_factory=list)
     
     @property
     def all_flags(self) -> List[RedFlag]:
@@ -64,7 +67,9 @@ class RedFlagReport:
         all_flags = (
             self.balance_sheet_flags + 
             self.cash_flow_flags + 
-            self.profitability_flags
+            self.profitability_flags +
+            self.growth_flags +
+            self.valuation_flags
         )
         # Sort: CRITICAL first, then WARNING, then INFO
         severity_order = {
@@ -107,22 +112,44 @@ class RedFlagReport:
             for flag in self.profitability_flags:
                 result += f"\n{flag}\n"
         
+        if self.growth_flags:
+            result += f"\n{'='*100}\n"
+            result += "🧯 GROWTH & SUSTAINABILITY\n"
+            result += f"{'='*100}\n"
+            for flag in self.growth_flags:
+                result += f"\n{flag}\n"
+        
+        if self.valuation_flags:
+            result += f"\n{'='*100}\n"
+            result += "🧮 VALUATION CONCERNS\n"
+            result += f"{'='*100}\n"
+            for flag in self.valuation_flags:
+                result += f"\n{flag}\n"
+        
         return result
 
 
 class RedFlagsService:
     """Service for detecting financial red flags"""
     
-    def __init__(self, facts: CompanyFacts, market_cap: Optional[float] = None):
+    def __init__(
+        self, 
+        facts: CompanyFacts, 
+        market_cap: Optional[float] = None,
+        market_data: Optional[MarketData] = None
+    ):
         """
         Initialize red flags service.
         
         Args:
             facts: Company facts data from SEC
-            market_cap: Current market capitalization (optional, from external source)
+            market_cap: Current market capitalization (optional, deprecated - use market_data)
+            market_data: Complete market data including cap, valuation metrics, etc.
         """
         self.facts = facts
-        self.market_cap = market_cap
+        self.market_data = market_data
+        # For backwards compatibility
+        self.market_cap = market_data.market_cap if market_data else market_cap
         self.balance_sheet = BalanceSheetReader(facts)
         self.income_statement = IncomeStatementReader(facts)
         self.cash_flow = CashFlowStatementReader(facts)
@@ -146,6 +173,8 @@ class RedFlagsService:
         report.balance_sheet_flags = self._analyze_balance_sheet(granularity)
         report.cash_flow_flags = self._analyze_cash_flow(granularity)
         report.profitability_flags = self._analyze_profitability(granularity)
+        report.growth_flags = self._analyze_growth(granularity)
+        report.valuation_flags = self._analyze_valuation(granularity)
         
         # Count flags by severity
         for flag in report.all_flags:
@@ -598,6 +627,276 @@ class RedFlagsService:
                         ))
         
         except ValueError as e:
+            pass
+        
+        return flags
+    
+    # ========== GROWTH & SUSTAINABILITY ==========
+    
+    def _analyze_growth(self, granularity: Granularity) -> List[RedFlag]:
+        """Analyze growth and sustainability red flags"""
+        flags = []
+        
+        try:
+            revenue = self.income_statement.get_revenue(granularity)
+            
+            if not revenue.values or len(revenue.values) < 5:
+                return flags
+            
+            latest_period = revenue.periods[-1]
+            period_str = f"{latest_period.year} {latest_period.fp.value}"
+            
+            # 1. Revenue CAGR < inflation over 5 years (using 3% as inflation proxy)
+            if len(revenue.values) >= 5:
+                years = 5 if granularity == Granularity.ANNUAL else 5/4  # Adjust for quarterly
+                cagr = ((revenue.values[-1] / revenue.values[-5]) ** (1/years) - 1) * 100
+                
+                if cagr < 3.0:
+                    flags.append(RedFlag(
+                        category="Growth",
+                        severity=RedFlagSeverity.INFO,
+                        title="Revenue Growth Below Inflation",
+                        description="Stagnation - revenue barely keeping up with inflation",
+                        current_value=cagr,
+                        threshold=3.0,
+                        period=f"{revenue.periods[-5].year}-{latest_period.year}"
+                    ))
+            
+            # 2. High or rising SG&A % of revenue
+            try:
+                sga = self.income_statement.get_selling_general_administrative_expense(granularity)
+                
+                if sga.values and revenue.values:
+                    sga_pct = (sga.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
+                    
+                    # Check if SG&A > 40% of revenue
+                    if sga_pct > 40:
+                        flags.append(RedFlag(
+                            category="Growth",
+                            severity=RedFlagSeverity.WARNING,
+                            title="High SG&A Expenses",
+                            description="Bloated overhead - SG&A exceeds 40% of revenue",
+                            current_value=sga_pct,
+                            threshold=40.0,
+                            period=period_str
+                        ))
+                    
+                    # Check if SG&A % is rising
+                    if len(sga.values) >= 3 and len(revenue.values) >= 3:
+                        sga_pct_prev = (sga.values[-3] / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
+                        
+                        if sga_pct > sga_pct_prev + 3:  # 3% increase threshold
+                            flags.append(RedFlag(
+                                category="Growth",
+                                severity=RedFlagSeverity.INFO,
+                                title="Rising SG&A as % of Revenue",
+                                description="Poor cost discipline - overhead growing faster than revenue",
+                                current_value=sga_pct,
+                                threshold=sga_pct_prev,
+                                period=f"{revenue.periods[-3].year}-{latest_period.year}"
+                            ))
+            except ValueError:
+                pass
+            
+            # 3. Declining R&D while revenue is growing
+            try:
+                rd = self.income_statement.get_research_and_development_expense(granularity)
+                
+                if len(rd.values) >= 3 and len(revenue.values) >= 3:
+                    rd_growth = ((rd.values[-1] - rd.values[-3]) / rd.values[-3]) * 100 if rd.values[-3] != 0 else 0
+                    rev_growth = ((revenue.values[-1] - revenue.values[-3]) / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
+                    
+                    # If revenue is growing but R&D is declining
+                    if rev_growth > 5 and rd_growth < -5:
+                        flags.append(RedFlag(
+                            category="Growth",
+                            severity=RedFlagSeverity.WARNING,
+                            title="Declining R&D Despite Revenue Growth",
+                            description="Underinvesting in future - may hurt long-term competitiveness",
+                            current_value=rd_growth,
+                            threshold=0.0,
+                            period=f"{revenue.periods[-3].year}-{latest_period.year}"
+                        ))
+            except ValueError:
+                pass
+            
+        except ValueError:
+            pass
+        
+        return flags
+    
+    # ========== VALUATION CONCERNS ==========
+    
+    def _analyze_valuation(self, granularity: Granularity) -> List[RedFlag]:
+        """Analyze valuation metrics if market cap is available"""
+        flags = []
+        
+        if not self.market_cap:
+            return flags  # Need market cap for valuation metrics
+        
+        try:
+            revenue = self.income_statement.get_revenue(granularity)
+            net_income = self.income_statement.get_net_income(granularity)
+            
+            if not revenue.values or not net_income.values:
+                return flags
+            
+            latest_period = revenue.periods[-1]
+            period_str = f"{latest_period.year} {latest_period.fp.value}"
+            
+            # Get TTM (Trailing Twelve Months) values for annual metrics
+            if granularity == Granularity.QUARTERLY and len(revenue.values) >= 4:
+                ttm_revenue = sum(revenue.values[-4:])
+                ttm_net_income = sum(net_income.values[-4:])
+            else:
+                ttm_revenue = revenue.values[-1]
+                ttm_net_income = net_income.values[-1]
+            
+            # 1. P/S ratio > 10
+            price_to_sales = self.market_cap / ttm_revenue if ttm_revenue != 0 else 0
+            
+            if price_to_sales > 10:
+                flags.append(RedFlag(
+                    category="Valuation",
+                    severity=RedFlagSeverity.INFO,
+                    title="High Price-to-Sales Ratio",
+                    description="Needs massive growth to justify valuation - speculative pricing",
+                    current_value=price_to_sales,
+                    threshold=10.0,
+                    period=period_str
+                ))
+            
+            # 2. P/E ratio checks
+            if ttm_net_income > 0:
+                pe_ratio = self.market_cap / ttm_net_income
+                
+                # PE < 5 with low growth
+                if pe_ratio < 5:
+                    # Check if revenue growth is low
+                    if len(revenue.values) >= 3:
+                        rev_growth = ((revenue.values[-1] - revenue.values[-3]) / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
+                        
+                        if rev_growth < 5:
+                            flags.append(RedFlag(
+                                category="Valuation",
+                                severity=RedFlagSeverity.INFO,
+                                title="Very Low P/E Without Growth Catalyst",
+                                description="Might be a value trap - low valuation with stagnant growth",
+                                current_value=pe_ratio,
+                                threshold=5.0,
+                                period=period_str
+                            ))
+            
+            # 3. Price-to-Book ratio > 5 without high ROE
+            try:
+                equity = self.balance_sheet.get_stockholders_equity(granularity)
+                
+                if equity.values:
+                    book_value = equity.values[-1]
+                    if book_value > 0:
+                        pb_ratio = self.market_cap / book_value
+                        
+                        # Calculate ROE
+                        if len(equity.values) >= 2:
+                            avg_equity = (equity.values[-1] + equity.values[-2]) / 2
+                            roe = (ttm_net_income / avg_equity) * 100 if avg_equity > 0 else 0
+                            
+                            # High P/B without high ROE
+                            if pb_ratio > 5 and roe < 15:
+                                flags.append(RedFlag(
+                                    category="Valuation",
+                                    severity=RedFlagSeverity.INFO,
+                                    title="High Price-to-Book Without High ROE",
+                                    description="Speculative pricing - valuation not supported by returns",
+                                    current_value=pb_ratio,
+                                    threshold=5.0,
+                                    period=period_str
+                                ))
+            except ValueError:
+                pass
+            
+            # 4. Dividend yield > 8% (if dividends paid)
+            try:
+                dividends = self.cash_flow.get_dividends_paid(granularity)
+                
+                if dividends.values and len(dividends.values) >= 4:
+                    # Calculate annual dividend
+                    if granularity == Granularity.QUARTERLY:
+                        annual_dividend = abs(sum(dividends.values[-4:]))
+                    else:
+                        annual_dividend = abs(dividends.values[-1])
+                    
+                    if annual_dividend > 0:
+                        dividend_yield = (annual_dividend / self.market_cap) * 100
+                        
+                        if dividend_yield > 8:
+                            flags.append(RedFlag(
+                                category="Valuation",
+                                severity=RedFlagSeverity.WARNING,
+                                title="Extremely High Dividend Yield",
+                                description="Market pricing in dividend cut - yield too good to be true",
+                                current_value=dividend_yield,
+                                threshold=8.0,
+                                period=period_str
+                            ))
+            except ValueError:
+                pass
+            
+            # ========== Yahoo Finance Enhanced Checks ==========
+            
+            # 5. PEG Ratio > 2.0 (if available from Yahoo Finance)
+            if self.market_data and self.market_data.peg_ratio:
+                if self.market_data.peg_ratio > 2.0:
+                    flags.append(RedFlag(
+                        category="Valuation",
+                        severity=RedFlagSeverity.INFO,
+                        title="High PEG Ratio",
+                        description="Overpriced relative to growth - paying too much for earnings growth",
+                        current_value=self.market_data.peg_ratio,
+                        threshold=2.0,
+                        period=period_str
+                    ))
+            
+            # 6. EV/EBITDA > 15x (if available from Yahoo Finance)
+            if self.market_data and self.market_data.ev_to_ebitda:
+                if self.market_data.ev_to_ebitda > 15:
+                    flags.append(RedFlag(
+                        category="Valuation",
+                        severity=RedFlagSeverity.INFO,
+                        title="High Enterprise Value / EBITDA",
+                        description="Expensive valuation - needs hyper-growth to justify EV multiple",
+                        current_value=self.market_data.ev_to_ebitda,
+                        threshold=15.0,
+                        period=period_str
+                    ))
+            
+            # 7. High short interest > 10% (market skepticism)
+            if self.market_data and self.market_data.short_percent_float:
+                if self.market_data.short_percent_float > 10:
+                    flags.append(RedFlag(
+                        category="Valuation",
+                        severity=RedFlagSeverity.WARNING,
+                        title="High Short Interest",
+                        description="Market skepticism - significant bearish positioning by traders",
+                        current_value=self.market_data.short_percent_float,
+                        threshold=10.0,
+                        period="Current"
+                    ))
+            
+            # 8. Low insider ownership < 2% (lack of confidence)
+            if self.market_data and self.market_data.insider_ownership_percent is not None:
+                if self.market_data.insider_ownership_percent < 2:
+                    flags.append(RedFlag(
+                        category="Valuation",
+                        severity=RedFlagSeverity.INFO,
+                        title="Low Insider Ownership",
+                        description="Lack of skin in the game - insiders own minimal stake",
+                        current_value=self.market_data.insider_ownership_percent,
+                        threshold=2.0,
+                        period="Current"
+                    ))
+            
+        except ValueError:
             pass
         
         return flags

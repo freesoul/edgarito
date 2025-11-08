@@ -1,25 +1,67 @@
+-------------------
+
+
+Make the red flags thresholds configurable with an .env file (with pydantic_settings)
+
+
+
+-------------------
+
+
 We forget about IRFS for now and focus on GAAP
-
-Next steps :
-- Add more red flags
-- Update readme
-- Add cache for all cli...
- python -m edgarito.cli redflags --ticker GOOG
->> 
-[2025-11-08 16:52:50,975][INFO][CliOperations] CIK: 1652044
-[2025-11-08 16:52:51,046][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1003 filings for CIK 1652044
-[2025-11-08 16:52:51,046][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Getting additional filings for name='CIK0001652044-submissions-001.json' filingCount=1395 filingFrom=datetime.date(2015, 10, 2) filingTo=datetime.date(2022, 4, 2)
-[2025-11-08 16:52:51,048][INFO][edgarito.services.retrieval.edgar_rest_client.submissions_client] Got 1395 additional filings for name='CIK0001652044-submissions-001.json' filingCount=1395 filingFrom=datetime.date(2015, 10, 2) filingTo=datetime.date(2022, 4, 2)
-[2025-11-08 16:52:51,311][INFO][edgarito.services.market.yahoo_finance_service] Fetching market data for ticker: GOOG
-[2025-11-08 16:52:51,869][INFO][edgarito.services.market.yahoo_finance_service] Successfully fetched market data for GOOG: market_cap=$3,369,345,744,896, price=$279.70
-[2025-11-08 16:52:51,869][INFO][CliOperations] Fetched market cap for GOOG: $3,369,345,744,896
-[2025-11-08 16:52:51,882][INFO][edgarito.services.financial.base_reader] Using concepts ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues'] with data from 18 periods
------------------
+- Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
 
 
-1 - Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
-2 - Factorize cli
-3 - Extend the red flags :
+-------------------- 
+
+- Add more red flags (whatever is not NLAP dependent yet)
+
+🧠 Management / Governance
+
+Executive compensation rising faster than net income → shareholder-unfriendly.
+
+Auditor changes / restatements → accounting red flags.
+
+Frequent acquisitions without accretion → empire building, not value creation.
+
+Share buybacks at high valuations / issuing shares at low valuations → poor capital allocation.
+
+No clear or improving ROIC trend post-acquisition → poor integration.
+
+🧯 Growth & Sustainability
+
+Earnings or revenue growth dependent on one-time items → unsustainable.
+
+Customer or product concentration (>30%) → fragile business.
+
+High cyclicality without strong balance sheet → danger in downturns.
+
+🌎 Qualitative / Contextual
+
+Business model difficult to understand (Buffett rule).
+
+No competitive advantage / moat erosion → low pricing power.
+
+Dependent on commodity prices → little control over margins.
+
+High regulatory risk / litigation exposure → unpredictable.
+
+Inconsistent communication or misleading investor relations → integrity risk.
+
+Sudden executive departures → internal trouble.
+
+⚠️ Absolute Dealbreakers
+
+Persistent negative free cash flow + rising debt.
+
+Accounting irregularities / restatements.
+
+Dividends paid from debt or equity issuance.
+
+Management hiding details or using excessive “adjusted” metrics.
+
+Material weakness in internal controls (SEC 10-K Item 9A).
+
 
 
 -------------------- Done red flags
@@ -74,77 +116,33 @@ Revenue growth without EPS growth → margin compression or share dilution.
 
 Gross margin or EPS highly volatile year-to-year → unstable business.
 
-
-
--------------------- TO ADD (whatever is not NLAP dependent yet)
-
-
-🧠 Management / Governance
+🧯 Growth & Sustainability (implemented)
 
 High or rising SG&A % of revenue → bloated overhead or poor discipline.
 
-Executive compensation rising faster than net income → shareholder-unfriendly.
+Revenue CAGR < inflation over 5 years → stagnation.
 
-Insiders selling heavily / low insider ownership → lack of confidence.
+Declining R&D or capex while claiming growth → underinvesting.
 
-Auditor changes / restatements → accounting red flags.
+🧮 Valuation Concerns (implemented)
 
-Frequent acquisitions without accretion → empire building, not value creation.
-
-Share buybacks at high valuations / issuing shares at low valuations → poor capital allocation.
-
-No clear or improving ROIC trend post-acquisition → poor integration.
-
-🧮 Valuation Traps
+Price/Sales > 10 → needs massive growth to justify.
 
 PE ratio < 5 with no growth catalyst → might be a value trap.
-
-PEG ratio > 2.0 → overpriced relative to growth.
 
 Price/Book > 5 without high ROE or moat → speculative pricing.
 
 Dividend yield > 8% → market pricing in dividend cut.
 
+🧮 Valuation Concerns - Yahoo Finance Enhanced (implemented)
+
+PEG ratio > 2.0 → overpriced relative to growth.
+
 Enterprise Value / EBITDA > 15x → expensive, unless hyper-growth.
-
-Price/Sales > 10 → needs massive growth to justify.
-
-🧯 Growth & Sustainability
-
-Revenue CAGR < inflation over 5 years → stagnation.
-
-Earnings or revenue growth dependent on one-time items → unsustainable.
-
-Customer or product concentration (>30%) → fragile business.
-
-High cyclicality without strong balance sheet → danger in downturns.
-
-Declining R&D or capex while claiming growth → underinvesting.
-
-🌎 Qualitative / Contextual
-
-Business model difficult to understand (Buffett rule).
-
-No competitive advantage / moat erosion → low pricing power.
-
-Dependent on commodity prices → little control over margins.
-
-High regulatory risk / litigation exposure → unpredictable.
-
-Inconsistent communication or misleading investor relations → integrity risk.
 
 High short interest (>10%) → market skepticism.
 
-Sudden executive departures → internal trouble.
+Low insider ownership (<2%) → lack of confidence.
 
-⚠️ Absolute Dealbreakers
 
-Persistent negative free cash flow + rising debt.
 
-Accounting irregularities / restatements.
-
-Dividends paid from debt or equity issuance.
-
-Management hiding details or using excessive “adjusted” metrics.
-
-Material weakness in internal controls (SEC 10-K Item 9A).

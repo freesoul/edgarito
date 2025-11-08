@@ -165,9 +165,13 @@ class CliOperations:
         from edgarito.services.analysis.red_flags_service import RedFlagsService
         from edgarito.services.market.yahoo_finance_service import YahooFinanceService
         
-        # Try to get market data from Yahoo Finance
-        yahoo_service = YahooFinanceService()
-        market_data = await yahoo_service.get_market_data(ticker)
+        # Try to get market data from Yahoo Finance with caching
+        yahoo_service = YahooFinanceService(cache=self._cache)
+        market_data = await yahoo_service.get_market_data(
+            ticker,
+            use_cache=use_cache,
+            make_cache=make_cache
+        )
         market_cap = market_data.market_cap if market_data else None
         
         if market_cap:
@@ -175,7 +179,7 @@ class CliOperations:
         else:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
-        service = RedFlagsService(facts, market_cap=market_cap)
+        service = RedFlagsService(facts, market_data=market_data)
         report = service.analyze(granularity)
         
         print(report)
@@ -196,9 +200,13 @@ class CliOperations:
         # Resolve ticker from CIK
         ticker = await self.find_ticker_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
         
-        # Try to get market data from Yahoo Finance
-        yahoo_service = YahooFinanceService()
-        market_data = await yahoo_service.get_market_data(ticker)
+        # Try to get market data from Yahoo Finance with caching
+        yahoo_service = YahooFinanceService(cache=self._cache)
+        market_data = await yahoo_service.get_market_data(
+            ticker,
+            use_cache=use_cache,
+            make_cache=make_cache
+        )
         market_cap = market_data.market_cap if market_data else None
         
         if market_cap:
@@ -206,7 +214,7 @@ class CliOperations:
         else:
             self._logger.warning(f"Could not fetch market cap for {ticker}, proceeding without it")
         
-        service = RedFlagsService(facts, market_cap=market_cap)
+        service = RedFlagsService(facts, market_data=market_data)
         report = service.analyze(granularity)
         
         print(report)
