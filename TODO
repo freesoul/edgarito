@@ -1,8 +1,3 @@
-- Make a folder settings.
-- Move the red flags config from.cli.env to a YAML file there too instead.
-- Move the sector profiles yaml there too.
-- Update the readme when you're done
-
 
 
 📊 2. Introduce “Composite Quality Scores”
