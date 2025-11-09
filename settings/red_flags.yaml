@@ -1,0 +1,129 @@
+# Red Flags Threshold Configuration
+# 
+# These thresholds determine when financial red flags are raised.
+# Values can be customized based on your investment criteria and risk tolerance.
+#
+# All values are base thresholds - they will be adjusted by sector multipliers
+# from sector_profiles.yaml for industry-specific context.
+
+# =============================================================================
+# BALANCE SHEET HEALTH
+# Measures financial stability and liquidity
+# =============================================================================
+
+# Debt to Equity Ratio (Total Debt / Shareholders' Equity)
+# Higher debt increases financial risk and interest burden
+debt_to_equity_ratio_warning: 1.0   # WARNING if D/E > 1.0 (debt equals equity)
+debt_to_equity_ratio_critical: 2.0  # CRITICAL if D/E > 2.0 (debt is 2x equity)
+
+# Current Ratio (Current Assets / Current Liabilities)
+# Measures ability to pay short-term obligations
+current_ratio_critical: 1.0  # CRITICAL if < 1.0 (can't cover short-term debt)
+current_ratio_warning: 1.5   # WARNING if < 1.5 (limited cushion)
+
+# Quick Ratio / Acid Test ((Current Assets - Inventory) / Current Liabilities)
+# More stringent liquidity test - excludes inventory
+quick_ratio_warning: 1.0   # WARNING if < 1.0 (tight liquidity)
+quick_ratio_critical: 0.5  # CRITICAL if < 0.5 (severe liquidity crisis)
+
+# Interest Coverage Ratio (EBIT / Interest Expense)
+# Measures ability to service debt from operations
+interest_coverage_critical: 1.5  # CRITICAL if < 1.5x (struggling to pay interest)
+interest_coverage_warning: 3.0   # WARNING if < 3.0x (limited debt servicing cushion)
+
+# =============================================================================
+# CASH FLOW QUALITY
+# Measures how well earnings convert to actual cash
+# =============================================================================
+
+# Stock-Based Compensation as % of Operating Cash Flow
+# High SBC dilutes shareholders and masks true cash generation
+stock_comp_percent_ocf: 10.0  # Flag if SBC > 10% of OCF
+
+# =============================================================================
+# PROFITABILITY & INCOME QUALITY
+# Measures operational efficiency and returns
+# =============================================================================
+
+# Net Profit Margin (Net Income / Revenue) %
+# How much profit is generated from each dollar of revenue
+net_margin_percent: 3.0  # INFO if margin < 3% (thin margins, vulnerable)
+
+# Return on Equity (Net Income / Avg Shareholders' Equity) %
+# Measures return generated on shareholders' investment
+roe_percent: 10.0  # INFO if ROE < 10% (poor capital efficiency)
+
+# Return on Invested Capital (NOPAT / Invested Capital) %
+# Measures return on all capital (debt + equity)
+roic_percent: 7.0  # INFO if ROIC < 7% (not beating cost of capital)
+
+# Gross Margin Volatility (Standard Deviation over periods)
+# High volatility indicates unstable pricing power or costs
+gross_margin_std_dev: 5.0  # Flag if std dev > 5 percentage points
+
+# =============================================================================
+# GROWTH & SUSTAINABILITY
+# Measures long-term viability and efficiency
+# =============================================================================
+
+# Revenue CAGR vs Inflation
+# Revenue should at least keep pace with inflation (3%)
+revenue_cagr_inflation: 3.0  # Flag if 5-year revenue CAGR < 3%
+
+# Selling, General & Administrative Expenses as % of Revenue
+# High SG&A suggests bloated overhead or poor cost discipline
+sga_percent_revenue_warning: 30.0  # WARNING if SG&A > 30% of revenue
+sga_percent_revenue_info: 25.0     # INFO if SG&A > 25% of revenue
+
+# SG&A Growth vs Revenue Growth (percentage points)
+# SG&A growing faster than revenue is a red flag
+sga_increase_threshold: 3.0  # Flag if SG&A growth > Revenue growth + 3%
+
+# Revenue Growth Threshold for R&D Check
+# If revenue is growing, R&D should not be declining
+revenue_growth_for_rd_check: 5.0  # Check R&D if revenue growth > 5%
+
+# R&D Decline Threshold %
+# Cutting R&D while growing may signal short-term focus
+rd_decline_threshold: -5.0  # Flag if R&D declines by more than 5%
+
+# =============================================================================
+# VALUATION CONCERNS
+# Identifies potentially overvalued or undervalued stocks
+# =============================================================================
+
+# Price to Sales Ratio (Market Cap / Revenue)
+# Very high P/S requires massive growth to justify
+price_to_sales: 10.0  # Flag if P/S > 10x
+
+# Price to Earnings Ratio
+# Very low P/E might be a value trap (market knows something)
+pe_ratio_low: 5.0  # Flag if P/E < 5 without catalyst
+
+# Price to Book Ratio (Market Cap / Book Value)
+# High P/B without strong returns might be speculative
+price_to_book: 5.0  # Flag if P/B > 5x
+
+# ROE Threshold for High P/B
+# High P/B is acceptable if ROE is strong
+roe_for_pb_check: 15.0  # High P/B OK if ROE > 15%
+
+# Dividend Yield %
+# Extremely high yield often signals dividend cut risk
+dividend_yield: 8.0  # Flag if yield > 8%
+
+# PEG Ratio (P/E / Growth Rate)
+# PEG > 2 suggests overvaluation relative to growth
+peg_ratio: 2.0  # Flag if PEG > 2.0
+
+# Enterprise Value to EBITDA (EV / EBITDA)
+# High EV/EBITDA needs strong growth to justify
+ev_to_ebitda: 15.0  # Flag if EV/EBITDA > 15x
+
+# Short Interest as % of Float
+# High short interest indicates market skepticism
+short_interest_percent: 10.0  # Flag if short interest > 10%
+
+# Insider Ownership %
+# Very low insider ownership suggests lack of confidence
+insider_ownership_percent: 2.0  # Flag if insider ownership < 2%

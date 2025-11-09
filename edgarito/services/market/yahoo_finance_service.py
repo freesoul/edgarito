@@ -127,6 +127,8 @@ class YahooFinanceService:
             peg_ratio = info.get('trailingPegRatio') or info.get('pegRatio')
             short_percent = info.get('shortPercentOfFloat')
             insider_percent = info.get('heldPercentInsiders')
+            sector = info.get('sector')
+            industry = info.get('industry')
             
             # Convert percentages to 0-100 scale if needed
             short_percent_formatted = short_percent * 100 if short_percent and short_percent < 1 else short_percent
@@ -146,12 +148,14 @@ class YahooFinanceService:
                     ev_to_ebitda=float(ev_to_ebitda) if ev_to_ebitda else None,
                     peg_ratio=float(peg_ratio) if peg_ratio else None,
                     short_percent_float=float(short_percent_formatted) if short_percent_formatted else None,
-                    insider_ownership_percent=float(insider_percent_formatted) if insider_percent_formatted else None
+                    insider_ownership_percent=float(insider_percent_formatted) if insider_percent_formatted else None,
+                    sector=sector,
+                    industry=industry
                 )
             else:
                 logger.info(
                     f"Successfully fetched market data for {ticker}: "
-                    f"market_cap=${market_cap:,.0f}, price=${current_price or 0:.2f}"
+                    f"market_cap=${market_cap:,.0f}, price=${current_price or 0:.2f}, sector={sector}"
                 )
                 
                 market_data = MarketData(
@@ -162,7 +166,9 @@ class YahooFinanceService:
                     ev_to_ebitda=float(ev_to_ebitda) if ev_to_ebitda else None,
                     peg_ratio=float(peg_ratio) if peg_ratio else None,
                     short_percent_float=float(short_percent_formatted) if short_percent_formatted else None,
-                    insider_ownership_percent=float(insider_percent_formatted) if insider_percent_formatted else None
+                    insider_ownership_percent=float(insider_percent_formatted) if insider_percent_formatted else None,
+                    sector=sector,
+                    industry=industry
                 )
             
             # Cache the result

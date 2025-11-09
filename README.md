@@ -203,41 +203,52 @@ The `FinancialMetrics` class calculates key ratios:
 
 ### Red Flag Detection
 
-Automated analysis identifies potential issues across multiple categories:
+Automated analysis identifies potential issues with **intelligent data selection** and **sector-aware thresholds**:
+
+**Intelligent Granularity:**
+- **Balance Sheet & Cash Flow**: Uses quarterly data for current liquidity and solvency
+- **Profitability**: Uses quarterly data for recent margins and performance
+- **Growth**: Uses annual data for long-term trends (5-year CAGR)
+- **Valuation**: Uses quarterly data for current market multiples
+
+**Sector-Aware Analysis:**
+- Automatically adjusts thresholds based on company sector (12 sector profiles)
+- Example: Utilities can have 5x higher debt ratios than tech companies
+- Descriptions include sector context: "High debt for **technology sector**"
+
+**Red Flag Categories:**
 
 **Balance Sheet Health:**
-- High debt-to-equity ratios
-- Liquidity concerns (current/quick ratios)
+- High debt-to-equity ratios (tiered: warning/critical)
+- Liquidity concerns: current ratio, quick ratio (tiered)
+- Interest coverage concerns (tiered)
 - Negative tangible book value
-- Rising liabilities vs assets
 
 **Cash Flow Quality:**
-- Operating cash flow < Net Income
-- Negative free cash flow
-- Unsustainable dividends
-- High stock-based compensation
-- Frequent share issuance
+- Operating cash flow vs Free Cash flow concerns (CapEx-aware)
+- High stock-based compensation (>10% of OCF)
+- Frequent share issuance (dilution)
 
 **Profitability & Income Quality:**
-- Declining gross/operating margins
-- Low net margins
-- Poor capital efficiency (ROE, ROIC)
-- Volatile earnings patterns
+- Declining or volatile gross margins
+- Low net margins (<3%)
+- Poor capital efficiency: ROE (<10%), ROIC (<7%)
 
 **Growth & Sustainability:**
-- Revenue growth below inflation
-- High or rising SG&A expenses
+- Revenue growth below inflation (<3% CAGR)
+- High or rising SG&A expenses (>25% info, >30% warning)
 - Declining R&D investment
 
 **Valuation Concerns** (with Yahoo Finance integration):
-- High P/S, P/E, P/B ratios
-- Excessive dividend yields
-- High PEG ratios (overpriced growth)
-- Elevated EV/EBITDA multiples
-- High short interest (>10%)
+- High P/S (>10), P/E (<5), P/B (>5) ratios
+- High PEG ratio (>2.0) - overpriced growth
+- Elevated EV/EBITDA (>15) multiples
+- High short interest (>10% of float)
 - Low insider ownership (<2%)
 
 ## Configuration
+
+### Basic Configuration
 
 Edgarito can be configured via a `.cli.env` file in your project root:
 
@@ -245,47 +256,100 @@ Edgarito can be configured via a `.cli.env` file in your project root:
 # Required
 cache_path=./cache
 user_agent=Your Name (your-email@example.com)
-
-# Optional
-taxonomy_url=https://xbrl.fasb.org/us-gaap/2025/elts/us-gaap-2025.xsd
 ```
 
-### Customizing Red Flags Thresholds
+### Red Flags Configuration
 
-All red flag thresholds are configurable via environment variables using the `red_flags__` prefix with double underscore.
+Red flag thresholds are configured in `settings/red_flags.yaml` with **comprehensive inline documentation**:
 
-**Tiered Severity Levels:** Many thresholds have multiple tiers (critical/warning/info) for more actionable alerts:
+```yaml
+# Balance Sheet Health - Debt and Leverage
+# Debt to Equity Ratio (Total Debt / Shareholders' Equity)
+# Higher debt increases financial risk and interest burden
+debt_to_equity_ratio_warning: 1.0   # WARNING if D/E > 1.0 (debt equals equity)
+debt_to_equity_ratio_critical: 2.0  # CRITICAL if D/E > 2.0 (debt is 2x equity)
+
+# Liquidity - Current Ratio (Current Assets / Current Liabilities)
+# Measures ability to pay short-term obligations
+current_ratio_critical: 1.0         # CRITICAL if < 1.0 (can't cover current liabilities)
+current_ratio_warning: 1.5          # WARNING if < 1.5 (tight liquidity buffer)
+
+# Cash Flow Quality
+# Stock-Based Compensation as % of Operating Cash Flow
+stock_comp_percent_ocf: 10.0        # INFO if > 10% (high dilution)
+
+# Profitability Metrics
+net_margin_percent: 3.0             # INFO if < 3% (weak profitability)
+roe_percent: 10.0                   # INFO if < 10% (poor returns on equity)
+
+# Valuation Concerns
+price_to_sales: 10.0                # INFO if > 10 (expensive relative to sales)
+peg_ratio: 2.0                      # INFO if > 2.0 (overpriced growth)
+```
+
+**Configuration Files Structure:**
+
+```
+settings/
+├── red_flags.yaml       # 23 thresholds with full documentation
+└── sector_profiles.yaml # Industry-specific adjustments (12 sectors)
+```
+
+**Customization Examples:**
+
+```yaml
+# Conservative investor - stricter thresholds
+debt_to_equity_ratio_warning: 0.5   # Flag any company with D/E > 0.5
+current_ratio_warning: 2.0          # Want strong liquidity buffer
+roe_percent: 15.0                   # Expect excellent returns
+
+# Growth investor - more lenient on profitability
+net_margin_percent: 0.0             # Accept unprofitable growth companies
+roe_percent: 5.0                    # Lower return expectations
+price_to_sales: 20.0                # Accept higher valuations
+```
+
+### Industry-Aware Thresholds
+
+Red flags automatically adjust based on company sector via `settings/sector_profiles.yaml`:
+
+**Example adjustments:**
+- **Utilities**: 5.0x debt multiplier (capital-intensive, stable cash flows)
+- **Technology**: 1.125x OCF multiplier (light assets, high margins)
+- **Financial Services**: 10.0x debt multiplier (leverage is part of business model)
+- **Real Estate**: 0.714x FCF multiplier (capital-intensive, depreciation-heavy)
+
+**How it works:**
+
+```bash
+# Technology company with D/E = 0.8
+# Base threshold: 1.0 (WARNING)
+# Tech multiplier: 0.8x → Adjusted threshold: 0.8
+# Result: ⚠️ WARNING "High debt for technology sector"
+
+# Utility company with D/E = 3.0
+# Base threshold: 1.0 (WARNING)
+# Utility multiplier: 5.0x → Adjusted threshold: 5.0  
+# Result: ✅ No flag (normal for utilities)
+```
+
+CLI output automatically displays sector context:
+
+```
+====================================================================================================
+RED FLAGS ANALYSIS: AAPL - Apple Inc.
+Sector: Technology | Industry: Consumer Electronics
+====================================================================================================
+```
+
+**Advanced:** You can override thresholds via environment variables using `red_flags__` prefix:
 
 ```properties
-# Balance Sheet - Tiered thresholds
-red_flags__debt_to_equity_ratio_warning=1.0       # Warning if D/E > 1.0
-red_flags__debt_to_equity_ratio_critical=2.0      # Critical if D/E > 2.0
-
-red_flags__current_ratio_critical=1.0             # Critical if < 1.0
-red_flags__current_ratio_warning=1.5              # Warning if < 1.5
-
-red_flags__quick_ratio_critical=0.5               # Critical if < 0.5
-red_flags__quick_ratio_warning=1.0                # Warning if < 1.0
-
-red_flags__interest_coverage_critical=1.5         # Critical if < 1.5 (default risk)
-red_flags__interest_coverage_warning=3.0          # Warning if < 3.0
-
-# Growth - Tiered thresholds
-red_flags__sga_percent_revenue_info=25.0          # Info if SG&A > 25%
-red_flags__sga_percent_revenue_warning=30.0       # Warning if SG&A > 30%
-
-# Single-level thresholds (info level)
-red_flags__stock_comp_percent_ocf=10.0            # Default: 10.0
-red_flags__net_margin_percent=3.0                 # Default: 3.0
-red_flags__roe_percent=10.0                       # Default: 10.0
-red_flags__roic_percent=7.0                       # Default: 7.0
-red_flags__revenue_cagr_inflation=3.0             # Default: 3.0
-red_flags__price_to_sales=10.0                    # Default: 10.0
-red_flags__peg_ratio=2.0                          # Default: 2.0
-red_flags__ev_to_ebitda=15.0                      # Default: 15.0
+red_flags__debt_to_equity_ratio_warning=1.5
+red_flags__current_ratio_critical=0.8
 ```
 
-See `.cli.env` for a complete list of all 30+ configurable thresholds with descriptions.
+Environment variables take precedence over YAML configuration.
 
 ## Data Quality
 

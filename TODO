@@ -1,26 +1,9 @@
-🧠 1. Improve Context-Awareness (Industry + Stage + Cycle)
-
-Right now, all thresholds are global — so a utilities stock and a cloud startup are judged by the same rules.
-That’s the #1 source of false positives.
-You can fix that easily by adding contextual weighting:
-
-# Example: sector-aware thresholds
-if self.market_data and self.market_data.sector:
-    sector = self.market_data.sector.lower()
-else:
-    sector = "general"
-
-# Adjust FCF thresholds for capex-heavy sectors
-if sector in {"utilities", "energy", "telecom"}:
-    ocf_threshold, fcf_threshold = 0.7, 0.5
-elif sector in {"technology", "healthcare"}:
-    ocf_threshold, fcf_threshold = 0.9, 0.8
-else:
-    ocf_threshold, fcf_threshold = 0.8, 0.7
+- Make a folder settings.
+- Move the red flags config from.cli.env to a YAML file there too instead.
+- Move the sector profiles yaml there too.
+- Update the readme when you're done
 
 
-Then reuse those in the OCF/FCF logic.
-→ This makes your flags industry-normalized, improving precision dramatically.
 
 📊 2. Introduce “Composite Quality Scores”
 
@@ -337,3 +320,6 @@ Low insider ownership (<2%) → lack of confidence.
 
 
 
+
+
+taxonomy_url=https://xbrl.fasb.org/us-gaap/2025/elts/us-gaap-2025.xsd

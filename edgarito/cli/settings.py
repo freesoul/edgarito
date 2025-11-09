@@ -1,6 +1,82 @@
-from typing import Optional
+from typing import Optional, Dict
+from pathlib import Path
+import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class SectorThresholdAdjustments(BaseModel):
+    """
+    Sector-specific threshold multipliers and overrides.
+    Values are multipliers applied to base thresholds (e.g., 0.8 = 80% of base threshold).
+    """
+    
+    # OCF/FCF Conversion Thresholds (for cash flow quality)
+    ocf_ni_ratio_multiplier: float = Field(default=1.0, description="Multiplier for OCF/NI ratio threshold")
+    fcf_ni_ratio_multiplier: float = Field(default=1.0, description="Multiplier for FCF/NI ratio threshold")
+    
+    # Debt tolerance (for capital-intensive sectors)
+    debt_to_equity_multiplier: float = Field(default=1.0, description="Multiplier for D/E thresholds")
+    
+    # Liquidity expectations
+    current_ratio_multiplier: float = Field(default=1.0, description="Multiplier for current ratio thresholds")
+    quick_ratio_multiplier: float = Field(default=1.0, description="Multiplier for quick ratio thresholds")
+    
+    # Profitability expectations
+    net_margin_multiplier: float = Field(default=1.0, description="Multiplier for net margin threshold")
+    roe_multiplier: float = Field(default=1.0, description="Multiplier for ROE threshold")
+
+
+def _load_sector_profiles() -> Dict[str, SectorThresholdAdjustments]:
+    """
+    Load sector profiles from YAML file in settings/ folder.
+    Falls back to empty dict if file not found or invalid.
+    """
+    # Look for sector_profiles.yaml in settings/ folder (3 levels up from this file, then into settings/)
+    yaml_path = Path(__file__).parent.parent.parent / "settings" / "sector_profiles.yaml"
+    
+    try:
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        # Convert YAML dict to SectorThresholdAdjustments models
+        profiles = {}
+        for sector_name, multipliers in data.items():
+            if isinstance(multipliers, dict):
+                profiles[sector_name] = SectorThresholdAdjustments(**multipliers)
+        
+        return profiles
+    except FileNotFoundError:
+        print(f"Warning: sector_profiles.yaml not found at {yaml_path}, using defaults")
+        return {}
+    except Exception as e:
+        print(f"Warning: Error loading sector_profiles.yaml: {e}, using defaults")
+        return {}
+
+
+def _load_red_flags_thresholds() -> 'RedFlagsThresholds':
+    """
+    Load red flags thresholds from YAML file in settings/ folder.
+    Falls back to defaults if file not found or invalid.
+    """
+    yaml_path = Path(__file__).parent.parent.parent / "settings" / "red_flags.yaml"
+    
+    try:
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        # Create RedFlagsThresholds from YAML data
+        if isinstance(data, dict):
+            return RedFlagsThresholds(**data)
+        else:
+            print(f"Warning: red_flags.yaml has invalid format, using defaults")
+            return RedFlagsThresholds()
+    except FileNotFoundError:
+        print(f"Warning: red_flags.yaml not found at {yaml_path}, using defaults")
+        return RedFlagsThresholds()
+    except Exception as e:
+        print(f"Warning: Error loading red_flags.yaml: {e}, using defaults")
+        return RedFlagsThresholds()
 
 
 class RedFlagsThresholds(BaseModel):
@@ -62,10 +138,13 @@ class Settings(BaseSettings):
     log_level: int = 20
     user_agent: str
     cache_path: str = "./cache"
-    taxonomy_url: Optional[str] = None
+    # taxonomy_url: Optional[str] = None
     
-    # Red Flags Thresholds (nested model, can override with red_flags__field_name in env)
-    red_flags: RedFlagsThresholds = Field(default_factory=RedFlagsThresholds)
+    # Red Flags Thresholds (loaded from settings/red_flags.yaml, can still override with red_flags__field_name in env)
+    red_flags: RedFlagsThresholds = Field(default_factory=_load_red_flags_thresholds)
+    
+    # Sector Profiles (loaded from settings/sector_profiles.yaml)
+    sector_profiles: Dict[str, SectorThresholdAdjustments] = Field(default_factory=_load_sector_profiles)
 
 
 settings = Settings()

@@ -1,0 +1,171 @@
+# Sector-Specific Threshold Adjustments
+# 
+# These multipliers are applied to base thresholds defined in .cli.env
+# Values represent relative expectations vs. "general" companies:
+#   < 1.0 = More lenient (e.g., 0.8 = 80% of base threshold)
+#   > 1.0 = More strict (e.g., 1.5 = 150% of base threshold)
+#
+# Multiplier Types:
+#   ocf_ni_ratio_multiplier: Operating Cash Flow / Net Income ratio
+#   fcf_ni_ratio_multiplier: Free Cash Flow / Net Income ratio  
+#   debt_to_equity_multiplier: Debt to Equity ratio tolerance
+#   current_ratio_multiplier: Current Ratio (liquidity) expectations
+#   quick_ratio_multiplier: Quick Ratio (acid test) expectations
+#   net_margin_multiplier: Net Profit Margin percentage
+#   roe_multiplier: Return on Equity percentage
+
+# =============================================================================
+# CAPITAL-INTENSIVE SECTORS
+# High CapEx requirements, infrastructure-heavy, naturally lower cash conversion
+# =============================================================================
+
+utilities:
+  # Electric, gas, water utilities - massive infrastructure investment
+  # Lower FCF due to continuous maintenance & upgrades of grid/plants
+  # Higher debt tolerance due to stable regulated cash flows
+  ocf_ni_ratio_multiplier: 0.875   # 70% threshold (vs 80% base)
+  fcf_ni_ratio_multiplier: 0.714   # 50% threshold (vs 70% base) 
+  debt_to_equity_multiplier: 2.0   # 4.0 critical (vs 2.0 base)
+  current_ratio_multiplier: 0.8    # Lower liquidity needs
+  quick_ratio_multiplier: 0.8
+  net_margin_multiplier: 0.67      # 2% threshold (vs 3% base)
+  roe_multiplier: 1.0
+
+energy:
+  # Oil & gas exploration, refining - heavy capital expenditure
+  # Cyclical nature + infrastructure investment = lower FCF expectations
+  ocf_ni_ratio_multiplier: 0.875
+  fcf_ni_ratio_multiplier: 0.714
+  debt_to_equity_multiplier: 1.5
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 0.67
+  roe_multiplier: 1.0
+
+telecom:
+  # Telecommunications infrastructure - network buildout & maintenance
+  # High debt to finance spectrum & towers, lower liquidity needs
+  ocf_ni_ratio_multiplier: 0.875
+  fcf_ni_ratio_multiplier: 0.714
+  debt_to_equity_multiplier: 1.75
+  current_ratio_multiplier: 0.8
+  quick_ratio_multiplier: 0.8
+  net_margin_multiplier: 1.0
+  roe_multiplier: 1.0
+
+industrials:
+  # Manufacturing, machinery, aerospace - moderate capital intensity
+  # Some CapEx for plants/equipment but more flexible than utilities
+  ocf_ni_ratio_multiplier: 0.9375  # 75% threshold
+  fcf_ni_ratio_multiplier: 0.857   # 60% threshold
+  debt_to_equity_multiplier: 1.3
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 1.0
+  roe_multiplier: 1.0
+
+real_estate:
+  # REITs, real estate developers - property acquisition & development
+  # Extremely high leverage is normal, lower liquidity due to illiquid assets
+  ocf_ni_ratio_multiplier: 1.0
+  fcf_ni_ratio_multiplier: 0.714   # Real estate ties up cash
+  debt_to_equity_multiplier: 2.5   # 5.0 critical - mortgage-heavy
+  current_ratio_multiplier: 0.7
+  quick_ratio_multiplier: 0.7
+  net_margin_multiplier: 1.0
+  roe_multiplier: 1.0
+
+basic_materials:
+  # Mining, chemicals, metals - cyclical with moderate CapEx
+  # Mining equipment & processing plants require ongoing investment
+  ocf_ni_ratio_multiplier: 0.9375
+  fcf_ni_ratio_multiplier: 0.857
+  debt_to_equity_multiplier: 1.2
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 1.0
+  roe_multiplier: 1.0
+
+# =============================================================================
+# HIGH-GROWTH / ASSET-LIGHT SECTORS
+# Software, platforms, digital services - minimal CapEx, high margins
+# =============================================================================
+
+technology:
+  # Software, semiconductors, IT services - asset-light business model
+  # Expect excellent cash conversion & high margins, low debt tolerance
+  # Higher ROE expectations due to capital efficiency
+  ocf_ni_ratio_multiplier: 1.125   # 90% threshold (vs 80% base)
+  fcf_ni_ratio_multiplier: 1.143   # 80% threshold (vs 70% base)
+  debt_to_equity_multiplier: 0.5   # 1.0 critical (vs 2.0 base)
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 1.67      # 5% threshold (vs 3% base)
+  roe_multiplier: 1.5              # 15% threshold (vs 10% base)
+
+communication_services:
+  # Social media, streaming, advertising platforms - digital/asset-light
+  # Similar to tech but some infrastructure (servers, content)
+  ocf_ni_ratio_multiplier: 1.125
+  fcf_ni_ratio_multiplier: 1.143
+  debt_to_equity_multiplier: 1.0
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 1.33      # 4% threshold
+  roe_multiplier: 1.0
+
+# =============================================================================
+# HEALTHCARE & CONSUMER
+# Mixed business models with varied capital needs
+# =============================================================================
+
+healthcare:
+  # Pharma, biotech, medical devices - R&D heavy but high margins
+  # Clinical trials reduce FCF, but expect strong profitability
+  ocf_ni_ratio_multiplier: 1.125
+  fcf_ni_ratio_multiplier: 1.0     # Neutral - R&D reduces FCF
+  debt_to_equity_multiplier: 1.0
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 1.33
+  roe_multiplier: 1.2
+
+consumer_cyclical:
+  # Retail, automotive, travel - inventory-heavy, cyclical
+  # Need strong liquidity to weather downturns
+  ocf_ni_ratio_multiplier: 1.0
+  fcf_ni_ratio_multiplier: 1.0
+  debt_to_equity_multiplier: 1.0
+  current_ratio_multiplier: 1.1    # Higher liquidity needs
+  quick_ratio_multiplier: 1.1
+  net_margin_multiplier: 1.0
+  roe_multiplier: 1.0
+
+consumer_defensive:
+  # Food, beverages, household products - stable but lower margins
+  # Grocery/staples have thin margins but reliable cash flows
+  ocf_ni_ratio_multiplier: 1.0625  # 85% threshold
+  fcf_ni_ratio_multiplier: 1.0
+  debt_to_equity_multiplier: 1.0
+  current_ratio_multiplier: 1.0
+  quick_ratio_multiplier: 1.0
+  net_margin_multiplier: 0.83      # 2.5% threshold (lower margins)
+  roe_multiplier: 1.0
+
+# =============================================================================
+# FINANCIAL SERVICES
+# Banks, insurance, investment firms - fundamentally different metrics
+# =============================================================================
+
+financial_services:
+  # Banks, insurance, brokerages - leverage IS the business model
+  # Debt/Equity ratios 10-20x are normal for banks
+  # Different liquidity model (regulatory capital requirements)
+  # Lower margins due to spread-based business
+  ocf_ni_ratio_multiplier: 1.0
+  fcf_ni_ratio_multiplier: 1.0
+  debt_to_equity_multiplier: 5.0   # 10.0 critical - banks are leveraged
+  current_ratio_multiplier: 0.5    # Irrelevant for banks
+  quick_ratio_multiplier: 0.5      # Irrelevant for banks
+  net_margin_multiplier: 0.67
+  roe_multiplier: 1.0

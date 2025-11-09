@@ -2,6 +2,7 @@
 
 from typing import Optional
 from edgarito.schemas.edgar_responses.company_facts import CompanyFacts
+from edgarito.schemas.market_data import MarketData
 from edgarito.services.financial.statements import FinancialStatements
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.edgar.period import FiscalPeriod
@@ -11,12 +12,23 @@ class FinancialFormatter:
     """Handles formatting and display of financial data."""
 
     @staticmethod
-    def display_financials(facts: CompanyFacts, identifier: str):
+    def display_financials(facts: CompanyFacts, identifier: str, market_data: Optional[MarketData] = None):
         """Format and display financial statements for all periods."""
         statements = FinancialStatements(facts)
         
         print(f"\n{'='*100}")
         print(f"FINANCIAL STATEMENTS: {identifier.upper()} - {facts.entityName}")
+        
+        # Display sector and industry if available
+        if market_data:
+            sector_info = []
+            if market_data.sector:
+                sector_info.append(f"Sector: {market_data.sector}")
+            if market_data.industry:
+                sector_info.append(f"Industry: {market_data.industry}")
+            if sector_info:
+                print(f"{' | '.join(sector_info)}")
+        
         print(f"{'='*100}")
         
         # Display Annual Data

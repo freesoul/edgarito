@@ -45,6 +45,14 @@ class MarketData(BaseModel):
         ge=0,
         le=100
     )
+    sector: Optional[str] = Field(
+        None,
+        description="Business sector (e.g., Technology, Healthcare, Energy)"
+    )
+    industry: Optional[str] = Field(
+        None,
+        description="Specific industry within sector (e.g., Software, Biotechnology)"
+    )
     timestamp: datetime = Field(
         default_factory=datetime.now,
         description="When this data was retrieved"

@@ -134,7 +134,12 @@ class CliOperations:
             )
             result = await loader.load_from_ticker(ticker)
         
-        FinancialFormatter.display_financials(result.facts, ticker)
+        # Try to get market data for sector/industry display
+        from edgarito.services.market.yahoo_finance_service import YahooFinanceService
+        yahoo_service = YahooFinanceService(cache=self._cache)
+        market_data = await yahoo_service.get_market_data(ticker, use_cache=use_cache, make_cache=make_cache)
+        
+        FinancialFormatter.display_financials(result.facts, ticker, market_data)
 
     async def display_financials_from_cik(self, cik: int, use_cache: bool = True, make_cache: bool = True):
         """Display formatted financial statements for all available periods by CIK."""
@@ -150,7 +155,13 @@ class CliOperations:
             result = await loader.load_from_cik(cik)
         
         ticker = await self.find_ticker_from_cik(cik, use_cache=use_cache, make_cache=make_cache)
-        FinancialFormatter.display_financials(result.facts, ticker)
+        
+        # Try to get market data for sector/industry display
+        from edgarito.services.market.yahoo_finance_service import YahooFinanceService
+        yahoo_service = YahooFinanceService(cache=self._cache)
+        market_data = await yahoo_service.get_market_data(ticker, use_cache=use_cache, make_cache=make_cache)
+        
+        FinancialFormatter.display_financials(result.facts, ticker, market_data)
 
     async def analyze_red_flags_from_ticker(
         self, 

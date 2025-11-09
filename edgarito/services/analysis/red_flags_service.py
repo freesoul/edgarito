@@ -61,6 +61,7 @@ class RedFlagReport:
     profitability_flags: List[RedFlag] = field(default_factory=list)
     growth_flags: List[RedFlag] = field(default_factory=list)
     valuation_flags: List[RedFlag] = field(default_factory=list)
+    market_data: Optional[MarketData] = None
     
     @property
     def all_flags(self) -> List[RedFlag]:
@@ -83,6 +84,17 @@ class RedFlagReport:
     def __str__(self) -> str:
         result = f"\n{'='*100}\n"
         result += f"RED FLAGS ANALYSIS: {self.ticker} - {self.company_name}\n"
+        
+        # Display sector and industry if available
+        if self.market_data:
+            sector_info = []
+            if self.market_data.sector:
+                sector_info.append(f"Sector: {self.market_data.sector}")
+            if self.market_data.industry:
+                sector_info.append(f"Industry: {self.market_data.industry}")
+            if sector_info:
+                result += f"{' | '.join(sector_info)}\n"
+        
         result += f"{'='*100}\n\n"
         result += f"Summary: {self.total_flags} total flags "
         result += f"({self.critical_flags} critical, {self.warning_flags} warnings, {self.info_flags} info)\n\n"
@@ -162,6 +174,25 @@ class RedFlagsService:
             from edgarito.cli.settings import RedFlagsThresholds
             thresholds = RedFlagsThresholds()
         self.thresholds = thresholds
+        
+        # Determine sector and apply adjustments
+        self.sector = self._get_sector()
+        self.sector_profile = self._get_sector_profile()
+    
+    def _get_sector(self) -> str:
+        """Get the company's sector, normalized to lowercase."""
+        if self.market_data and self.market_data.sector:
+            return self.market_data.sector.lower()
+        return "general"
+    
+    def _get_sector_profile(self):
+        """Get sector-specific threshold adjustments."""
+        from edgarito.cli.settings import settings, SectorThresholdAdjustments
+        return settings.sector_profiles.get(self.sector, SectorThresholdAdjustments())
+    
+    def _adjust_threshold(self, base_threshold: float, multiplier: float) -> float:
+        """Apply sector-specific multiplier to a base threshold."""
+        return base_threshold * multiplier
     
     def analyze(self) -> RedFlagReport:
         """
@@ -178,7 +209,8 @@ class RedFlagsService:
         """
         report = RedFlagReport(
             ticker=str(self.facts.cik),
-            company_name=self.facts.entityName
+            company_name=self.facts.entityName,
+            market_data=self.market_data
         )
         
         # Run all analyses with appropriate granularity
@@ -238,24 +270,34 @@ class RedFlagsService:
                     ))
                 elif eq > 0:
                     debt_to_equity = debt / eq
-                    if debt_to_equity > self.thresholds.debt_to_equity_ratio_critical:
+                    # Apply sector-specific D/E threshold adjustments
+                    de_warning = self._adjust_threshold(
+                        self.thresholds.debt_to_equity_ratio_warning,
+                        self.sector_profile.debt_to_equity_multiplier
+                    )
+                    de_critical = self._adjust_threshold(
+                        self.thresholds.debt_to_equity_ratio_critical,
+                        self.sector_profile.debt_to_equity_multiplier
+                    )
+                    
+                    if debt_to_equity > de_critical:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.CRITICAL,
                             title="Extremely High Debt-to-Equity Ratio",
-                            description="Severe overleveraging - debt more than 2x equity",
+                            description=f"Severe overleveraging for {self.sector} sector - debt more than {de_critical:.1f}x equity",
                             current_value=debt_to_equity,
-                            threshold=self.thresholds.debt_to_equity_ratio_critical,
+                            threshold=de_critical,
                             period=period_str
                         ))
-                    elif debt_to_equity > self.thresholds.debt_to_equity_ratio_warning:
+                    elif debt_to_equity > de_warning:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.WARNING,
                             title="High Debt-to-Equity Ratio",
-                            description="Capital structure too leveraged - debt exceeds equity",
+                            description=f"Capital structure too leveraged for {self.sector} sector - debt exceeds equity",
                             current_value=debt_to_equity,
-                            threshold=self.thresholds.debt_to_equity_ratio_warning,
+                            threshold=de_warning,
                             period=period_str
                         ))
             
@@ -279,24 +321,34 @@ class RedFlagsService:
                 curr_liab = current_liabilities.values[-1]
                 if curr_liab > 0:
                     current_ratio = curr_assets / curr_liab
-                    if current_ratio < self.thresholds.current_ratio_critical:
+                    # Apply sector-specific adjustments
+                    cr_critical = self._adjust_threshold(
+                        self.thresholds.current_ratio_critical,
+                        self.sector_profile.current_ratio_multiplier
+                    )
+                    cr_warning = self._adjust_threshold(
+                        self.thresholds.current_ratio_warning,
+                        self.sector_profile.current_ratio_multiplier
+                    )
+                    
+                    if current_ratio < cr_critical:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.CRITICAL,
                             title="Critically Low Current Ratio",
-                            description="Severe liquidity crisis - current assets below current liabilities",
+                            description=f"Severe liquidity crisis for {self.sector} sector - current assets below current liabilities",
                             current_value=current_ratio,
-                            threshold=self.thresholds.current_ratio_critical,
+                            threshold=cr_critical,
                             period=period_str
                         ))
-                    elif current_ratio < self.thresholds.current_ratio_warning:
+                    elif current_ratio < cr_warning:
                         flags.append(RedFlag(
                             category="Balance Sheet",
                             severity=RedFlagSeverity.WARNING,
                             title="Low Current Ratio",
-                            description="Potential liquidity problems - limited ability to meet short-term obligations",
+                            description=f"Potential liquidity problems for {self.sector} sector - limited ability to meet short-term obligations",
                             current_value=current_ratio,
-                            threshold=self.thresholds.current_ratio_warning,
+                            threshold=cr_warning,
                             period=period_str
                         ))
             
@@ -310,24 +362,35 @@ class RedFlagsService:
                     curr_liab = current_liabilities.values[-1]
                     if curr_liab > 0:
                         quick_ratio = quick_assets / curr_liab
-                        if quick_ratio < self.thresholds.quick_ratio_critical:
+                        
+                        # Apply sector-specific thresholds
+                        qr_critical = self._adjust_threshold(
+                            self.thresholds.quick_ratio_critical,
+                            self.sector_profile.quick_ratio_multiplier
+                        )
+                        qr_warning = self._adjust_threshold(
+                            self.thresholds.quick_ratio_warning,
+                            self.sector_profile.quick_ratio_multiplier
+                        )
+                        
+                        if quick_ratio < qr_critical:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.CRITICAL,
                                 title="Critically Low Quick Ratio",
-                                description="Severe liquidity - cannot meet immediate obligations without selling inventory",
+                                description=f"Severe liquidity for {self.sector} sector - cannot meet immediate obligations without selling inventory",
                                 current_value=quick_ratio,
-                                threshold=self.thresholds.quick_ratio_critical,
+                                threshold=qr_critical,
                                 period=period_str
                             ))
-                        elif quick_ratio < self.thresholds.quick_ratio_warning:
+                        elif quick_ratio < qr_warning:
                             flags.append(RedFlag(
                                 category="Balance Sheet",
                                 severity=RedFlagSeverity.WARNING,
                                 title="Low Quick Ratio",
-                                description="Cannot comfortably meet short-term obligations without selling inventory",
+                                description=f"Cannot comfortably meet short-term obligations for {self.sector} sector without selling inventory",
                                 current_value=quick_ratio,
-                                threshold=self.thresholds.quick_ratio_warning,
+                                threshold=qr_warning,
                                 period=period_str
                             ))
             except ValueError:
@@ -475,17 +538,21 @@ class RedFlagsService:
                     ocf_ni_ratio = avg_ocf / avg_ni if avg_ni > 0 else 0
                     fcf_ni_ratio = avg_fcf / avg_ni if avg_ni > 0 else 0
                     
+                    # Apply sector-specific adjustments
+                    ocf_threshold = self._adjust_threshold(0.8, self.sector_profile.ocf_ni_ratio_multiplier)
+                    fcf_threshold = self._adjust_threshold(0.7, self.sector_profile.fcf_ni_ratio_multiplier)
+                    
                     # Only flag if BOTH conditions are true:
-                    # 1. OCF significantly below Net Income (< 80%)
-                    # 2. FCF is also weak (< 70% of Net Income) - indicating it's NOT just healthy CapEx
-                    if ocf_below_count >= 2 and ocf_ni_ratio < 0.8 and fcf_ni_ratio < 0.7:
+                    # 1. OCF significantly below Net Income (< sector-adjusted threshold)
+                    # 2. FCF is also weak (< sector-adjusted threshold) - indicating it's NOT just healthy CapEx
+                    if ocf_below_count >= 2 and ocf_ni_ratio < ocf_threshold and fcf_ni_ratio < fcf_threshold:
                         flags.append(RedFlag(
                             category="Cash Flow",
                             severity=RedFlagSeverity.WARNING,
                             title="Weak Cash Conversion (OCF & FCF Below Net Income)",
-                            description=f"Earnings quality concerns - profits not converting to cash even after CapEx (avg FCF {fcf_ni_ratio*100:.0f}% of Net Income)",
+                            description=f"Earnings quality concerns - profits not converting to cash even after CapEx (avg FCF {fcf_ni_ratio*100:.0f}% of Net Income, {self.sector} sector threshold: {fcf_threshold*100:.0f}%)",
                             current_value=fcf_ni_ratio * 100,
-                            threshold=70.0,
+                            threshold=fcf_threshold * 100,
                             period=f"Last 3 periods"
                         ))
             except (ValueError, IndexError):
@@ -698,16 +765,23 @@ class RedFlagsService:
                         threshold=0.0,
                         period=period_str
                     ))
-                elif 0 < net_margin < self.thresholds.net_margin_percent:
-                    flags.append(RedFlag(
-                        category="Profitability",
-                        severity=RedFlagSeverity.INFO,
-                        title="Low Net Margin",
-                        description="Thin margins - vulnerable to downturns",
-                        current_value=net_margin,
-                        threshold=3.0,
-                        period=period_str
-                    ))
+                else:
+                    # Apply sector-specific threshold for low margins
+                    margin_threshold = self._adjust_threshold(
+                        self.thresholds.net_margin_percent,
+                        self.sector_profile.net_margin_multiplier
+                    )
+                    
+                    if 0 < net_margin < margin_threshold:
+                        flags.append(RedFlag(
+                            category="Profitability",
+                            severity=RedFlagSeverity.INFO,
+                            title="Low Net Margin",
+                            description=f"Thin margins for {self.sector} sector - vulnerable to downturns",
+                            current_value=net_margin,
+                            threshold=margin_threshold,
+                            period=period_str
+                        ))
             
             # 4. ROE checks (negative = CRITICAL, low = INFO)
             try:
@@ -728,16 +802,23 @@ class RedFlagsService:
                                 threshold=0.0,
                                 period=period_str
                             ))
-                        elif 0 < roe < self.thresholds.roe_percent:
-                            flags.append(RedFlag(
-                                category="Profitability",
-                                severity=RedFlagSeverity.INFO,
-                                title="Low Return on Equity",
-                                description="Poor capital efficiency - not generating adequate returns",
-                                current_value=roe,
-                                threshold=self.thresholds.roe_percent,
-                                period=period_str
-                            ))
+                        else:
+                            # Apply sector-specific threshold for low ROE
+                            roe_threshold = self._adjust_threshold(
+                                self.thresholds.roe_percent,
+                                self.sector_profile.roe_multiplier
+                            )
+                            
+                            if 0 < roe < roe_threshold:
+                                flags.append(RedFlag(
+                                    category="Profitability",
+                                    severity=RedFlagSeverity.INFO,
+                                    title="Low Return on Equity",
+                                    description=f"Poor capital efficiency for {self.sector} sector - not generating adequate returns",
+                                    current_value=roe,
+                                    threshold=roe_threshold,
+                                    period=period_str
+                                ))
             except ValueError:
                 pass
             
