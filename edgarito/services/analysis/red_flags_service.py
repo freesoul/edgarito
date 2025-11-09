@@ -455,28 +455,59 @@ class RedFlagsService:
                             period=f"Last 2 quarters"
                         ))
             
-            # 1. Operating Cash Flow < Net Income consistently (WARNING, not CRITICAL)
-            if len(ocf.values) >= 3 and len(net_income.values) >= 3:
-                # Check last 3 periods
-                ocf_below_count = sum(1 for i in range(-3, 0) 
-                                     if ocf.values[i] < net_income.values[i])
+            # 1. Operating Cash Flow < Net Income - but check if it's due to healthy CapEx reinvestment
+            try:
+                capex = self.cash_flow.get_capital_expenditures(granularity)
                 
-                # Also check if the cumulative gap is significant (>20% on average)
-                avg_ocf = sum(ocf.values[-3:]) / 3
-                avg_ni = sum(net_income.values[-3:]) / 3
-                ocf_ni_ratio = avg_ocf / avg_ni if avg_ni != 0 else 0
-                
-                # Only flag if OCF is below in at least 2 of 3 periods AND average is significantly below
-                if ocf_below_count >= 2 and ocf_ni_ratio < 0.8:
-                    flags.append(RedFlag(
-                        category="Cash Flow",
-                        severity=RedFlagSeverity.WARNING,
-                        title="OCF Consistently Below Net Income",
-                        description="Earnings quality concerns - profits not converting to cash (avg OCF < 80% of Net Income)",
-                        current_value=ocf_ni_ratio * 100,
-                        threshold=80.0,
-                        period=f"Last 3 periods"
-                    ))
+                if len(ocf.values) >= 3 and len(net_income.values) >= 3 and capex.values and len(capex.values) >= 3:
+                    # Calculate Free Cash Flow (FCF = OCF + CapEx, since CapEx is negative)
+                    fcf_values = [ocf.values[i] + capex.values[i] for i in range(-3, 0)]
+                    
+                    # Check OCF vs Net Income
+                    ocf_below_count = sum(1 for i in range(-3, 0) 
+                                         if ocf.values[i] < net_income.values[i])
+                    
+                    # Calculate average ratios
+                    avg_ocf = sum(ocf.values[-3:]) / 3
+                    avg_ni = sum(net_income.values[-3:]) / 3
+                    avg_fcf = sum(fcf_values) / 3
+                    
+                    ocf_ni_ratio = avg_ocf / avg_ni if avg_ni > 0 else 0
+                    fcf_ni_ratio = avg_fcf / avg_ni if avg_ni > 0 else 0
+                    
+                    # Only flag if BOTH conditions are true:
+                    # 1. OCF significantly below Net Income (< 80%)
+                    # 2. FCF is also weak (< 70% of Net Income) - indicating it's NOT just healthy CapEx
+                    if ocf_below_count >= 2 and ocf_ni_ratio < 0.8 and fcf_ni_ratio < 0.7:
+                        flags.append(RedFlag(
+                            category="Cash Flow",
+                            severity=RedFlagSeverity.WARNING,
+                            title="Weak Cash Conversion (OCF & FCF Below Net Income)",
+                            description=f"Earnings quality concerns - profits not converting to cash even after CapEx (avg FCF {fcf_ni_ratio*100:.0f}% of Net Income)",
+                            current_value=fcf_ni_ratio * 100,
+                            threshold=70.0,
+                            period=f"Last 3 periods"
+                        ))
+            except (ValueError, IndexError):
+                # If we can't get CapEx data, fall back to simpler OCF check
+                if len(ocf.values) >= 3 and len(net_income.values) >= 3:
+                    ocf_below_count = sum(1 for i in range(-3, 0) 
+                                         if ocf.values[i] < net_income.values[i])
+                    
+                    avg_ocf = sum(ocf.values[-3:]) / 3
+                    avg_ni = sum(net_income.values[-3:]) / 3
+                    ocf_ni_ratio = avg_ocf / avg_ni if avg_ni > 0 else 0
+                    
+                    if ocf_below_count >= 2 and ocf_ni_ratio < 0.8:
+                        flags.append(RedFlag(
+                            category="Cash Flow",
+                            severity=RedFlagSeverity.WARNING,
+                            title="OCF Consistently Below Net Income",
+                            description="Earnings quality concerns - profits not converting to cash (avg OCF < 80% of Net Income)",
+                            current_value=ocf_ni_ratio * 100,
+                            threshold=80.0,
+                            period=f"Last 3 periods"
+                        ))
             
             # 2. Negative Free Cash Flow for 2+ years
             try:

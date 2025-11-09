@@ -1,3 +1,204 @@
+🧠 1. Improve Context-Awareness (Industry + Stage + Cycle)
+
+Right now, all thresholds are global — so a utilities stock and a cloud startup are judged by the same rules.
+That’s the #1 source of false positives.
+You can fix that easily by adding contextual weighting:
+
+# Example: sector-aware thresholds
+if self.market_data and self.market_data.sector:
+    sector = self.market_data.sector.lower()
+else:
+    sector = "general"
+
+# Adjust FCF thresholds for capex-heavy sectors
+if sector in {"utilities", "energy", "telecom"}:
+    ocf_threshold, fcf_threshold = 0.7, 0.5
+elif sector in {"technology", "healthcare"}:
+    ocf_threshold, fcf_threshold = 0.9, 0.8
+else:
+    ocf_threshold, fcf_threshold = 0.8, 0.7
+
+
+Then reuse those in the OCF/FCF logic.
+→ This makes your flags industry-normalized, improving precision dramatically.
+
+📊 2. Introduce “Composite Quality Scores”
+
+Right now, each flag is binary — it’s either raised or not.
+You could aggregate a score-based system that blends the signals into a quality tier:
+
+# Compute overall quality score (0–100)
+quality_score = 100
+for flag in report.all_flags:
+    if flag.severity == RedFlagSeverity.CRITICAL:
+        quality_score -= 15
+    elif flag.severity == RedFlagSeverity.WARNING:
+        quality_score -= 7
+    elif flag.severity == RedFlagSeverity.INFO:
+        quality_score -= 2
+
+quality_score = max(0, quality_score)
+report.quality_score = quality_score
+
+
+Then classify:
+
+80–100: Excellent
+
+60–80: Acceptable
+
+40–60: Risky
+
+<40: Red flag zone
+
+This gives a quantitative feel for the company’s financial health and makes backtesting easier.
+
+💰 3. Add “Cash Conversion Cycle” Analysis
+
+Peter Lynch often looked for companies with efficient operations and quick inventory turns.
+You can use:
+
+cash_conversion_cycle = days_inventory_outstanding + days_sales_outstanding - days_payables_outstanding
+
+
+and flag if it’s rising sharply or very high relative to peers (if data available).
+
+🧾 4. Add “Earnings Manipulation Detection” (Beneish M-Score Lite)
+
+This is a big one: you can detect potential accounting trickery by combining ratios like:
+
+Days Sales Receivable Index (DSRI)
+
+Gross Margin Index (GMI)
+
+Asset Quality Index (AQI)
+
+Sales Growth Index (SGI)
+
+Depreciation Index (DEPI)
+
+Accruals
+
+Even if you don’t compute the full M-Score, add lightweight variants:
+
+if dsri > 1.2 or gmi > 1.1:
+    flags.append(RedFlag(
+        category="Profitability",
+        severity=RedFlagSeverity.WARNING,
+        title="Possible Earnings Manipulation",
+        description="Unusual revenue or margin patterns suggesting earnings management"
+    ))
+
+
+This will catch aggressive accounting behavior before it shows up in OCF/NI divergence.
+
+🔄 5. Smooth Volatile Metrics (Rolling Averages)
+
+Some ratios are too noisy quarter-to-quarter.
+Replace raw comparisons with rolling 3–4 quarter averages:
+
+avg_ocf = np.mean(ocf.values[-4:])
+avg_net_income = np.mean(net_income.values[-4:])
+
+
+Same for margins and leverage — this filters out seasonal or one-time effects (especially for cyclicals).
+
+⚙️ 6. Add “Capital Efficiency” Metrics (Lynch’s Favorites)
+
+Lynch’s high-quality companies (like Dunkin’ or Apple) show:
+
+High ROIC
+
+Consistent ROE
+
+Stable or rising margins
+
+You already check ROE and margin trends — extend it with:
+
+roic = nopat / (total_debt + equity - cash)
+if roic < 0.05:
+    flags.append(RedFlag(...))
+
+
+Then combine ROE + ROIC for a “capital efficiency” subscore.
+
+🔔 7. Detect “Overvaluation + Weak Fundamentals” Combo
+
+You already detect P/E, P/B, PEG, etc.
+The next step: only raise valuation flags if fundamentals are also weak.
+Example:
+
+if pe_ratio > 50 and roe < 10:
+    flags.append(RedFlag(
+        category="Valuation",
+        severity=RedFlagSeverity.WARNING,
+        title="High Valuation Without Supporting Profitability",
+        description="Expensive and low quality — potential bubble valuation"
+    ))
+
+
+This reduces false positives for fast-growing quality firms.
+
+🧩 8. Add “Trend Reversal” Logic
+
+Sometimes metrics deteriorate, but not catastrophically — e.g., margins dropping for 3 periods.
+Add trend detection:
+
+if all(m < n for m, n in zip(operating_margin[-3:], operating_margin[-2:])):
+    flags.append(...)
+
+
+This detects early warning signs, not just hard thresholds.
+
+💬 9. Improve Flag Explanations
+
+You can make descriptions adaptive to add real interpretability:
+
+if ocf_ni_ratio < 0.8 and fcf_ni_ratio >= 0.7:
+    cause = "Likely due to high reinvestment (CapEx-heavy period)"
+else:
+    cause = "Likely poor earnings quality"
+
+
+Then include:
+
+description=f"Earnings quality concern - {cause}."
+
+
+→ It reads like a financial analyst note, not a static rule hit.
+
+🧱 10. Add Structural Metadata for Backtesting & Visualization
+
+Each flag could carry:
+
+@dataclass
+class RedFlag:
+    ...
+    score_impact: float = 0.0  # + for positive signal, - for risk
+    metric: Optional[str] = None  # e.g. "debt_to_equity"
+
+
+That lets you:
+
+Track which metrics most often trigger red flags
+
+Weight them in backtesting
+
+Visualize your “Red Flag Radar” for each company.
+
+🚀 TL;DR: Top 5 Practical Enhancements
+Type	Change	Benefit
+1	Industry-aware thresholds	Reduce false positives
+2	Quality scoring system	Quantitative overview
+3	Add ROIC & accrual metrics	True quality screening
+4	Combine valuation + fundamentals	Avoid punishing strong growth stocks
+5	Add M-score-like manipulation checks	Detect early fraud/risk
+
+
+
+----
+
+
 We forget about IRFS for now and focus on GAAP
 - Finish data pipeline  (download + parser + combiner) under a single services folder and use it in the cli. Test on RACE and others.
 
