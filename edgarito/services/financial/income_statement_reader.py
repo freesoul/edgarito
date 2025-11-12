@@ -306,28 +306,31 @@ class IncomeStatementReader(BaseStatementReader):
                 fact = self._data.facts.us_gaap["EarningsPerShareDiluted"]
                 if fact.units and fact.units.pure:
                     # EPS is in pure units - extract it
-                    import logging
-                    logger = logging.getLogger(__name__)
                     logger.info(f"Using EPS from 'pure' units (not USD) - {len(fact.units.pure)} periods")
                     
-                    from edgarito.services.financial.base_reader import BaseStatementReader
-                    # Use the same filtering logic as _get_concept but for pure units
-                    measurements = fact.units.pure
+                    from edgarito.enums.edgar.core_filing_type import CoreFilingType
                     
-                    # Filter and convert (reuse base reader logic)
-                    filtered = self._filter_measurements_by_granularity(
-                        measurements, granularity, convert_fy_to_q4=True
-                    )
+                    # Use same filtering logic as _get_concept
+                    filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q] if granularity == Granularity.QUARTERLY else [CoreFilingType.FILING_10K]
                     
-                    if not filtered:
+                    all_measurements = fact.units.pure
+                    filtered_measurements = []
+                    for filing_type in filing_types:
+                        filtered = self._filter_measurements(all_measurements, filing_type)
+                        filtered_measurements.extend(filtered)
+                    
+                    filtered_measurements = self._deduplicate_measurements(filtered_measurements)
+                    
+                    if not filtered_measurements:
                         raise ValueError(f"No measurements found for concept 'EarningsPerShareDiluted' in pure units with {granularity}")
                     
-                    return UnivariateMeasurements(
+                    univariate = UnivariateMeasurements.from_measurements(
                         concept="EarningsPerShareDiluted",
                         granularity=granularity,
-                        values=[m.val for m in filtered],
-                        periods=[self._measurement_to_period(m) for m in filtered]
+                        measurements=filtered_measurements
                     )
+                    univariate.sort()
+                    return univariate
             
             # EPS not available directly - try to calculate from components
             try:
