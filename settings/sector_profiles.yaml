@@ -64,6 +64,23 @@ industrials:
   net_margin_multiplier: 1.0
   roe_multiplier: 1.0
 
+aerospace_defense:
+  # Defense contractors, aerospace manufacturers - government contracts
+  # Characteristics:
+  #   - Lumpy cash flows due to milestone-based government payments
+  #   - Pension obligations create high leverage and cash outflows
+  #   - Working capital swings from contract timing (not distress)
+  #   - Lower margins than tech but very stable revenue
+  #   - High intangibles from acquisitions (not concerning)
+  #   - Advance contract payments create high current liabilities (ratio often <1.2)
+  ocf_ni_ratio_multiplier: 0.875   # 70% threshold - pension/timing issues
+  fcf_ni_ratio_multiplier: 0.714   # 50% threshold - pension pre-funding normal
+  debt_to_equity_multiplier: 1.6   # 3.2 critical - pensions inflate leverage
+  current_ratio_multiplier: 0.6    # 0.9 warning - advance payments inflate current liabilities
+  quick_ratio_multiplier: 0.6      # 0.6 warning - inventory less relevant for services
+  net_margin_multiplier: 0.83      # 2.5% threshold - lower than tech
+  roe_multiplier: 0.9              # 9% threshold - lower due to pension assets
+
 real_estate:
   # REITs, real estate developers - property acquisition & development
   # Extremely high leverage is normal, lower liquidity due to illiquid assets

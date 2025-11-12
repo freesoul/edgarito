@@ -47,11 +47,21 @@ class ValuationAnalyzer(BaseAnalyzer):
         return flags
     
     def _check_price_to_sales(self, revenue, period_str: str) -> List[RedFlag]:
-        """Check P/S ratio for overvaluation."""
+        """Check P/S ratio for overvaluation using TTM revenue."""
         flags = []
         
-        if revenue.values[-1] > 0:
-            price_to_sales = self.market_cap / revenue.values[-1]
+        # P/S should use TTM (Trailing Twelve Months) revenue, not a single quarter
+        # Calculate TTM by summing last 4 quarters if available
+        ttm_revenue = None
+        if len(revenue.values) >= 4:
+            ttm_revenue = sum(revenue.values[-4:])
+        elif len(revenue.values) >= 1:
+            # Fallback: if we don't have 4 quarters, estimate TTM by multiplying latest quarter by 4
+            # This is less accurate but better than using a single quarter directly
+            ttm_revenue = revenue.values[-1] * 4
+        
+        if ttm_revenue and ttm_revenue > 0:
+            price_to_sales = self.market_cap / ttm_revenue
             
             if price_to_sales > self.thresholds.price_to_sales:
                 flags.append(RedFlag(
@@ -67,14 +77,21 @@ class ValuationAnalyzer(BaseAnalyzer):
         return flags
     
     def _check_pe_ratio(self, revenue, granularity: Granularity, period_str: str) -> List[RedFlag]:
-        """Check P/E ratio for value traps."""
+        """Check P/E ratio for value traps using TTM net income."""
         flags = []
         
         try:
             net_income = self.income_statement.get_net_income(granularity)
             
-            if net_income.values[-1] > 0:
-                pe_ratio = self.market_cap / net_income.values[-1]
+            # P/E should use TTM net income, not a single quarter
+            ttm_net_income = None
+            if len(net_income.values) >= 4:
+                ttm_net_income = sum(net_income.values[-4:])
+            elif len(net_income.values) >= 1:
+                ttm_net_income = net_income.values[-1] * 4
+            
+            if ttm_net_income and ttm_net_income > 0:
+                pe_ratio = self.market_cap / ttm_net_income
                 
                 # Value trap: low P/E without growth
                 if pe_ratio < self.thresholds.pe_ratio_low:
@@ -109,11 +126,19 @@ class ValuationAnalyzer(BaseAnalyzer):
                 
                 # High P/B without high ROE
                 if price_to_book > self.thresholds.price_to_book:
-                    # Check ROE
+                    # Check ROE using TTM net income
                     try:
                         net_income = self.income_statement.get_net_income(Granularity.QUARTERLY)
-                        if net_income.values[-1] > 0:
-                            roe = (net_income.values[-1] / equity.values[-1]) * 100
+                        
+                        # Calculate TTM net income for ROE
+                        ttm_net_income = None
+                        if len(net_income.values) >= 4:
+                            ttm_net_income = sum(net_income.values[-4:])
+                        elif len(net_income.values) >= 1:
+                            ttm_net_income = net_income.values[-1] * 4
+                        
+                        if ttm_net_income and ttm_net_income > 0:
+                            roe = (ttm_net_income / equity.values[-1]) * 100
                             
                             if roe < self.thresholds.roe_for_pb_check:
                                 flags.append(RedFlag(
@@ -136,10 +161,13 @@ class ValuationAnalyzer(BaseAnalyzer):
         """Check for unsustainably high dividend yield."""
         flags = []
         
+        if not self.market_cap:
+            return flags  # Need market cap to calculate yield
+        
         try:
             dividends = self.cash_flow.get_dividends_paid(Granularity.ANNUAL)
             
-            if dividends.values[-1] < 0:  # Dividends are negative in cash flow
+            if dividends.values and dividends.values[-1] < 0:  # Dividends are negative in cash flow
                 annual_dividend = abs(dividends.values[-1])
                 dividend_yield = (annual_dividend / self.market_cap) * 100
                 
@@ -153,7 +181,7 @@ class ValuationAnalyzer(BaseAnalyzer):
                         threshold=self.thresholds.dividend_yield,
                         period=period_str
                     ))
-        except ValueError:
+        except (ValueError, IndexError):
             pass
         
         return flags

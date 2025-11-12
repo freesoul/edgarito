@@ -53,6 +53,7 @@ class RedFlagReport:
     growth_flags: List[RedFlag] = field(default_factory=list)
     valuation_flags: List[RedFlag] = field(default_factory=list)
     market_data: Optional[MarketData] = None
+    data_availability_warnings: List[str] = field(default_factory=list)  # Track missing/insufficient data
     
     @property
     def all_flags(self) -> List[RedFlag]:
@@ -89,6 +90,24 @@ class RedFlagReport:
         result += f"{'='*100}\n\n"
         result += f"Summary: {self.total_flags} total flags "
         result += f"({self.critical_flags} critical, {self.warning_flags} warnings, {self.info_flags} info)\n\n"
+        
+        # Display data availability warnings prominently if present
+        if self.data_availability_warnings:
+            result += f"\n{'='*100}\n"
+            result += "⚠️  DATA AVAILABILITY WARNINGS\n"
+            result += f"{'='*100}\n"
+            for warning in self.data_availability_warnings:
+                result += f"\n⚠️  {warning}\n"
+            result += f"\n{'='*100}\n"
+            
+            # If there are warnings and no flags, explain why
+            if self.total_flags == 0:
+                result += "\n❌ Unable to perform comprehensive red flags analysis due to insufficient data.\n"
+                result += "This may occur when:\n"
+                result += "  • Company uses IFRS accounting (not US-GAAP)\n"
+                result += "  • Company recently went public (limited historical data)\n"
+                result += "  • SEC filing data is incomplete or unavailable\n"
+                return result
         
         if self.total_flags == 0:
             result += "✅ No significant red flags detected!\n"

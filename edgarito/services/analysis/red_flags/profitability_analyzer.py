@@ -2,10 +2,19 @@
 Profitability and income quality analyzer - margins, returns, earnings quality checks.
 """
 from typing import List
+import logging
 
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.red_flags import RedFlag, RedFlagSeverity
+from edgarito.services.analysis.period_alignment import (
+    align_series_for_ratio,
+    align_series_for_growth,
+    PeriodMismatchError,
+    check_series_freshness
+)
 from .base_analyzer import BaseAnalyzer
+
+logger = logging.getLogger(__name__)
 
 
 class ProfitabilityAnalyzer(BaseAnalyzer):
@@ -44,9 +53,24 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         """Check for declining gross margin."""
         flags = []
         
-        if len(revenue.values) >= 3 and len(gross_profit.values) >= 3:
-            gm_current = (gross_profit.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
-            gm_prev = (gross_profit.values[-3] / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
+        try:
+            # Validate period alignment before calculating margins
+            gp_values, rev_values, aligned_periods = align_series_for_ratio(
+                numerator=gross_profit,
+                denominator=revenue,
+                context="gross margin calculation",
+                require_recent_data=True,
+                max_age_days=365  # Reject if latest data is > 1 year old
+            )
+            
+            # Need at least 3 periods for trend analysis
+            if len(aligned_periods) < 3:
+                logger.info(f"Insufficient aligned periods for gross margin trend: {len(aligned_periods)}")
+                return flags
+            
+            # Calculate margins on aligned data
+            gm_current = (gp_values[-1] / rev_values[-1]) * 100 if rev_values[-1] != 0 else 0
+            gm_prev = (gp_values[-3] / rev_values[-3]) * 100 if rev_values[-3] != 0 else 0
             
             if gm_current < gm_prev - 2:  # 2% decline threshold
                 flags.append(RedFlag(
@@ -56,8 +80,13 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                     description="Pricing pressure or cost inflation squeezing margins",
                     current_value=gm_current,
                     threshold=gm_prev,
-                    period=f"{revenue.periods[-3].year}-{period_str.split()[0]}"
+                    period=f"{aligned_periods[-3].year}-{aligned_periods[-1].year} {aligned_periods[-1].fp.value}"
                 ))
+                
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping gross margin check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in gross margin check: {e}")
         
         return flags
     
@@ -65,9 +94,22 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         """Check for negative or declining operating margin."""
         flags = []
         
-        if len(revenue.values) >= 3 and len(operating_income.values) >= 3:
-            om_current = (operating_income.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
-            om_prev = (operating_income.values[-3] / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
+        try:
+            # Validate period alignment
+            oi_values, rev_values, aligned_periods = align_series_for_ratio(
+                numerator=operating_income,
+                denominator=revenue,
+                context="operating margin calculation",
+                require_recent_data=True,
+                max_age_days=365
+            )
+            
+            # Need at least 1 period for current margin, 3 for trend
+            if len(aligned_periods) < 1:
+                return flags
+            
+            # Calculate current margin
+            om_current = (oi_values[-1] / rev_values[-1]) * 100 if rev_values[-1] != 0 else 0
             
             # Check for negative operating margin (CRITICAL)
             if om_current < 0:
@@ -78,18 +120,27 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                     description="Operating losses - core business not profitable",
                     current_value=om_current,
                     threshold=0.0,
-                    period=period_str
+                    period=f"{aligned_periods[-1].year} {aligned_periods[-1].fp.value}"
                 ))
-            elif om_current < om_prev - 2:  # 2% decline threshold
-                flags.append(RedFlag(
-                    category="Profitability",
-                    severity=RedFlagSeverity.WARNING,
-                    title="Declining Operating Margin",
-                    description="Poor cost control or increased competition",
-                    current_value=om_current,
-                    threshold=om_prev,
-                    period=f"{revenue.periods[-3].year}-{period_str.split()[0]}"
-                ))
+            elif len(aligned_periods) >= 3:
+                # Check for declining margin
+                om_prev = (oi_values[-3] / rev_values[-3]) * 100 if rev_values[-3] != 0 else 0
+                
+                if om_current < om_prev - 2:  # 2% decline threshold
+                    flags.append(RedFlag(
+                        category="Profitability",
+                        severity=RedFlagSeverity.WARNING,
+                        title="Declining Operating Margin",
+                        description="Poor cost control or increased competition",
+                        current_value=om_current,
+                        threshold=om_prev,
+                        period=f"{aligned_periods[-3].year}-{aligned_periods[-1].year} {aligned_periods[-1].fp.value}"
+                    ))
+                    
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping operating margin check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in operating margin check: {e}")
         
         return flags
     
@@ -97,38 +148,54 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         """Check net margin (negative = CRITICAL, low = INFO)."""
         flags = []
         
-        if not revenue.values or not net_income.values:
-            return flags
-        
-        net_margin = (net_income.values[-1] / revenue.values[-1]) * 100 if revenue.values[-1] != 0 else 0
-        
-        if net_margin < 0:
-            flags.append(RedFlag(
-                category="Profitability",
-                severity=RedFlagSeverity.CRITICAL,
-                title="Negative Net Margin (Losses)",
-                description="Company losing money - burning through capital",
-                current_value=net_margin,
-                threshold=0.0,
-                period=period_str
-            ))
-        else:
-            # Apply sector-specific threshold for low margins
-            margin_threshold = self._adjust_threshold(
-                self.thresholds.net_margin_percent,
-                self.sector_profile.net_margin_multiplier
+        try:
+            # Validate period alignment
+            ni_values, rev_values, aligned_periods = align_series_for_ratio(
+                numerator=net_income,
+                denominator=revenue,
+                context="net margin calculation",
+                require_recent_data=True,
+                max_age_days=365
             )
             
-            if 0 < net_margin < margin_threshold:
+            if len(aligned_periods) < 1:
+                return flags
+            
+            net_margin = (ni_values[-1] / rev_values[-1]) * 100 if rev_values[-1] != 0 else 0
+            period_display = f"{aligned_periods[-1].year} {aligned_periods[-1].fp.value}"
+            
+            if net_margin < 0:
                 flags.append(RedFlag(
                     category="Profitability",
-                    severity=RedFlagSeverity.INFO,
-                    title="Low Net Margin",
-                    description=f"Thin margins for {self.sector} sector - vulnerable to downturns",
+                    severity=RedFlagSeverity.CRITICAL,
+                    title="Negative Net Margin (Losses)",
+                    description="Company losing money - burning through capital",
                     current_value=net_margin,
-                    threshold=margin_threshold,
-                    period=period_str
+                    threshold=0.0,
+                    period=period_display
                 ))
+            else:
+                # Apply sector-specific threshold for low margins
+                margin_threshold = self._adjust_threshold(
+                    self.thresholds.net_margin_percent,
+                    self.sector_profile.net_margin_multiplier
+                )
+                
+                if 0 < net_margin < margin_threshold:
+                    flags.append(RedFlag(
+                        category="Profitability",
+                        severity=RedFlagSeverity.INFO,
+                        title="Low Net Margin",
+                        description=f"Thin margins for {self.sector} sector - vulnerable to downturns",
+                        current_value=net_margin,
+                        threshold=margin_threshold,
+                        period=period_display
+                    ))
+                    
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping net margin check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in net margin check: {e}")
         
         return flags
     
@@ -139,12 +206,24 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         try:
             equity = self.balance_sheet.get_stockholders_equity(granularity)
             
-            if not net_income.values or not equity.values or len(equity.values) < 2:
+            # Validate alignment between net income and equity
+            ni_values, eq_values, aligned_periods = align_series_for_ratio(
+                numerator=net_income,
+                denominator=equity,
+                context="ROE calculation",
+                require_recent_data=True,
+                max_age_days=365
+            )
+            
+            if len(aligned_periods) < 2:
+                # Need at least 2 periods to calculate average equity
                 return flags
             
-            avg_equity = (equity.values[-1] + equity.values[-2]) / 2
+            # Use average equity (standard ROE calculation)
+            avg_equity = (eq_values[-1] + eq_values[-2]) / 2
             if avg_equity > 0:
-                roe = (net_income.values[-1] / avg_equity) * 100
+                roe = (ni_values[-1] / avg_equity) * 100
+                period_display = f"{aligned_periods[-1].year} {aligned_periods[-1].fp.value}"
                 
                 if roe < 0:
                     flags.append(RedFlag(
@@ -154,7 +233,7 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                         description="Destroying shareholder value - losses eating into equity",
                         current_value=roe,
                         threshold=0.0,
-                        period=period_str
+                        period=period_display
                     ))
                 else:
                     # Apply sector-specific threshold for low ROE
@@ -171,10 +250,13 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                             description=f"Poor capital efficiency for {self.sector} sector - not generating adequate returns",
                             current_value=roe,
                             threshold=roe_threshold,
-                            period=period_str
+                            period=period_display
                         ))
-        except ValueError:
-            pass
+                        
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping ROE check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in ROE check: {e}")
         
         return flags
     
@@ -185,9 +267,24 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         try:
             eps = self.income_statement.get_earnings_per_share_diluted(granularity)
             
-            if len(revenue.values) >= 3 and len(eps.values) >= 3:
-                rev_growth = ((revenue.values[-1] - revenue.values[-3]) / revenue.values[-3]) * 100 if revenue.values[-3] != 0 else 0
-                eps_growth = ((eps.values[-1] - eps.values[-3]) / eps.values[-3]) * 100 if eps.values[-3] != 0 else 0
+            # Align revenue and EPS for growth calculation (need at least 3 periods)
+            current_rev, prior_rev, current_periods_rev, prior_periods_rev = align_series_for_growth(
+                series=revenue,
+                context="revenue vs EPS growth check"
+            )
+            
+            current_eps, prior_eps, current_periods_eps, prior_periods_eps = align_series_for_growth(
+                series=eps,
+                context="revenue vs EPS growth check"
+            )
+            
+            # Ensure revenue and EPS are aligned to the same periods
+            if (len(current_rev) >= 3 and len(prior_rev) >= 3 and 
+                len(current_eps) >= 3 and len(prior_eps) >= 3):
+                
+                # Use the last 3 periods for growth calculation
+                rev_growth = ((current_rev[-1] - prior_rev[-3]) / prior_rev[-3]) * 100 if prior_rev[-3] != 0 else 0
+                eps_growth = ((current_eps[-1] - prior_eps[-3]) / prior_eps[-3]) * 100 if prior_eps[-3] != 0 else 0
                 
                 if rev_growth > 10 and eps_growth < rev_growth / 2:  # Revenue up >10%, EPS lags
                     flags.append(RedFlag(
@@ -197,10 +294,13 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                         description="Margin compression or share dilution eating into profits",
                         current_value=eps_growth,
                         threshold=rev_growth,
-                        period=f"{revenue.periods[-3].year}-{period_str.split()[0]}"
+                        period=f"{current_periods_rev[-3].year}-{period_str.split()[0]}"
                     ))
-        except ValueError:
-            pass
+                    
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping revenue vs EPS growth check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in revenue vs EPS growth check: {e}")
         
         return flags
     
@@ -208,9 +308,22 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
         """Check for volatile gross margins."""
         flags = []
         
-        if len(gross_profit.values) >= 4 and len(revenue.values) >= 4:
-            margins = [(gross_profit.values[i] / revenue.values[i]) * 100 
-                      for i in range(-4, 0) if revenue.values[i] != 0]
+        try:
+            # Align gross profit and revenue for margin calculation (need 4 periods for volatility)
+            gp_values, rev_values, aligned_periods = align_series_for_ratio(
+                numerator=gross_profit,
+                denominator=revenue,
+                context="margin volatility calculation"
+            )
+            
+            # Need at least 4 periods for volatility analysis
+            if len(aligned_periods) < 4:
+                logger.warning(f"Skipping margin volatility check: only {len(aligned_periods)} aligned periods (need 4)")
+                return flags
+            
+            # Calculate margins for last 4 periods
+            margins = [(gp_values[i] / rev_values[i]) * 100 
+                      for i in range(-4, 0) if rev_values[i] != 0]
             
             if len(margins) == 4:
                 # Calculate standard deviation
@@ -228,5 +341,10 @@ class ProfitabilityAnalyzer(BaseAnalyzer):
                         threshold=self.thresholds.gross_margin_std_dev,
                         period=f"Last 4 periods"
                     ))
+                    
+        except PeriodMismatchError as e:
+            logger.warning(f"Skipping margin volatility check: {e}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error in margin volatility check: {e}")
         
         return flags

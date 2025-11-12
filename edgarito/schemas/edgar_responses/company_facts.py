@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Dict, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from edgarito.enums.edgar.core_filing_type import CoreFilingType
 from edgarito.enums.edgar.period import FiscalPeriod
@@ -17,6 +17,14 @@ class Measurement(BaseModel):
     filed: datetime.date
     frame: Optional[str] = None
     start: Optional[datetime.date] = None
+    
+    @field_validator('fp', mode='before')
+    @classmethod
+    def convert_empty_string_to_none(cls, v):
+        """Convert empty strings to None for optional fiscal period field."""
+        if v == '':
+            return None
+        return v
 
     @property
     def calendar_year(self) -> Optional[int]:

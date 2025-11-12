@@ -71,13 +71,22 @@ class BalanceSheetReader(BaseStatementReader):
         """
         Accounts receivable, net.
         
+        Different companies may use different US-GAAP concepts for receivables:
+        - AccountsReceivableNetCurrent: Most common, specific to trade receivables
+        - ReceivablesNetCurrent: Broader category including all current receivables
+        - AccountsReceivableNet: Sometimes used for net receivables
+        
         Args:
             granularity: ANNUAL or QUARTERLY
         
         Returns:
             Time series of accounts receivable
         """
-        return self._get_concept("AccountsReceivableNetCurrent", granularity, convert_fy_to_q4=False)
+        return self._get_concept_with_fallbacks(
+            concepts=["AccountsReceivableNetCurrent", "ReceivablesNetCurrent", "AccountsReceivableNet"],
+            granularity=granularity,
+            convert_fy_to_q4=False
+        )
     
     def get_inventory(self, granularity: Granularity) -> UnivariateMeasurements:
         """
@@ -251,12 +260,51 @@ class BalanceSheetReader(BaseStatementReader):
         """
         Total debt (short-term + long-term).
         
+        Tries to get comprehensive debt figure:
+        1. LongTermDebtAndCapitalLeaseObligations (includes all debt)
+        2. DebtCurrent + LongTermDebtNoncurrent (sum short + long term)
+        3. LongTermDebt (fallback, may include current portion)
+        
         Args:
             granularity: ANNUAL or QUARTERLY
         
         Returns:
             Time series of total debt
         """
+        # Try comprehensive debt concept first
+        try:
+            return self._get_concept("LongTermDebtAndCapitalLeaseObligations", granularity, convert_fy_to_q4=False)
+        except ValueError:
+            pass
+        
+        # Try summing current + noncurrent debt
+        try:
+            current_debt = self._get_concept("DebtCurrent", granularity, convert_fy_to_q4=False)
+            long_term_debt = self._get_concept("LongTermDebtNoncurrent", granularity, convert_fy_to_q4=False)
+            
+            # Sum the two series
+            from edgarito.schemas.reader.measurements import UnivariateMeasurements
+            
+            # Create period-to-value dictionaries
+            current_dict = {p: v for v, p in current_debt}
+            lt_dict = {p: v for v, p in long_term_debt}
+            
+            # Find common periods and sum
+            common_periods = set(current_dict.keys()) & set(lt_dict.keys())
+            if common_periods:
+                total_values = [current_dict[p] + lt_dict[p] for p in sorted(common_periods)]
+                total_periods = sorted(common_periods)
+                
+                return UnivariateMeasurements(
+                    concept="TotalDebt (computed)",
+                    granularity=granularity,
+                    values=total_values,
+                    periods=total_periods
+                )
+        except ValueError:
+            pass
+        
+        # Fallback to LongTermDebt (may include current portion)
         return self._get_concept("LongTermDebt", granularity, convert_fy_to_q4=False)
     
     # ========== EQUITY ==========

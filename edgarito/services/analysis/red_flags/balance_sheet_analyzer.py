@@ -32,6 +32,7 @@ class BalanceSheetAnalyzer(BaseAnalyzer):
             
             # Run all balance sheet checks
             flags.extend(self._check_debt_to_equity(total_debt, equity, period_str))
+            flags.extend(self._check_net_debt_to_ebitda(total_debt, granularity, period_str))
             flags.extend(self._check_debt_vs_market_cap(total_debt, period_str))
             flags.extend(self._check_current_ratio(current_assets, current_liabilities, period_str))
             flags.extend(self._check_quick_ratio(current_liabilities, granularity, period_str))
@@ -95,6 +96,97 @@ class BalanceSheetAnalyzer(BaseAnalyzer):
                     threshold=de_warning,
                     period=period_str
                 ))
+        
+        return flags
+    
+    def _check_net_debt_to_ebitda(self, total_debt, granularity: Granularity, period_str: str) -> List[RedFlag]:
+        """
+        Check Net Debt / EBITDA ratio - more robust leverage metric than D/E.
+        
+        Net Debt = Total Debt - Cash
+        EBITDA = Operating Income + Depreciation & Amortization (TTM)
+        
+        This metric is especially important for companies with:
+        - Pension liabilities that depress equity
+        - High intangibles/goodwill
+        - Stable cash flow from contracts
+        
+        Thresholds (sector-adjusted):
+        - > 4.0: Critical (over-leveraged, difficult to service debt)
+        - > 3.0: Warning (elevated but manageable for some sectors)
+        - Negative: Cash exceeds debt (very healthy)
+        """
+        flags = []
+        
+        try:
+            # Get TTM EBITDA (Operating Income + D&A)
+            operating_income = self.income_statement.get_operating_income(granularity)
+            depreciation = self.income_statement.get_depreciation_and_amortization(granularity)
+            
+            if not operating_income.values or len(operating_income.values) < 4:
+                return flags  # Need at least 4 quarters for TTM
+            
+            if not depreciation.values or len(depreciation.values) < 4:
+                # Fallback: use operating income as proxy for EBITDA if D&A not available
+                ttm_ebitda = sum(operating_income.values[-4:])
+            else:
+                ttm_operating_income = sum(operating_income.values[-4:])
+                ttm_depreciation = sum(depreciation.values[-4:])
+                ttm_ebitda = ttm_operating_income + ttm_depreciation
+            
+            if ttm_ebitda <= 0:
+                return flags  # Can't calculate meaningful ratio with negative EBITDA
+            
+            # Get Net Debt = Total Debt - Cash
+            cash = self.balance_sheet.get_cash_and_equivalents(granularity)
+            if not cash.values or not total_debt.values:
+                return flags
+            
+            net_debt = total_debt.values[-1] - cash.values[-1]
+            net_debt_to_ebitda = net_debt / ttm_ebitda
+            
+            # Use the latest operating income period for the period string (more recent than annual debt data)
+            latest_income_period = operating_income.periods[-1]
+            ttm_period_str = f"TTM ending {latest_income_period.year} {latest_income_period.fp.value}"
+            
+            # Apply sector-specific threshold adjustments
+            # Use debt_to_equity_multiplier as proxy for leverage tolerance
+            warning_threshold = 3.0 * self.sector_profile.debt_to_equity_multiplier
+            critical_threshold = 4.0 * self.sector_profile.debt_to_equity_multiplier
+            
+            if net_debt_to_ebitda > critical_threshold:
+                flags.append(RedFlag(
+                    category="Balance Sheet",
+                    severity=RedFlagSeverity.CRITICAL,
+                    title="Excessive Net Debt / EBITDA",
+                    description=f"Leverage unsustainable for {self.sector} sector - difficult to service debt from operating cash flow",
+                    current_value=net_debt_to_ebitda,
+                    threshold=critical_threshold,
+                    period=ttm_period_str
+                ))
+            elif net_debt_to_ebitda > warning_threshold:
+                flags.append(RedFlag(
+                    category="Balance Sheet",
+                    severity=RedFlagSeverity.WARNING,
+                    title="Elevated Net Debt / EBITDA",
+                    description=f"Leverage elevated for {self.sector} sector - monitor debt servicing capacity",
+                    current_value=net_debt_to_ebitda,
+                    threshold=warning_threshold,
+                    period=ttm_period_str
+                ))
+            elif net_debt_to_ebitda < 0:
+                # Positive signal - cash exceeds debt
+                flags.append(RedFlag(
+                    category="Balance Sheet",
+                    severity=RedFlagSeverity.INFO,
+                    title="Net Cash Position",
+                    description=f"Strong balance sheet - cash exceeds total debt",
+                    current_value=net_debt_to_ebitda,
+                    period=ttm_period_str
+                ))
+        
+        except Exception:
+            pass  # Return empty flags on error
         
         return flags
     
@@ -163,8 +255,25 @@ class BalanceSheetAnalyzer(BaseAnalyzer):
         return flags
     
     def _check_quick_ratio(self, current_liabilities, granularity: Granularity, period_str: str) -> List[RedFlag]:
-        """Check quick ratio with tiered severity."""
+        """
+        Check quick ratio with tiered severity.
+        
+        Quick Ratio = (Cash + Receivables) / Current Liabilities
+        
+        NOTE: This metric is NOT meaningful for financial services companies (banks, payment processors, 
+        insurance, etc.) because:
+        - Their "receivables" are customer funds, not trade receivables
+        - Current liabilities include customer deposits
+        - Their business model intentionally operates with different liquidity structure
+        
+        We skip this check for financial sector companies.
+        """
         flags = []
+        
+        # Skip quick ratio for financial services companies
+        financial_sectors = ['financial_services', 'financial', 'insurance', 'bank']
+        if any(sector in self.sector.lower() for sector in financial_sectors):
+            return flags  # Quick ratio not applicable
         
         try:
             cash = self.balance_sheet.get_cash_and_equivalents(granularity)
@@ -215,7 +324,20 @@ class BalanceSheetAnalyzer(BaseAnalyzer):
         return flags
     
     def _check_tangible_book_value(self, equity, granularity: Granularity, period_str: str) -> List[RedFlag]:
-        """Check for negative tangible book value."""
+        """
+        Check for negative tangible book value.
+        
+        Tangible Book Value = Equity - Goodwill - Intangible Assets
+        
+        Negative TBV can indicate:
+        1. Acquisition-heavy growth strategy (goodwill from M&A)
+        2. Asset-light business model (contracts, IP, brand value)
+        3. Pension liabilities depressing equity
+        
+        Severity depends on sector context:
+        - Asset-light sectors (aerospace, software, services): WARNING (common, not dangerous if cash flow strong)
+        - Asset-heavy sectors (manufacturing, retail): CRITICAL (may indicate distress)
+        """
         flags = []
         
         try:
@@ -231,11 +353,30 @@ class BalanceSheetAnalyzer(BaseAnalyzer):
             tangible_book_value = eq - gw - intang
             
             if tangible_book_value < 0:
+                # Determine severity based on sector context
+                # Asset-light sectors with contract-based revenue: negative TBV is common and manageable
+                # Check if using lenient sector profile (indicates asset-light or intangible-heavy sector)
+                
+                # Aerospace/defense contractors: high intangibles from acquisitions, pension-depressed equity
+                # Technology: brand value, IP, R&D capitalized
+                # Services: contract value, customer relationships
+                is_asset_light = (
+                    self.sector_profile.debt_to_equity_multiplier >= 1.5 or  # High leverage tolerance
+                    self.sector in ['Industrials', 'Technology', 'Communication Services', 'Healthcare', 'Financial Services']
+                )
+                
+                if is_asset_light:
+                    severity = RedFlagSeverity.WARNING
+                    description = "Negative tangible book value - common for contract-based or acquisition-heavy business models with stable cash flow"
+                else:
+                    severity = RedFlagSeverity.CRITICAL
+                    description = "High intangibles/goodwill masking weak core assets - insolvency risk"
+                
                 flags.append(RedFlag(
                     category="Balance Sheet",
-                    severity=RedFlagSeverity.CRITICAL,
+                    severity=severity,
                     title="Negative Tangible Book Value",
-                    description="High intangibles/goodwill masking weak core assets - insolvency risk",
+                    description=description,
                     current_value=tangible_book_value / 1e9,
                     period=period_str
                 ))
