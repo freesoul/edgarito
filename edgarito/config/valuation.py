@@ -166,10 +166,75 @@ class CapitalBridgeConfiguration(_ProfileModel):
         return self
 
 
+class ShareRepurchaseConfiguration(_ProfileModel):
+    """Optional future buyback schedule used for a remaining-holder analysis."""
+
+    annual_cash_amounts: tuple[Decimal, ...] = ()
+    initial_purchase_price: Optional[Decimal] = None
+    price_growth_rate: Optional[Decimal] = None
+    discount_rate: Optional[Decimal] = None
+    source: Optional[str] = None
+
+    @field_validator("annual_cash_amounts")
+    @classmethod
+    def validate_cash_amounts(
+        cls, values: tuple[Decimal, ...]
+    ) -> tuple[Decimal, ...]:
+        if any(not value.is_finite() or value <= 0 for value in values):
+            raise ValueError(
+                "Share-repurchase cash amounts must be finite and positive"
+            )
+        return values
+
+    @field_validator(
+        "initial_purchase_price", "price_growth_rate", "discount_rate"
+    )
+    @classmethod
+    def validate_optional_number(
+        cls, value: Optional[Decimal]
+    ) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("Share-repurchase assumptions must be finite")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Share-repurchase source cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_assumptions(self) -> "ShareRepurchaseConfiguration":
+        if self.initial_purchase_price is not None and self.initial_purchase_price <= 0:
+            raise ValueError("initial_purchase_price must be positive")
+        for name in ("price_growth_rate", "discount_rate"):
+            value = getattr(self, name)
+            if value is not None and value <= Decimal("-100"):
+                raise ValueError(f"{name} must be greater than -100%")
+        if not self.annual_cash_amounts and any(
+            value is not None
+            for value in (
+                self.initial_purchase_price,
+                self.price_growth_rate,
+                self.discount_rate,
+                self.source,
+            )
+        ):
+            raise ValueError(
+                "Share-repurchase assumptions require annual_cash_amounts"
+            )
+        return self
+
+
 class MultistageValuationConfiguration(_ProfileModel):
     """Adaptive convergence from current operating drivers to terminal growth."""
 
     enabled: bool = True
+    stable_growth_rate: Optional[Decimal] = None
     convergence_tolerance: Decimal = Decimal("1")
     max_annual_growth_fade: Decimal = Decimal("3")
     growth_gap_per_high_growth_year: Decimal = Decimal("10")
@@ -187,6 +252,17 @@ class MultistageValuationConfiguration(_ProfileModel):
     def validate_positive_rate(cls, value: Decimal) -> Decimal:
         if not value.is_finite() or value <= 0:
             raise ValueError("Multistage rate parameters must be finite and positive")
+        return value
+
+    @field_validator("stable_growth_rate")
+    @classmethod
+    def validate_stable_growth(
+        cls, value: Optional[Decimal]
+    ) -> Optional[Decimal]:
+        if value is not None and (
+            not value.is_finite() or value <= Decimal("-100")
+        ):
+            raise ValueError("Stable growth must be finite and greater than -100%")
         return value
 
     @model_validator(mode="after")
@@ -208,6 +284,9 @@ class ValuationCalculationConfiguration(_ProfileModel):
     )
     capital_bridge: CapitalBridgeConfiguration = Field(
         default_factory=CapitalBridgeConfiguration
+    )
+    share_repurchases: ShareRepurchaseConfiguration = Field(
+        default_factory=ShareRepurchaseConfiguration
     )
     multistage: MultistageValuationConfiguration = Field(
         default_factory=MultistageValuationConfiguration

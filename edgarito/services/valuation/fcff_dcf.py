@@ -8,7 +8,10 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
+from edgarito.schemas.valuation.assumptions import (
+    ValuationAssumptionKind,
+    ValuationAssumptionSet,
+)
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
     FcffForecast,
@@ -25,6 +28,9 @@ from edgarito.services.valuation.models import (
     FcffDcfCapitalBridge,
     FcffDcfParameters,
     FcffDcfResult,
+    ShareRepurchaseParameters,
+    ShareRepurchasePeriod,
+    ShareRepurchaseResult,
     TerminalMetric,
     TerminalValueMethod,
 )
@@ -207,6 +213,7 @@ class FcffDcfService:
     """Value forecast FCFF and bridge enterprise value to diluted equity value."""
 
     _TERMINAL_GROWTH_GAP_WARNING = Decimal("1")
+    _DAYS_PER_YEAR = Decimal("365")
 
     def value(
         self,
@@ -215,6 +222,8 @@ class FcffDcfService:
         capital_bridge: FcffDcfCapitalBridge,
         assumptions: ValuationAssumptionSet | None = None,
         multistage_plan: AdaptiveMultistagePlan | None = None,
+        valuation_date: datetime.date | None = None,
+        share_repurchase_parameters: ShareRepurchaseParameters | None = None,
     ) -> FcffDcfResult:
         if not forecast.observations:
             raise ValueError("FCFF DCF requires at least one forecast cash flow")
@@ -228,15 +237,32 @@ class FcffDcfService:
         if any(item.unit != forecast.unit for item in forecast.observations):
             raise ValueError("All FCFF forecast observations must use one currency")
 
+        selected_valuation_date = valuation_date or forecast.base_period_end
+        if selected_valuation_date < forecast.base_period_end:
+            raise ValueError("Valuation date cannot precede the forecast base date")
+        first_period_end = forecast.observations[0].period_end
+        if selected_valuation_date >= first_period_end:
+            raise ValueError(
+                "Valuation date must precede the first forecast period end; update "
+                "the financial base period or provide a forecast with a future first "
+                "cash-flow date"
+            )
+
         timing_offset = (
             Decimal("0.5")
             if parameters.cash_flow_timing == CashFlowTiming.MID_YEAR
             else Decimal(0)
         )
+        use_calendar_periods = valuation_date is not None
         explicit_cash_flows = tuple(
             CashFlow(
                 amount=item.fcff,
-                period=Decimal(item.forecast_year) - timing_offset,
+                period=self._discount_period(
+                    item,
+                    selected_valuation_date,
+                    timing_offset,
+                    use_calendar_periods=use_calendar_periods,
+                ),
                 label=f"FY{item.fiscal_year}E FCFF",
             )
             for item in forecast.observations
@@ -262,7 +288,11 @@ class FcffDcfService:
                 parameters.exit_multiple,
             )
 
-        terminal_period = Decimal(final.forecast_year)
+        terminal_period = (
+            self._year_fraction(selected_valuation_date, final.period_end)
+            if use_calendar_periods
+            else Decimal(final.forecast_year)
+        )
         terminal_present_values = PresentValueService.discount(
             (
                 CashFlow(
@@ -292,6 +322,12 @@ class FcffDcfService:
                 "Discounted terminal value exceeds 75% of enterprise value; "
                 "the result is highly sensitive to terminal assumptions"
             )
+        if parameters.terminal_method == TerminalValueMethod.EXIT_MULTIPLE:
+            warnings.append(
+                "Exit-multiple terminal value assumes the selected market multiple "
+                "persists through the final forecast year; treat it as a "
+                "market-relative scenario, not a standalone intrinsic estimate"
+            )
         transition_warning = self._terminal_transition_warning(forecast, parameters)
         if transition_warning is not None:
             warnings.append(transition_warning)
@@ -302,13 +338,54 @@ class FcffDcfService:
                 "Explicit FCFF uses mid-year timing; terminal value remains at "
                 "the end of the final forecast year"
             )
+        if capital_bridge.period_end < selected_valuation_date:
+            warnings.append(
+                f"Capital bridge is dated {capital_bridge.period_end.isoformat()}, "
+                f"before the {selected_valuation_date.isoformat()} valuation date; "
+                "use current debt, cash, and shares when available"
+            )
+        share_repurchases = None
+        if share_repurchase_parameters is not None:
+            share_repurchases = self._model_share_repurchases(
+                forecast=forecast,
+                parameters=share_repurchase_parameters,
+                dcf_parameters=parameters,
+                assumptions=assumptions,
+                capital_bridge=capital_bridge,
+                equity_value=equity_value,
+                value_per_share=value_per_share,
+                valuation_date=selected_valuation_date,
+                use_calendar_periods=use_calendar_periods,
+            )
+            for repurchase, forecast_observation in zip(
+                share_repurchases.periods,
+                forecast.observations,
+                strict=False,
+            ):
+                if repurchase.cash_spent > forecast_observation.fcff:
+                    warnings.append(
+                        f"FY{repurchase.fiscal_year} planned buybacks exceed forecast "
+                        "FCFF; execution requires existing cash, borrowing, or other "
+                        "funding"
+                    )
+            if abs(share_repurchases.accretion_percentage) >= Decimal("0.5"):
+                direction = (
+                    "accretive"
+                    if share_repurchases.accretion_percentage > 0
+                    else "dilutive"
+                )
+                warnings.append(
+                    f"Modeled buybacks are {direction} to remaining holders because "
+                    "the assumed execution-price path differs from the model-implied "
+                    "fair-value path"
+                )
 
         return FcffDcfResult(
             provider=forecast.provider,
             company_id=forecast.company_id,
             company_name=forecast.company_name,
             ticker=forecast.ticker,
-            valuation_date=forecast.base_period_end,
+            valuation_date=selected_valuation_date,
             unit=forecast.unit,
             parameters=parameters,
             assumptions=assumptions,
@@ -320,9 +397,36 @@ class FcffDcfService:
             enterprise_value=enterprise_value,
             equity_value=equity_value,
             value_per_share=value_per_share,
+            share_repurchases=share_repurchases,
             terminal_value_percentage=terminal_percentage,
             warnings=tuple(warnings),
         )
+
+    @classmethod
+    def _discount_period(
+        cls,
+        observation: FcffForecastObservation,
+        valuation_date: datetime.date,
+        timing_offset: Decimal,
+        *,
+        use_calendar_periods: bool,
+    ) -> Decimal:
+        if not use_calendar_periods:
+            return Decimal(observation.forecast_year) - timing_offset
+        period = cls._year_fraction(valuation_date, observation.period_end)
+        period -= timing_offset
+        if period < 0:
+            raise ValueError(
+                "Mid-year cash-flow timing falls before the valuation date; update "
+                "the financial base period or use end-of-period timing"
+            )
+        return period
+
+    @classmethod
+    def _year_fraction(
+        cls, start: datetime.date, end: datetime.date
+    ) -> Decimal:
+        return Decimal((end - start).days) / cls._DAYS_PER_YEAR
 
     @classmethod
     def _terminal_transition_warning(
@@ -366,6 +470,128 @@ class FcffDcfService:
         if metric == TerminalMetric.FCFF:
             return final.fcff
         return final.revenue
+
+    @classmethod
+    def _model_share_repurchases(
+        cls,
+        *,
+        forecast: FcffForecast,
+        parameters: ShareRepurchaseParameters,
+        dcf_parameters: FcffDcfParameters,
+        assumptions: ValuationAssumptionSet | None,
+        capital_bridge: FcffDcfCapitalBridge,
+        equity_value: Decimal,
+        value_per_share: Decimal,
+        valuation_date: datetime.date,
+        use_calendar_periods: bool,
+    ) -> ShareRepurchaseResult:
+        cash_amounts = parameters.annual_cash_amounts
+        if len(cash_amounts) > len(forecast.observations):
+            raise ValueError(
+                "Share-repurchase schedule exceeds the explicit forecast horizon; "
+                "increase --years or shorten valuation.share_repurchases."
+                "annual_cash_amounts"
+            )
+        if equity_value <= 0 or value_per_share <= 0:
+            raise ValueError(
+                "Share-repurchase analysis requires positive pre-repurchase equity "
+                "and per-share values"
+            )
+
+        discount_rate = parameters.discount_rate
+        if discount_rate is not None:
+            discount_rate_source = "explicit profile or CLI assumption"
+        else:
+            equity_cost = (
+                assumptions.find(ValuationAssumptionKind.COST_OF_EQUITY)
+                if assumptions is not None
+                else None
+            )
+            if equity_cost is not None:
+                discount_rate = equity_cost.value
+                discount_rate_source = "resolved cost of equity"
+            else:
+                discount_rate = dcf_parameters.wacc
+                discount_rate_source = "WACC fallback"
+
+        price_growth_rate = parameters.price_growth_rate
+        if price_growth_rate is None:
+            price_growth_rate = discount_rate
+        initial_purchase_price = parameters.initial_purchase_price
+        if initial_purchase_price is None:
+            initial_purchase_price = value_per_share
+            purchase_price_source = "model-implied fair value at valuation date"
+        else:
+            purchase_price_source = "explicit profile or CLI assumption"
+
+        periods = []
+        for cash_spent, observation in zip(
+            cash_amounts, forecast.observations, strict=False
+        ):
+            discount_period = (
+                cls._year_fraction(valuation_date, observation.period_end)
+                if use_calendar_periods
+                else Decimal(observation.forecast_year)
+            )
+            discount_factor = PresentValueService.discount_factor(
+                discount_rate, discount_period
+            )
+            price_growth_factor = Decimal(1) / PresentValueService.discount_factor(
+                price_growth_rate, discount_period
+            )
+            purchase_price = initial_purchase_price * price_growth_factor
+            shares_repurchased = cash_spent / purchase_price
+            periods.append(
+                ShareRepurchasePeriod(
+                    forecast_year=observation.forecast_year,
+                    fiscal_year=observation.fiscal_year,
+                    period_end=observation.period_end,
+                    discount_period=discount_period,
+                    cash_spent=cash_spent,
+                    present_value_cash_spent=cash_spent * discount_factor,
+                    purchase_price=purchase_price,
+                    shares_repurchased=shares_repurchased,
+                )
+            )
+
+        total_cash_spent = sum(
+            (period.cash_spent for period in periods), Decimal(0)
+        )
+        present_value_cash_spent = sum(
+            (period.present_value_cash_spent for period in periods), Decimal(0)
+        )
+        shares_repurchased = sum(
+            (period.shares_repurchased for period in periods), Decimal(0)
+        )
+        ending_shares = capital_bridge.diluted_shares - shares_repurchased
+        residual_equity_value = equity_value - present_value_cash_spent
+        if ending_shares <= 0:
+            raise ValueError("Modeled repurchases exceed diluted shares")
+        if residual_equity_value <= 0:
+            raise ValueError("PV of modeled repurchases exceeds current equity value")
+        value_per_remaining_share = residual_equity_value / ending_shares
+        accretion_percentage = (
+            value_per_remaining_share / value_per_share - Decimal(1)
+        ) * Decimal(100)
+        return ShareRepurchaseResult(
+            source=parameters.source,
+            discount_rate=discount_rate,
+            discount_rate_source=discount_rate_source,
+            price_growth_rate=price_growth_rate,
+            initial_purchase_price=initial_purchase_price,
+            purchase_price_source=purchase_price_source,
+            starting_shares=capital_bridge.diluted_shares,
+            ending_shares=ending_shares,
+            shares_repurchased=shares_repurchased,
+            total_cash_spent=total_cash_spent,
+            present_value_cash_spent=present_value_cash_spent,
+            pre_repurchase_equity_value=equity_value,
+            residual_equity_value=residual_equity_value,
+            pre_repurchase_value_per_share=value_per_share,
+            value_per_remaining_share=value_per_remaining_share,
+            accretion_percentage=accretion_percentage,
+            periods=tuple(periods),
+        )
 
 
 __all__ = ["FcffDcfCapitalBridgeResolver", "FcffDcfService"]

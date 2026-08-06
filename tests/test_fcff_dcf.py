@@ -25,6 +25,7 @@ from edgarito.services.valuation import (
     FcffDcfParameters,
     FcffDcfResult,
     FcffDcfService,
+    ShareRepurchaseParameters,
     TerminalMetric,
     TerminalValueMethod,
 )
@@ -85,6 +86,36 @@ def test_mid_year_timing_changes_explicit_cash_flows_but_not_terminal_timing():
     assert any("mid-year timing" in warning for warning in mid_year.warnings)
 
 
+def test_current_valuation_date_uses_calendar_stub_periods():
+    valuation_date = datetime.date(2026, 7, 1)
+    result = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+        valuation_date=valuation_date,
+    )
+
+    first = result.explicit_forecast_present_value.cash_flows[0]
+    assert result.valuation_date == valuation_date
+    assert first.period == Decimal(183) / Decimal(365)
+    assert result.terminal_present_value.period == Decimal(548) / Decimal(365)
+    assert any("Capital bridge is dated 2025-12-31" in item for item in result.warnings)
+
+
+def test_current_mid_year_timing_rejects_an_already_elapsed_cash_flow_date():
+    with pytest.raises(ValueError, match="Mid-year cash-flow timing"):
+        FcffDcfService().value(
+            _forecast(),
+            FcffDcfParameters(
+                wacc="10",
+                perpetual_growth_rate="2",
+                cash_flow_timing=CashFlowTiming.MID_YEAR,
+            ),
+            _capital_bridge(),
+            valuation_date=datetime.date(2026, 8, 1),
+        )
+
+
 def test_perpetuity_growth_warns_when_explicit_fcff_has_not_converged():
     service = FcffDcfService()
     abrupt = service.value(
@@ -125,6 +156,64 @@ def test_exit_multiple_supports_explicit_terminal_metrics():
     assert result.terminal_value.method == TerminalValueMethod.EXIT_MULTIPLE
     assert result.terminal_value.terminal_metric == Decimal("170")
     assert result.terminal_value.terminal_value == Decimal("1360")
+    assert any("market-relative scenario" in item for item in result.warnings)
+
+
+def test_fair_value_buybacks_account_for_cash_and_shares_without_fake_accretion():
+    result = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+        share_repurchase_parameters=ShareRepurchaseParameters(
+            annual_cash_amounts=(Decimal("100"), Decimal("100")),
+            source="test plan",
+        ),
+    )
+
+    repurchases = result.share_repurchases
+    assert repurchases is not None
+    assert repurchases.total_cash_spent == Decimal("200")
+    assert repurchases.discount_rate == Decimal("10")
+    assert repurchases.discount_rate_source == "WACC fallback"
+    assert repurchases.purchase_price_source.startswith("model-implied")
+    assert repurchases.ending_shares < repurchases.starting_shares
+    assert repurchases.residual_equity_value < result.equity_value
+    assert repurchases.value_per_remaining_share.quantize(Decimal("0.000001")) == (
+        result.value_per_share.quantize(Decimal("0.000001"))
+    )
+    assert repurchases.accretion_percentage.copy_abs() < Decimal("1e-24")
+
+
+def test_buybacks_below_intrinsic_value_are_accretive_after_cash_spent():
+    result = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+        share_repurchase_parameters=ShareRepurchaseParameters(
+            annual_cash_amounts=(Decimal("100"), Decimal("100")),
+            initial_purchase_price=Decimal("100"),
+            price_growth_rate=Decimal("10"),
+            discount_rate=Decimal("10"),
+        ),
+    )
+
+    repurchases = result.share_repurchases
+    assert repurchases is not None
+    assert repurchases.value_per_remaining_share > result.value_per_share
+    assert repurchases.accretion_percentage > 0
+    assert any("accretive" in warning for warning in result.warnings)
+
+
+def test_buyback_schedule_cannot_exceed_explicit_forecast_horizon():
+    with pytest.raises(ValueError, match="exceeds the explicit forecast horizon"):
+        FcffDcfService().value(
+            _forecast(),
+            FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+            _capital_bridge(),
+            share_repurchase_parameters=ShareRepurchaseParameters(
+                annual_cash_amounts=(Decimal("1"), Decimal("1"), Decimal("1")),
+            ),
+        )
 
 
 def test_fcff_dcf_rejects_invalid_forecast_or_terminal_economics():

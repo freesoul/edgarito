@@ -7,6 +7,7 @@ from edgarito.config.valuation import (
     ForecastMethod,
     ForecastValuationProfile,
     MultistageValuationConfiguration,
+    ShareRepurchaseConfiguration,
     ValuationProfileLoader,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "MarketProviderConfiguration",
     "MultistageValuationConfiguration",
     "ProviderConfiguration",
+    "ShareRepurchaseConfiguration",
     "ValuationProfileLoader",
 ]

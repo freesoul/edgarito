@@ -585,6 +585,14 @@ class FcffDcfConsolePresenter:
                 for item in result.explicit_forecast_present_value.cash_flows
             ),
         ]
+        if result.share_repurchases is not None:
+            values.extend(
+                [
+                    result.share_repurchases.total_cash_spent,
+                    result.share_repurchases.present_value_cash_spent,
+                    result.share_repurchases.residual_equity_value,
+                ]
+            )
         scale, suffix = self._scale_values(values)
         share_scale, share_suffix = self._scale_values(
             [result.capital_bridge.diluted_shares]
@@ -618,13 +626,19 @@ class FcffDcfConsolePresenter:
             )
             lines.append(
                 "Projection: adaptive multistage | "
-                f"{' + '.join(stages)} years{extension}"
+                f"{' + '.join(stages)} years{extension} | stable growth anchor "
+                f"{plan.terminal_growth_rate:,.2f}%"
             )
         if result.parameters.perpetual_growth_rate is not None:
             source = result.parameters.perpetual_growth_source or "explicit"
             lines.append(
                 "Terminal growth: "
                 f"{result.parameters.perpetual_growth_rate:,.2f}% ({source})"
+            )
+        if result.parameters.exit_multiple is not None:
+            metric = result.parameters.exit_metric.value.upper()
+            lines.append(
+                f"Terminal multiple: {result.parameters.exit_multiple:,.2f}x {metric}"
             )
         if result.assumptions is not None:
             lines.extend(["", "Resolved assumptions:"])
@@ -668,9 +682,49 @@ class FcffDcfConsolePresenter:
                 f"Equity value ({amount_unit}): {result.equity_value / scale:,.1f}",
                 f"Diluted shares ({share_suffix or 'units'}): "
                 f"{result.capital_bridge.diluted_shares / share_scale:,.1f}",
-                f"Value per share ({result.unit}): {result.value_per_share:,.2f}",
             ]
         )
+        if result.share_repurchases is not None:
+            repurchases = result.share_repurchases
+            lines.extend(
+                [
+                    "",
+                    "Share repurchase analysis",
+                    f"{'Period':<12}{'Cash spent':>18}{'Purchase price':>18}"
+                    f"{'Shares retired':>18}{'PV cash':>18}",
+                    "-" * 84,
+                ]
+            )
+            for period in repurchases.periods:
+                lines.append(
+                    f"{f'FY{period.fiscal_year}E':<12}"
+                    f"{period.cash_spent / scale:>18,.1f}"
+                    f"{period.purchase_price:>18,.2f}"
+                    f"{period.shares_repurchased / share_scale:>18,.2f}"
+                    f"{period.present_value_cash_spent / scale:>18,.1f}"
+                )
+            lines.extend(
+                [
+                    f"Total buyback cash ({amount_unit}): "
+                    f"{repurchases.total_cash_spent / scale:,.1f}",
+                    f"PV of buyback cash ({amount_unit}): "
+                    f"{repurchases.present_value_cash_spent / scale:,.1f}",
+                    f"Projected shares retired ({share_suffix or 'units'}): "
+                    f"{repurchases.shares_repurchased / share_scale:,.2f}",
+                    f"Remaining diluted shares ({share_suffix or 'units'}): "
+                    f"{repurchases.ending_shares / share_scale:,.2f}",
+                    f"Residual equity value ({amount_unit}): "
+                    f"{repurchases.residual_equity_value / scale:,.1f}",
+                    f"Buyback accretion / (dilution): "
+                    f"{repurchases.accretion_percentage:+,.2f}%",
+                    f"Repurchase discount rate: {repurchases.discount_rate:,.2f}% "
+                    f"({repurchases.discount_rate_source})",
+                    f"Repurchase-price growth: "
+                    f"{repurchases.price_growth_rate:,.2f}%",
+                    f"Purchase-price basis: {repurchases.purchase_price_source}",
+                    f"Buyback source: {repurchases.source}",
+                ]
+            )
         if result.terminal_value_percentage is not None:
             lines.append(
                 "Terminal PV / enterprise value: "
@@ -686,6 +740,21 @@ class FcffDcfConsolePresenter:
         if result.warnings:
             lines.extend(["", "WARNINGS"])
             lines.extend(f"- {warning}" for warning in result.warnings)
+        lines.extend(["", "VALUATION CONCLUSION"])
+        if result.share_repurchases is not None:
+            lines.extend(
+                [
+                    f"Value per share without buybacks ({result.unit}): "
+                    f"{result.value_per_share:,.2f}",
+                    f"Final value per share after buybacks ({result.unit}): "
+                    f"{result.share_repurchases.value_per_remaining_share:,.2f}",
+                ]
+            )
+        else:
+            lines.append(
+                f"Final value per share ({result.unit}): "
+                f"{result.value_per_share:,.2f}"
+            )
         return "\n".join(lines)
 
     @staticmethod

@@ -236,6 +236,27 @@ def test_driver_based_fcff_forecasts_the_full_operating_bridge():
     assert FcffForecast.model_validate_json(forecast.model_dump_json()) == forecast
 
 
+def test_driver_based_fcff_extends_a_short_driver_path_with_its_final_value():
+    parameters = FcffForecastParameters(
+        forecast_years=4,
+        revenue_growth=Decimal("5"),
+        operating_margin=(Decimal("25"), Decimal("27")),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        capex_to_revenue=Decimal("6"),
+        operating_working_capital_to_revenue=Decimal("15"),
+    )
+
+    forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
+
+    assert [item.operating_margin for item in forecast.observations] == [
+        Decimal("25"),
+        Decimal("27"),
+        Decimal("27"),
+        Decimal("27"),
+    ]
+
+
 def test_fcff_infers_each_omitted_driver_from_trailing_history():
     forecast = FcffForecastService().forecast(
         _fcff_financials(), FcffForecastParameters(forecast_years=1)

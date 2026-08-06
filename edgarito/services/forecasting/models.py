@@ -127,8 +127,8 @@ class FcffForecastParameters(BaseModel):
     """Year-specific operating drivers for an unlevered FCFF forecast.
 
     Every value uses percentage points. A one-value path is repeated for each
-    forecast year; otherwise one value per year is required. Omitted paths are
-    inferred from complete annual historical periods.
+    forecast year. A shorter explicit path is extended with its final value;
+    omitted paths are inferred from complete annual historical periods.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -226,9 +226,9 @@ class FcffForecastParameters(BaseModel):
     def validate_path_lengths(self) -> "FcffForecastParameters":
         for driver in FcffForecastDriver:
             path = getattr(self, driver.value)
-            if path is not None and len(path) not in (1, self.forecast_years):
+            if path is not None and not 1 <= len(path) <= self.forecast_years:
                 raise ValueError(
-                    f"{driver.value} must contain one value or "
+                    f"{driver.value} must contain between one and "
                     f"{self.forecast_years} values"
                 )
         return self

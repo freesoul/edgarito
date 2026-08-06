@@ -48,8 +48,16 @@
       "cash_and_equivalents": null,
       "diluted_shares": null
     },
+    "share_repurchases": {
+      "annual_cash_amounts": [],
+      "initial_purchase_price": null,
+      "price_growth_rate": null,
+      "discount_rate": null,
+      "source": null
+    },
     "multistage": {
       "enabled": true,
+      "stable_growth_rate": null,
       "convergence_tolerance": "1",
       "max_annual_growth_fade": "3",
       "growth_gap_per_high_growth_year": "10",

@@ -278,6 +278,23 @@ uv run edgarito valuation --ticker RACE --market eu \
   --profile configs/valuation/race.json
 ```
 
+That command retains a conventional perpetuity-growth terminal value. The same
+profile also stores an explicitly optimistic 22.5x EBITDA terminal scenario,
+with revenue still fading toward a 2.9% stable-growth anchor:
+
+```bash
+uv run edgarito valuation --ticker RACE --market eu \
+  --profile configs/valuation/race.json \
+  --terminal-method exit_multiple
+```
+
+The premium scenario is intended as an analyst/market-pricing comparison, not a
+replacement for the intrinsic base case. The profile also uses Ferrari's
+published 2025 industrial debt and cash bridge, its 2026-2030 margin guidance,
+its cumulative capex target, and its announced EUR 3.5 billion 2026-2030
+repurchase plan. Buybacks are shown as cash spent and shares retired rather than
+being added to FCFF or treated as free per-share accretion.
+
 Custom files may contain only the sections they change. Omitted values inherit
 the validated schema defaults. Decimal parameters should be written as JSON
 strings to preserve their exact value:
@@ -559,6 +576,33 @@ cash components:
 Equivalent CLI overrides are `--net-debt`, or `--gross-debt` together with
 `--cash`; use `--shares` to override the diluted count. Reported and manual
 amounts must use the financial statements' currency and unscaled base units.
+
+Future buybacks can be modeled as an equity-distribution schedule. The engine
+subtracts the present value of the cash spent and retires shares at the modeled
+execution price, then reports the value attributable to remaining holders:
+
+```json
+{
+  "valuation": {
+    "share_repurchases": {
+      "annual_cash_amounts": ["700000000", "700000000"],
+      "initial_purchase_price": null,
+      "price_growth_rate": null,
+      "discount_rate": null,
+      "source": "Published capital-return plan"
+    }
+  }
+}
+```
+
+With a null initial price, the valuation's own per-share value is used. Null
+price growth and discount rates both resolve to cost of equity (or WACC when a
+cost-of-equity assumption is unavailable), so fair-value repurchases do not
+create artificial accretion. Set an explicit price or price-growth assumption
+to measure buying below or above intrinsic value. CLI overrides are
+`--buyback-cash` (repeat per year), `--buyback-price`,
+`--buyback-price-growth`, and `--buyback-discount-rate`; use `--no-buybacks` to
+disable a profile schedule.
 
 Use `--cash-flow-timing mid_year` for mid-year explicit FCFF discounting.
 Terminal value remains at the end of the final forecast year. An exit-multiple

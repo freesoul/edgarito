@@ -359,6 +359,7 @@ class ValuationAssumptionResolver:
 
         equity_premium = configuration.equity_risk_premium
         country_premium = configuration.country_risk_premium
+        country_premium_methodology = "Country equity risk premium"
         if equity_premium is None:
             if country_row is None or country_snapshot is None:
                 raise ValueError(
@@ -366,14 +367,13 @@ class ValuationAssumptionResolver:
                     "the Damodaran country-risk dataset; set equity_risk_premium "
                     "and country_risk_premium in the profile"
                 )
-            country_premium = (
-                country_row.country_risk_premium
-                if country_premium is None
-                else country_premium
-            )
             equity_premium = (
                 country_row.equity_risk_premium - country_row.country_risk_premium
             )
+            if country_premium is None:
+                country_premium, country_premium_methodology = (
+                    self._market_country_premium(country_row, equity_premium)
+                )
             erp_assumption = self._reference_assumption(
                 ValuationAssumptionKind.EQUITY_RISK_PREMIUM,
                 equity_premium,
@@ -406,7 +406,7 @@ class ValuationAssumptionResolver:
                     company_id,
                     country_snapshot,
                     country=country_name,
-                    methodology="Country equity risk premium",
+                    methodology=country_premium_methodology,
                 )
                 if configuration.country_risk_premium is None
                 and country_snapshot is not None
@@ -529,6 +529,20 @@ class ValuationAssumptionResolver:
             )
         )
         return wacc_result.wacc, assumptions
+
+    @staticmethod
+    def _market_country_premium(
+        country: CountryRiskPremium,
+        mature_market_premium: Decimal,
+    ) -> tuple[Decimal, str]:
+        """Prefer a market-observed sovereign-CDS premium when available."""
+        cds_total = country.cds_equity_risk_premium
+        if cds_total is not None and cds_total >= mature_market_premium:
+            return (
+                cds_total - mature_market_premium,
+                "Sovereign-CDS total ERP minus mature-market ERP",
+            )
+        return country.country_risk_premium, "Rating-based country equity risk premium"
 
     def _derive_terminal_growth(
         self,

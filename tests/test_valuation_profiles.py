@@ -28,8 +28,10 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
     assert profile.valuation.discount_rates.wacc is None
     assert profile.valuation.terminal_value.perpetual_growth_rate is None
     assert profile.valuation.multistage.enabled
+    assert profile.valuation.multistage.stable_growth_rate is None
     assert profile.valuation.multistage.max_annual_growth_fade == Decimal("3")
     assert profile.valuation.multistage.extend_to_stable
+    assert profile.valuation.share_repurchases.annual_cash_amounts == ()
     assert profile.model_selection.sector is None
     assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
@@ -47,6 +49,26 @@ def test_race_profile_overrides_provider_classification_with_luxury_economics():
     assert profile.name == "race"
     assert profile.model_selection.sector == Sector.CONSUMER_DISCRETIONARY
     assert profile.model_selection.industry == "Luxury Goods"
+    assert profile.forecast.fcff.operating_margin == (
+        Decimal("29.5"),
+        Decimal("29.625"),
+        Decimal("29.75"),
+        Decimal("29.875"),
+        Decimal("30"),
+    )
+    assert profile.forecast.fcff.capex_to_revenue == (Decimal("10.8"),)
+    assert profile.valuation.discount_rates.country_risk_premium == Decimal("0.71")
+    assert profile.valuation.capital_bridge.net_debt == Decimal("32000000")
+    assert profile.valuation.terminal_value.exit_multiple == Decimal("22.5")
+    assert profile.valuation.multistage.stable_growth_rate == Decimal("2.9")
+    assert profile.valuation.share_repurchases.annual_cash_amounts == (
+        Decimal("700000000"),
+        Decimal("700000000"),
+        Decimal("700000000"),
+        Decimal("700000000"),
+        Decimal("700000000"),
+    )
+    assert profile.valuation.share_repurchases.initial_purchase_price is None
 
 
 def test_custom_profile_can_partially_override_defaults(tmp_path):

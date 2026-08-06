@@ -130,6 +130,42 @@ def test_luxury_goods_uses_damodaran_apparel_beta_proxy():
     assert beta.industry == "Apparel"
 
 
+def test_country_premium_prefers_sovereign_cds_total_erp():
+    country_snapshot = _country_snapshot().model_copy(
+        update={
+            "countries": (
+                _country_snapshot().countries[0].model_copy(
+                    update={"cds_equity_risk_premium": Decimal("4.94")}
+                ),
+            )
+        }
+    )
+    result = ValuationAssumptionResolver().resolve(
+        financials=_financials(),
+        capital_bridge=_bridge(),
+        discount_configuration=DiscountRateConfiguration(),
+        terminal_configuration=TerminalValueConfiguration(perpetual_growth_rate="2"),
+        terminal_is_perpetuity=True,
+        valuation_date=TODAY,
+        classification=_classification(),
+        market_data=_market_data(),
+        risk_free_series=_reference_series(
+            "ECB 10-year AAA yield", ReferenceSeriesKind.GOVERNMENT_YIELD, ["3"]
+        ),
+        country_snapshot=country_snapshot,
+        industry_snapshot=_industry_snapshot(),
+    )
+
+    premium = result.assumption_set.find(
+        ValuationAssumptionKind.COUNTRY_RISK_PREMIUM
+    )
+    assert premium is not None
+    assert premium.value == Decimal("0.71")
+    assert premium.provenance.methodology == (
+        "Sovereign-CDS total ERP minus mature-market ERP"
+    )
+
+
 def _financials():
     return NormalizedCompanyFinancials(
         provider="test",

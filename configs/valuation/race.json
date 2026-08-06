@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "name": "race",
-  "description": "Ferrari profile using its global luxury economics instead of provider auto-manufacturer labels.",
+  "description": "Ferrari profile with sourced operating guidance, industrial capital structure, a conventional perpetuity base case, and a stored 22.5x EBITDA luxury-premium terminal scenario.",
   "forecast": {
     "default_method": "fcff",
     "fcff": {
       "forecast_years": 5,
       "historical_window": 3,
       "revenue_growth": null,
-      "operating_margin": null,
+      "operating_margin": ["29.5", "29.625", "29.75", "29.875", "30"],
       "tax_rate": null,
       "depreciation_to_revenue": null,
-      "capex_to_revenue": null,
+      "capex_to_revenue": "10.8",
       "operating_working_capital_to_revenue": null
     },
     "simplified": {
@@ -28,7 +28,7 @@
       "unlevered_beta": null,
       "levered_beta": null,
       "equity_risk_premium": null,
-      "country_risk_premium": null,
+      "country_risk_premium": "0.71",
       "cost_of_equity": null,
       "pretax_cost_of_debt": null,
       "normalized_tax_rate": null,
@@ -39,17 +39,31 @@
     "terminal_value": {
       "method": "perpetuity_growth",
       "perpetual_growth_rate": null,
-      "exit_multiple": null,
+      "exit_multiple": "22.5",
       "exit_metric": "ebitda"
     },
     "capital_bridge": {
-      "net_debt": null,
-      "gross_debt": null,
-      "cash_and_equivalents": null,
+      "net_debt": "32000000",
+      "gross_debt": "1442000000",
+      "cash_and_equivalents": "1410000000",
       "diluted_shares": null
+    },
+    "share_repurchases": {
+      "annual_cash_amounts": [
+        "700000000",
+        "700000000",
+        "700000000",
+        "700000000",
+        "700000000"
+      ],
+      "initial_purchase_price": null,
+      "price_growth_rate": null,
+      "discount_rate": null,
+      "source": "Ferrari 2025 Capital Markets Day: EUR 3.5B planned from 2026 through 2030"
     },
     "multistage": {
       "enabled": true,
+      "stable_growth_rate": "2.9",
       "convergence_tolerance": "1",
       "max_annual_growth_fade": "3",
       "growth_gap_per_high_growth_year": "10",

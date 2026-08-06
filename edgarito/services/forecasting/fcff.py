@@ -354,7 +354,9 @@ class FcffForecastService:
 
     @staticmethod
     def _expand_path(path: tuple[Decimal, ...], years: int) -> tuple[Decimal, ...]:
-        return path * years if len(path) == 1 else path
+        if len(path) == 1:
+            return path * years
+        return (*path, *((path[-1],) * (years - len(path))))
 
     @staticmethod
     def _future_date(base_date: datetime.date, years: int) -> datetime.date:

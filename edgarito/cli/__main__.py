@@ -69,6 +69,7 @@ from edgarito.services.valuation import (
     LtmMultiplesService,
     PeerSelectionParameters,
     PeerUniverseSelector,
+    ShareRepurchaseParameters,
     SpecializedValuationExtractor,
     TerminalMetric,
     TerminalValueMethod,
@@ -348,6 +349,39 @@ def build_parser() -> argparse.ArgumentParser:
         type=_decimal_value,
         metavar="COUNT",
         help="Override normalized diluted shares",
+    )
+    valuation.add_argument(
+        "--buyback-cash",
+        type=_decimal_value,
+        action="append",
+        metavar="AMOUNT",
+        help="Annual repurchase cash in reporting currency; repeat per year",
+    )
+    valuation.add_argument(
+        "--buyback-price",
+        type=_decimal_value,
+        metavar="PRICE",
+        help=(
+            "Share price at the valuation date for projecting repurchase execution; "
+            "defaults to model-implied fair value"
+        ),
+    )
+    valuation.add_argument(
+        "--buyback-price-growth",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Annual growth in the modeled repurchase price",
+    )
+    valuation.add_argument(
+        "--buyback-discount-rate",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Rate used to discount repurchase cash; defaults to cost of equity",
+    )
+    valuation.add_argument(
+        "--no-buybacks",
+        action="store_true",
+        help="Disable a share-repurchase schedule supplied by the profile",
     )
     valuation_models.add_argument(
         "--classification-provider",
@@ -724,6 +758,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         sector_override=profile.model_selection.sector,
         industry_override=profile.model_selection.industry,
     )
+    valuation_date = datetime.date.today()
     resolved = ValuationAssumptionResolver().resolve(
         financials=financials,
         capital_bridge=capital_bridge,
@@ -732,7 +767,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         terminal_is_perpetuity=(
             terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
         ),
-        valuation_date=datetime.date.today(),
+        valuation_date=valuation_date,
         wacc_override=args.wacc,
         terminal_growth_override=args.terminal_growth,
         **automatic_inputs,
@@ -742,15 +777,22 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     use_multistage = args.projection_method == "adaptive" or (
         args.projection_method is None
         and multistage_configuration.enabled
-        and terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+        and (
+            terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+            or multistage_configuration.stable_growth_rate is not None
+        )
     )
     if use_multistage:
-        if terminal_method != TerminalValueMethod.PERPETUITY_GROWTH:
+        stable_growth_rate = (
+            resolved.perpetual_growth_rate
+            if terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+            else multistage_configuration.stable_growth_rate
+        )
+        if stable_growth_rate is None:
             raise ValueError(
-                "Adaptive multistage projection requires perpetuity-growth terminal "
-                "value; use --projection-method constant with an exit multiple"
+                "Adaptive multistage projection with an exit multiple requires "
+                "valuation.multistage.stable_growth_rate in the profile"
             )
-        assert resolved.perpetual_growth_rate is not None
         tax_assumption = resolved.assumption_set.find(
             ValuationAssumptionKind.NORMALIZED_TAX_RATE
         )
@@ -760,7 +802,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             financials,
             forecast,
             forecast_parameters,
-            resolved.perpetual_growth_rate,
+            stable_growth_rate,
             multistage_configuration,
             normalized_tax_rate=(
                 tax_assumption.value if tax_assumption is not None else None
@@ -788,12 +830,58 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             else terminal_configuration.exit_metric
         ),
     )
+    repurchase_configuration = profile.valuation.share_repurchases
+    repurchase_cash = (
+        tuple(args.buyback_cash)
+        if args.buyback_cash is not None
+        else repurchase_configuration.annual_cash_amounts
+    )
+    share_repurchase_parameters = None
+    if not args.no_buybacks and repurchase_cash:
+        share_repurchase_parameters = ShareRepurchaseParameters(
+            annual_cash_amounts=repurchase_cash,
+            initial_purchase_price=(
+                args.buyback_price
+                if args.buyback_price is not None
+                else repurchase_configuration.initial_purchase_price
+            ),
+            price_growth_rate=(
+                args.buyback_price_growth
+                if args.buyback_price_growth is not None
+                else repurchase_configuration.price_growth_rate
+            ),
+            discount_rate=(
+                args.buyback_discount_rate
+                if args.buyback_discount_rate is not None
+                else repurchase_configuration.discount_rate
+            ),
+            source=(
+                "CLI override"
+                if args.buyback_cash is not None
+                else repurchase_configuration.source
+                or "valuation profile"
+            ),
+        )
+    elif not args.no_buybacks and any(
+        value is not None
+        for value in (
+            args.buyback_price,
+            args.buyback_price_growth,
+            args.buyback_discount_rate,
+        )
+    ):
+        raise ValueError(
+            "Buyback price or rate assumptions require --buyback-cash or a "
+            "profile repurchase schedule"
+        )
     result = FcffDcfService().value(
         forecast,
         parameters,
         capital_bridge,
         resolved.assumption_set,
         multistage_plan,
+        valuation_date,
+        share_repurchase_parameters,
     )
     print(FcffDcfConsolePresenter().render(result))
     return 0

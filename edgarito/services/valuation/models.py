@@ -692,6 +692,170 @@ class FcffDcfParameters(BaseModel):
         return self
 
 
+class ShareRepurchaseParameters(BaseModel):
+    """Future repurchase cash and execution assumptions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    annual_cash_amounts: tuple[Decimal, ...]
+    initial_purchase_price: Optional[Decimal] = None
+    price_growth_rate: Optional[Decimal] = None
+    discount_rate: Optional[Decimal] = None
+    source: str = "explicit profile or CLI assumptions"
+
+    @field_validator("annual_cash_amounts")
+    @classmethod
+    def validate_cash_amounts(
+        cls, values: tuple[Decimal, ...]
+    ) -> tuple[Decimal, ...]:
+        if not values:
+            raise ValueError("Share repurchases require at least one cash amount")
+        if any(not value.is_finite() or value <= 0 for value in values):
+            raise ValueError("Share-repurchase cash amounts must be finite and positive")
+        return values
+
+    @field_validator(
+        "initial_purchase_price", "price_growth_rate", "discount_rate"
+    )
+    @classmethod
+    def validate_optional_number(
+        cls, value: Optional[Decimal]
+    ) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("Share-repurchase assumptions must be finite")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Share-repurchase source cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "ShareRepurchaseParameters":
+        if self.initial_purchase_price is not None and self.initial_purchase_price <= 0:
+            raise ValueError("initial_purchase_price must be positive")
+        for name in ("price_growth_rate", "discount_rate"):
+            value = getattr(self, name)
+            if value is not None and value <= Decimal("-100"):
+                raise ValueError(f"{name} must be greater than -100%")
+        return self
+
+
+class ShareRepurchasePeriod(BaseModel):
+    """One modeled future repurchase distribution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    forecast_year: int = Field(ge=1)
+    fiscal_year: int
+    period_end: datetime.date
+    discount_period: Decimal = Field(ge=0)
+    cash_spent: Decimal = Field(gt=0)
+    present_value_cash_spent: Decimal = Field(gt=0)
+    purchase_price: Decimal = Field(gt=0)
+    shares_repurchased: Decimal = Field(gt=0)
+
+    @field_validator(
+        "discount_period",
+        "cash_spent",
+        "present_value_cash_spent",
+        "purchase_price",
+        "shares_repurchased",
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Share-repurchase period values must be finite")
+        return value
+
+
+class ShareRepurchaseResult(BaseModel):
+    """PV-consistent split between tendering and remaining shareholders."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+    discount_rate: Decimal
+    discount_rate_source: str
+    price_growth_rate: Decimal
+    initial_purchase_price: Decimal = Field(gt=0)
+    purchase_price_source: str
+    starting_shares: Decimal = Field(gt=0)
+    ending_shares: Decimal = Field(gt=0)
+    shares_repurchased: Decimal = Field(gt=0)
+    total_cash_spent: Decimal = Field(gt=0)
+    present_value_cash_spent: Decimal = Field(gt=0)
+    pre_repurchase_equity_value: Decimal
+    residual_equity_value: Decimal
+    pre_repurchase_value_per_share: Decimal
+    value_per_remaining_share: Decimal
+    accretion_percentage: Decimal
+    periods: tuple[ShareRepurchasePeriod, ...]
+
+    @field_validator(
+        "discount_rate",
+        "price_growth_rate",
+        "starting_shares",
+        "ending_shares",
+        "shares_repurchased",
+        "total_cash_spent",
+        "present_value_cash_spent",
+        "pre_repurchase_equity_value",
+        "residual_equity_value",
+        "pre_repurchase_value_per_share",
+        "value_per_remaining_share",
+        "accretion_percentage",
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Share-repurchase result values must be finite")
+        return value
+
+    @field_validator(
+        "source", "discount_rate_source", "purchase_price_source"
+    )
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Share-repurchase result sources cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_bridge(self) -> "ShareRepurchaseResult":
+        if not self.periods:
+            raise ValueError("Share-repurchase result requires at least one period")
+        if self.discount_rate <= Decimal("-100"):
+            raise ValueError("Share-repurchase discount rate must exceed -100%")
+        if self.price_growth_rate <= Decimal("-100"):
+            raise ValueError("Share-price growth rate must exceed -100%")
+        if not _decimal_close(
+            self.ending_shares, self.starting_shares - self.shares_repurchased
+        ):
+            raise ValueError("Ending shares do not match modeled repurchases")
+        if not _decimal_close(
+            self.residual_equity_value,
+            self.pre_repurchase_equity_value - self.present_value_cash_spent,
+        ):
+            raise ValueError("Residual equity does not reflect buyback cash spent")
+        if not _decimal_close(
+            self.value_per_remaining_share,
+            self.residual_equity_value / self.ending_shares,
+        ):
+            raise ValueError("Remaining-holder value does not match equity and shares")
+        expected_accretion = (
+            self.value_per_remaining_share / self.pre_repurchase_value_per_share
+            - Decimal(1)
+        ) * Decimal(100)
+        if not _decimal_close(self.accretion_percentage, expected_accretion):
+            raise ValueError("Buyback accretion does not match per-share values")
+        return self
+
+
 class FcffDcfResult(BaseModel):
     """Auditable enterprise-to-equity FCFF DCF result."""
 
@@ -713,6 +877,7 @@ class FcffDcfResult(BaseModel):
     enterprise_value: Decimal
     equity_value: Decimal
     value_per_share: Decimal
+    share_repurchases: Optional[ShareRepurchaseResult] = None
     terminal_value_percentage: Optional[Decimal] = None
     warnings: tuple[str, ...] = ()
 
