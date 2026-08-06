@@ -1,6 +1,6 @@
 # Edgarito
 
-Edgarito retrieves company fundamentals and classifications from configured providers, caches raw responses, normalizes them into provider-neutral models, optionally crosschecks providers, and calculates historical financial metrics.
+Edgarito retrieves company fundamentals and classifications from configured providers, caches raw responses, normalizes them into provider-neutral models, optionally crosschecks providers, calculates historical financial metrics, and builds assumption-driven free cash flow forecasts.
 
 ## Setup
 
@@ -167,6 +167,79 @@ company_metrics = FinancialMetricsService().calculate(
 
 Each metric observation retains its formula and required input concepts for traceability.
 
+## Forecast free cash flow
+
+The `forecast` command projects annual revenue and free cash flow using explicit,
+auditable assumptions. Percentage arguments use percentage points, so `6` means
+6%:
+
+```bash
+uv run edgarito forecast --ticker AAPL --years 5 \
+  --revenue-growth 6 --fcf-margin 25
+```
+
+A single growth or margin value is held constant for every projected year. To
+provide a year-by-year path, repeat each option exactly once per forecast year:
+
+```bash
+uv run edgarito forecast --isin US0378331005 --years 3 \
+  --revenue-growth 8 --revenue-growth 6 --revenue-growth 4 \
+  --fcf-margin 26 --fcf-margin 25 --fcf-margin 24
+```
+
+Either assumption can be omitted. Edgarito then uses its trailing average from
+up to the latest complete annual periods; `--historical-window` controls the
+maximum window and defaults to three years:
+
+```bash
+uv run edgarito forecast --ticker AAPL --years 5
+uv run edgarito forecast --ticker AAPL --years 5 --historical-window 5 \
+  --revenue-growth 5
+```
+
+The deterministic forecast method is:
+
+```text
+projected revenue[t] = projected revenue[t-1] × (1 + revenue growth[t])
+projected FCF[t]     = projected revenue[t] × FCF margin[t]
+historical FCF       = operating cash flow - capital expenditures
+```
+
+Forecasting requires normalized annual revenue, operating cash flow, and capital
+expenditures in one currency. It does not discount cash flows or calculate a
+terminal value yet; the resulting annual FCF observations are the intended input
+for the later DCF valuation layer.
+
+Programmatically, assumptions can be constant scalars or complete paths:
+
+```python
+from decimal import Decimal
+
+from edgarito.services.forecasting import (
+    FreeCashFlowForecastParameters,
+    FreeCashFlowForecastService,
+)
+
+
+parameters = FreeCashFlowForecastParameters(
+    forecast_years=5,
+    revenue_growth=Decimal("6"),
+    free_cash_flow_margin=(
+        Decimal("26"),
+        Decimal("25.5"),
+        Decimal("25"),
+        Decimal("24.5"),
+        Decimal("24"),
+    ),
+)
+forecast = FreeCashFlowForecastService().forecast(financials, parameters)
+```
+
+Each forecast observation retains its fiscal year, period end, revenue, FCF,
+growth assumption, margin assumption, currency, and formula. The forecast also
+records whether each assumption path was explicit or inferred from historical
+averages.
+
 ## Provider configuration
 
 The built-in provider routing is equivalent to:
@@ -202,6 +275,7 @@ FinancialDataService
     -> optional FinancialsCrosschecker
     -> FinancialsConsolePresenter
        or FinancialMetricsService -> MetricsConsolePresenter
+       or FreeCashFlowForecastService -> ForecastConsolePresenter
 
 CompanyClassificationService
     -> configured FMP or Alpha Vantage profile client

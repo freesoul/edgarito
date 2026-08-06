@@ -11,6 +11,10 @@ from edgarito.schemas.normalization.financials import (
     FinancialStatement,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.forecasting import (
+    ForecastAssumptionSource,
+    FreeCashFlowForecast,
+)
 from edgarito.services.metrics.models import (
     CompanyMetrics,
     FinancialMetric,
@@ -276,3 +280,100 @@ class MetricsConsolePresenter:
         value = observation.value / scale
         suffix = "%" if observation.unit == "%" else ""
         return f"{value:,.1f}{suffix}"
+
+
+class ForecastConsolePresenter:
+    def render(self, forecast: FreeCashFlowForecast) -> str:
+        identifier = forecast.ticker or f"CIK {forecast.company_id}"
+        scale, suffix = self._scale(forecast)
+        amount_unit = f"{forecast.unit} {suffix}".rstrip()
+        periods = [f"FY{o.fiscal_year}E" for o in forecast.observations]
+        label_width = 30
+        value_width = max(13, max((len(period) for period in periods), default=0) + 2)
+        header = f"{'Metric':<{label_width}}" + "".join(
+            f"{period:>{value_width}}" for period in periods
+        )
+
+        lines = [
+            f"{identifier} - {forecast.company_name}",
+            f"Provider: {forecast.provider.upper()} | CIK: {forecast.company_id}",
+            "Method: projected revenue × free cash flow margin",
+            f"Base FY{forecast.base_fiscal_year}: "
+            f"Revenue {forecast.base_revenue / scale:,.1f} {amount_unit} | "
+            f"Free Cash Flow {forecast.base_free_cash_flow / scale:,.1f} {amount_unit}",
+            "Revenue growth assumptions: "
+            f"{self._source_label(forecast.revenue_growth_source, forecast)}",
+            "FCF margin assumptions: "
+            f"{self._source_label(forecast.free_cash_flow_margin_source, forecast)}",
+            "",
+            header,
+            "-" * len(header),
+            self._row(
+                "Revenue Growth (%)",
+                [o.revenue_growth for o in forecast.observations],
+                value_width,
+                label_width,
+                percent=True,
+            ),
+            self._row(
+                f"Revenue ({amount_unit})",
+                [o.revenue / scale for o in forecast.observations],
+                value_width,
+                label_width,
+            ),
+            self._row(
+                "FCF Margin (%)",
+                [o.free_cash_flow_margin for o in forecast.observations],
+                value_width,
+                label_width,
+                percent=True,
+            ),
+            self._row(
+                f"Free Cash Flow ({amount_unit})",
+                [o.free_cash_flow / scale for o in forecast.observations],
+                value_width,
+                label_width,
+            ),
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _source_label(
+        source: ForecastAssumptionSource, forecast: FreeCashFlowForecast
+    ) -> str:
+        if source == ForecastAssumptionSource.EXPLICIT:
+            return "explicit"
+        years = forecast.historical_fiscal_years
+        period = f"FY{years[0]}" if len(years) == 1 else f"FY{years[0]}–FY{years[-1]}"
+        return f"trailing average from {period}"
+
+    @staticmethod
+    def _row(
+        label: str,
+        values: list[Decimal],
+        value_width: int,
+        label_width: int,
+        percent: bool = False,
+    ) -> str:
+        row = f"{label:<{label_width}}"
+        for value in values:
+            rendered = f"{value:,.1f}{'%' if percent else ''}"
+            row += f"{rendered:>{value_width}}"
+        return row
+
+    @staticmethod
+    def _scale(forecast: FreeCashFlowForecast) -> tuple[Decimal, str]:
+        values = [forecast.base_revenue, forecast.base_free_cash_flow]
+        values.extend(
+            value
+            for observation in forecast.observations
+            for value in (observation.revenue, observation.free_cash_flow)
+        )
+        largest = max((abs(value) for value in values), default=Decimal(0))
+        if largest >= Decimal("1000000000"):
+            return Decimal("1000000000"), "B"
+        if largest >= Decimal("1000000"):
+            return Decimal("1000000"), "M"
+        if largest >= Decimal("1000"):
+            return Decimal("1000"), "K"
+        return Decimal(1), ""

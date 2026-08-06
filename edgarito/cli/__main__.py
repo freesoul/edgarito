@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
     FinancialsConsolePresenter,
+    ForecastConsolePresenter,
     MetricsConsolePresenter,
 )
 from edgarito.enums.granularity import Granularity
@@ -20,6 +22,10 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.forecasting import (
+    FreeCashFlowForecastParameters,
+    FreeCashFlowForecastService,
+)
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
@@ -47,12 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     metrics = subparsers.add_parser(
         "metrics", help="Calculate metrics from normalized financials"
     )
+    forecast = subparsers.add_parser(
+        "forecast", help="Project annual free cash flow from explicit assumptions"
+    )
     classification = subparsers.add_parser(
         "classification", help="Retrieve normalized company sector and industry"
     )
 
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
+    _add_retrieval_arguments(forecast, include_period=False)
 
     financials.add_argument(
         "--concept",
@@ -65,6 +75,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         choices=[metric.value for metric in FinancialMetric],
         help="Limit output to a metric; repeat this option for multiple metrics",
+    )
+    forecast.add_argument(
+        "--years",
+        type=int,
+        default=5,
+        help="Number of annual forecast periods (default: 5)",
+    )
+    forecast.add_argument(
+        "--revenue-growth",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help=(
+            "Revenue growth in percentage points; provide once for a constant "
+            "rate or once per forecast year"
+        ),
+    )
+    forecast.add_argument(
+        "--fcf-margin",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help=(
+            "FCF margin in percentage points; provide once for a constant margin "
+            "or once per forecast year"
+        ),
+    )
+    forecast.add_argument(
+        "--historical-window",
+        type=int,
+        default=3,
+        help="Annual periods used to infer omitted assumptions (default: 3)",
     )
     _add_identifier_arguments(classification)
     classification.add_argument(
@@ -82,7 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_retrieval_arguments(command_parser: argparse.ArgumentParser) -> None:
+def _add_retrieval_arguments(
+    command_parser: argparse.ArgumentParser, *, include_period: bool = True
+) -> None:
     _add_identifier_arguments(command_parser)
 
     command_parser.add_argument(
@@ -97,15 +141,16 @@ def _add_retrieval_arguments(command_parser: argparse.ArgumentParser) -> None:
         help="Override the configured default provider",
     )
 
-    command_parser.add_argument(
-        "--period",
-        choices=("annual", "quarterly", "all"),
-        default="annual",
-        help="Period granularity to display (default: annual)",
-    )
-    command_parser.add_argument(
-        "--limit", type=int, default=5, help="Number of latest periods to display"
-    )
+    if include_period:
+        command_parser.add_argument(
+            "--period",
+            choices=("annual", "quarterly", "all"),
+            default="annual",
+            help="Period granularity to display (default: annual)",
+        )
+        command_parser.add_argument(
+            "--limit", type=int, default=5, help="Number of latest periods to display"
+        )
     command_parser.add_argument(
         "--refresh", action="store_true", help="Ignore cached provider snapshots"
     )
@@ -183,6 +228,23 @@ async def _run_metrics(args: argparse.Namespace) -> int:
     )
 
     print(MetricsConsolePresenter().render(metrics, limit=args.limit))
+    return 0
+
+
+async def _run_forecast(args: argparse.Namespace) -> int:
+    parameters = FreeCashFlowForecastParameters(
+        forecast_years=args.years,
+        revenue_growth=args.revenue_growth,
+        free_cash_flow_margin=args.fcf_margin,
+        historical_window=args.historical_window,
+    )
+    financials = await _retrieve_financials(
+        args,
+        Granularity.ANNUAL,
+        FreeCashFlowForecastService.required_concepts(),
+    )
+    forecast = FreeCashFlowForecastService().forecast(financials, parameters)
+    print(ForecastConsolePresenter().render(forecast))
     return 0
 
 
@@ -265,6 +327,13 @@ def _parse_mappings(values: Optional[list[str]], option: str) -> dict[str, str]:
     return mappings
 
 
+def _percentage(value: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError(f"invalid percentage: {value!r}") from exc
+
+
 def _parse_provider_symbols(values: Optional[list[str]]) -> dict[ProviderName, str]:
     raw_mappings = _parse_mappings(values, "--provider-symbol")
     try:
@@ -289,6 +358,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_financials(args))
         if args.command == "metrics":
             return asyncio.run(_run_metrics(args))
+        if args.command == "forecast":
+            return asyncio.run(_run_forecast(args))
         if args.command == "classification":
             return asyncio.run(_run_classification(args))
     except (ValueError, RuntimeError, FileNotFoundError, ValidationError) as exc:
