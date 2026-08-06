@@ -202,6 +202,34 @@ def test_explicit_inputs_can_make_the_primary_model_ready():
     assert selection.primary.missing_inputs == set()
 
 
+def test_profile_uses_latest_metrics_and_reported_diluted_shares_for_readiness():
+    financials = _financials()
+    financials.observations.extend(
+        [
+            _observation(FinancialConcept.CASH_AND_EQUIVALENTS, "20", 2024),
+            _observation(FinancialConcept.SHORT_TERM_DEBT, "5", 2024),
+            _observation(FinancialConcept.LONG_TERM_DEBT_CURRENT, "3", 2024),
+            _observation(FinancialConcept.LONG_TERM_DEBT_NONCURRENT, "40", 2024),
+            _observation(FinancialConcept.GOODWILL, "10", 2024),
+            _observation(FinancialConcept.INTANGIBLE_ASSETS_NET, "5", 2024),
+            _observation(
+                FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES, "50", 2024
+            ).model_copy(update={"unit": "shares"}),
+        ]
+    )
+
+    profile = ValuationProfileBuilder().build(
+        financials,
+        _classification(Sector.TECHNOLOGY, "Software Infrastructure"),
+    )
+
+    assert {
+        ValuationInput.NET_DEBT,
+        ValuationInput.TANGIBLE_BOOK_EQUITY,
+        ValuationInput.DILUTED_SHARES,
+    } <= profile.available_inputs
+
+
 def test_negative_book_equity_rejects_residual_income():
     profile = ValuationProfileBuilder().build(
         _financials(equity="-10"),
@@ -306,5 +334,5 @@ def test_cli_reports_valuation_suitability_from_cached_data(
     assert exit_code == 0
     assert "Economic profile: General Operating" in output
     assert "PRIMARY" in output
-    assert "FCFF DCF — suitability 90/100; data Blocked" in output
+    assert "FCFF DCF — suitability 90/100; data Partial" in output
     assert "Comparable Multiples" in output

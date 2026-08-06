@@ -13,8 +13,17 @@ class FinancialMetric(str, Enum):
     REVENUE_GROWTH = "revenue_growth"
     OPERATING_MARGIN = "operating_margin"
     NET_MARGIN = "net_margin"
+    EFFECTIVE_TAX_RATE = "effective_tax_rate"
+    NOPAT = "nopat"
+    EBITDA = "ebitda"
     FREE_CASH_FLOW = "free_cash_flow"
     FREE_CASH_FLOW_MARGIN = "free_cash_flow_margin"
+    OPERATING_WORKING_CAPITAL = "operating_working_capital"
+    CHANGE_IN_OPERATING_WORKING_CAPITAL = "change_in_operating_working_capital"
+    GROSS_DEBT = "gross_debt"
+    NET_DEBT = "net_debt"
+    TANGIBLE_BOOK_EQUITY = "tangible_book_equity"
+    FCFF = "fcff"
     RETURN_ON_ASSETS = "return_on_assets"
     RETURN_ON_EQUITY = "return_on_equity"
     LIABILITIES_TO_ASSETS = "liabilities_to_assets"
@@ -27,8 +36,19 @@ class FinancialMetric(str, Enum):
             FinancialMetric.REVENUE_GROWTH: "Revenue Growth",
             FinancialMetric.OPERATING_MARGIN: "Operating Margin",
             FinancialMetric.NET_MARGIN: "Net Margin",
+            FinancialMetric.EFFECTIVE_TAX_RATE: "Effective Tax Rate",
+            FinancialMetric.NOPAT: "NOPAT",
+            FinancialMetric.EBITDA: "EBITDA",
             FinancialMetric.FREE_CASH_FLOW: "Free Cash Flow",
             FinancialMetric.FREE_CASH_FLOW_MARGIN: "Free Cash Flow Margin",
+            FinancialMetric.OPERATING_WORKING_CAPITAL: "Operating Working Capital",
+            FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL: (
+                "Change in Operating Working Capital"
+            ),
+            FinancialMetric.GROSS_DEBT: "Gross Debt",
+            FinancialMetric.NET_DEBT: "Net Debt",
+            FinancialMetric.TANGIBLE_BOOK_EQUITY: "Tangible Book Equity",
+            FinancialMetric.FCFF: "Free Cash Flow to Firm",
             FinancialMetric.RETURN_ON_ASSETS: "Return on Assets",
             FinancialMetric.RETURN_ON_EQUITY: "Return on Equity",
             FinancialMetric.LIABILITIES_TO_ASSETS: "Liabilities / Assets",

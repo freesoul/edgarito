@@ -1,9 +1,15 @@
 
 
 - **Add valuation methods**
-   - Ensure data readiness (so we don't have Blocked)
-   - Add missing metric computations
-   - Implement the models
+   1. Extend SEC normalization with tax, D&A, working-capital components, debt, interest, intangible assets, dividends and shares.
+   2. Add deterministic metrics: NOPAT, operating NWC, FCFF, FCFE, EBITDA, net debt, tangible book, market cap and EV.
+   3. Add separate market and assumption schemas.
+   4. Add Treasury/FRED/ECB and versioned Damodaran reference providers.
+   5. Extend Alpha Vantage only for price history, latest close, dividends and splits.
+   6. Replace the current forecast with the driver-based FCFF forecast.
+   7. Build peer-universe selection and LTM multiple computation.
+   8. Add specialized REIT/resource/biotech/SOTP extractors later.
+
 - **Add deterministic red-flag detection**
 - **Create the full report pipeline**
 - **Add exports**

@@ -13,6 +13,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.valuation.models import (
     BusinessArchetype,
     CompanyLifecycle,
@@ -56,7 +57,7 @@ class ValuationProfileBuilder:
 
     @staticmethod
     def required_concepts() -> set[FinancialConcept]:
-        return {
+        concepts = {
             FinancialConcept.REVENUE,
             FinancialConcept.NET_INCOME,
             FinancialConcept.OPERATING_CASH_FLOW,
@@ -64,7 +65,17 @@ class ValuationProfileBuilder:
             FinancialConcept.STOCKHOLDERS_EQUITY,
             FinancialConcept.TOTAL_ASSETS,
             FinancialConcept.TOTAL_LIABILITIES,
+            FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
         }
+        concepts.update(
+            FinancialMetricsService.required_concepts(
+                {
+                    FinancialMetric.NET_DEBT,
+                    FinancialMetric.TANGIBLE_BOOK_EQUITY,
+                }
+            )
+        )
+        return concepts
 
     def build(
         self,
@@ -120,8 +131,25 @@ class ValuationProfileBuilder:
 
         traits = self._traits(sector, industry_key, archetype)
         traits.update(overrides.economic_traits)
+        valuation_metrics = FinancialMetricsService().calculate(
+            financials,
+            granularity=Granularity.ANNUAL,
+            metrics={
+                FinancialMetric.NET_DEBT,
+                FinancialMetric.TANGIBLE_BOOK_EQUITY,
+            },
+        )
         available_inputs = self._available_inputs(
-            annual, fcf_by_year, earnings, equities, classification
+            annual,
+            fcf_by_year,
+            earnings,
+            equities,
+            classification,
+            {
+                observation.metric
+                for observation in valuation_metrics.observations
+                if years and observation.fiscal_year == years[-1]
+            },
         )
         available_inputs.update(overrides.available_inputs)
         if overrides.peer_count is not None and overrides.peer_count >= 5:
@@ -346,6 +374,7 @@ class ValuationProfileBuilder:
         earnings: list[FinancialObservation],
         equities: list[FinancialObservation],
         classification: Optional[NormalizedCompanyClassification],
+        available_metrics: set[FinancialMetric],
     ) -> set[ValuationInput]:
         inputs = set()
         if classification is not None:
@@ -358,6 +387,14 @@ class ValuationProfileBuilder:
             inputs.add(ValuationInput.EARNINGS_HISTORY)
         if equities:
             inputs.add(ValuationInput.BOOK_EQUITY)
+        latest = annual[max(annual)] if annual else {}
+        diluted_shares = latest.get(FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES)
+        if diluted_shares is not None and diluted_shares.unit == "shares":
+            inputs.add(ValuationInput.DILUTED_SHARES)
+        if FinancialMetric.NET_DEBT in available_metrics:
+            inputs.add(ValuationInput.NET_DEBT)
+        if FinancialMetric.TANGIBLE_BOOK_EQUITY in available_metrics:
+            inputs.add(ValuationInput.TANGIBLE_BOOK_EQUITY)
         if any(
             {
                 FinancialConcept.TOTAL_ASSETS,

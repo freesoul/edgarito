@@ -58,7 +58,12 @@ class FactUnits(BaseModel):
     def get(self, unit: str) -> List[Measurement]:
         """Return measurements for a unit, including units represented as extra fields."""
         value = getattr(self, unit, None)
-        return value or []
+        return [
+            measurement
+            if isinstance(measurement, Measurement)
+            else Measurement.model_validate(measurement)
+            for measurement in value or []
+        ]
 
 
 class Fact(BaseModel):

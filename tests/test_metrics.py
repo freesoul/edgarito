@@ -45,24 +45,52 @@ def _financials() -> NormalizedCompanyFinancials:
         2023: {
             FinancialConcept.REVENUE: "100",
             FinancialConcept.OPERATING_INCOME: "20",
+            FinancialConcept.PRETAX_INCOME: "18",
+            FinancialConcept.INCOME_TAX_EXPENSE: "3.6",
             FinancialConcept.NET_INCOME: "10",
             FinancialConcept.TOTAL_ASSETS: "200",
             FinancialConcept.TOTAL_LIABILITIES: "100",
             FinancialConcept.STOCKHOLDERS_EQUITY: "100",
             FinancialConcept.CASH_AND_EQUIVALENTS: "20",
             FinancialConcept.OPERATING_CASH_FLOW: "15",
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "4",
             FinancialConcept.CAPITAL_EXPENDITURES: "5",
+            FinancialConcept.ACCOUNTS_RECEIVABLE: "15",
+            FinancialConcept.INVENTORY: "10",
+            FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "5",
+            FinancialConcept.ACCOUNTS_PAYABLE: "8",
+            FinancialConcept.ACCRUED_LIABILITIES: "4",
+            FinancialConcept.DEFERRED_REVENUE_CURRENT: "2",
+            FinancialConcept.SHORT_TERM_DEBT: "5",
+            FinancialConcept.LONG_TERM_DEBT_CURRENT: "3",
+            FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "40",
+            FinancialConcept.GOODWILL: "10",
+            FinancialConcept.INTANGIBLE_ASSETS_NET: "5",
         },
         2024: {
             FinancialConcept.REVENUE: "120",
             FinancialConcept.OPERATING_INCOME: "30",
+            FinancialConcept.PRETAX_INCOME: "24",
+            FinancialConcept.INCOME_TAX_EXPENSE: "4.8",
             FinancialConcept.NET_INCOME: "12",
             FinancialConcept.TOTAL_ASSETS: "220",
             FinancialConcept.TOTAL_LIABILITIES: "110",
             FinancialConcept.STOCKHOLDERS_EQUITY: "110",
             FinancialConcept.CASH_AND_EQUIVALENTS: "22",
             FinancialConcept.OPERATING_CASH_FLOW: "18",
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "5",
             FinancialConcept.CAPITAL_EXPENDITURES: "6",
+            FinancialConcept.ACCOUNTS_RECEIVABLE: "18",
+            FinancialConcept.INVENTORY: "12",
+            FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "6",
+            FinancialConcept.ACCOUNTS_PAYABLE: "9",
+            FinancialConcept.ACCRUED_LIABILITIES: "5",
+            FinancialConcept.DEFERRED_REVENUE_CURRENT: "2",
+            FinancialConcept.SHORT_TERM_DEBT: "6",
+            FinancialConcept.LONG_TERM_DEBT_CURRENT: "4",
+            FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "42",
+            FinancialConcept.GOODWILL: "11",
+            FinancialConcept.INTANGIBLE_ASSETS_NET: "6",
         },
     }
     return NormalizedCompanyFinancials(
@@ -115,6 +143,11 @@ def test_calculates_supported_metrics_without_mixing_periods():
         "25.00"
     )
     assert _metric_value(metrics, FinancialMetric.NET_MARGIN, 2024) == Decimal("10.0")
+    assert _metric_value(metrics, FinancialMetric.EFFECTIVE_TAX_RATE, 2024) == Decimal(
+        "20.0"
+    )
+    assert _metric_value(metrics, FinancialMetric.NOPAT, 2024) == Decimal("24.0")
+    assert _metric_value(metrics, FinancialMetric.EBITDA, 2024) == Decimal("35")
     assert _metric_value(metrics, FinancialMetric.FREE_CASH_FLOW, 2024) == Decimal("12")
     assert _metric_value(
         metrics, FinancialMetric.FREE_CASH_FLOW_MARGIN, 2024
@@ -134,6 +167,18 @@ def test_calculates_supported_metrics_without_mixing_periods():
     assert _metric_value(
         metrics, FinancialMetric.OPERATING_CASH_FLOW_TO_NET_INCOME, 2024
     ) == Decimal("150.0")
+    assert _metric_value(
+        metrics, FinancialMetric.OPERATING_WORKING_CAPITAL, 2024
+    ) == Decimal("20")
+    assert _metric_value(
+        metrics, FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL, 2024
+    ) == Decimal("4")
+    assert _metric_value(metrics, FinancialMetric.GROSS_DEBT, 2024) == Decimal("52")
+    assert _metric_value(metrics, FinancialMetric.NET_DEBT, 2024) == Decimal("30")
+    assert _metric_value(
+        metrics, FinancialMetric.TANGIBLE_BOOK_EQUITY, 2024
+    ) == Decimal("93")
+    assert _metric_value(metrics, FinancialMetric.FCFF, 2024) == Decimal("19.0")
 
     first_year_metrics = {
         observation.metric
@@ -143,6 +188,61 @@ def test_calculates_supported_metrics_without_mixing_periods():
     assert FinancialMetric.REVENUE_GROWTH not in first_year_metrics
     assert FinancialMetric.RETURN_ON_ASSETS not in first_year_metrics
     assert FinancialMetric.RETURN_ON_EQUITY not in first_year_metrics
+    assert FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL not in first_year_metrics
+    assert FinancialMetric.FCFF not in first_year_metrics
+
+
+def test_valuation_metrics_require_complete_inputs_and_consistent_units():
+    financials = _financials()
+    financials.observations = [
+        observation
+        for observation in financials.observations
+        if not (
+            observation.fiscal_year == 2024
+            and observation.concept == FinancialConcept.ACCRUED_LIABILITIES
+        )
+    ]
+    debt = next(
+        observation
+        for observation in financials.observations
+        if observation.fiscal_year == 2024
+        and observation.concept == FinancialConcept.LONG_TERM_DEBT_NONCURRENT
+    )
+    debt.unit = "EUR"
+
+    metrics = FinancialMetricsService().calculate(
+        financials,
+        metrics={
+            FinancialMetric.OPERATING_WORKING_CAPITAL,
+            FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL,
+            FinancialMetric.GROSS_DEBT,
+            FinancialMetric.NET_DEBT,
+            FinancialMetric.FCFF,
+        },
+    )
+    second_year_metrics = {
+        observation.metric
+        for observation in metrics.observations
+        if observation.fiscal_year == 2024
+    }
+
+    assert second_year_metrics == set()
+
+
+def test_fcff_retains_formula_and_atomic_input_concepts():
+    metrics = FinancialMetricsService().calculate(
+        _financials(), metrics={FinancialMetric.FCFF}
+    )
+
+    fcff = next(observation for observation in metrics.observations)
+    assert fcff.fiscal_year == 2024
+    assert fcff.formula == (
+        "NOPAT + depreciation and amortization - capital expenditures - "
+        "change in operating working capital"
+    )
+    assert set(fcff.input_concepts) == FinancialMetricsService.required_concepts(
+        {FinancialMetric.FCFF}
+    )
 
 
 def test_filters_metrics_and_reports_their_required_concepts():

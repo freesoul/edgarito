@@ -17,6 +17,30 @@ from edgarito.services.metrics.models import (
 
 PeriodKey = tuple[int, FiscalPeriod]
 
+OPERATING_WORKING_CAPITAL_CONCEPTS = frozenset(
+    {
+        FinancialConcept.ACCOUNTS_RECEIVABLE,
+        FinancialConcept.INVENTORY,
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+        FinancialConcept.ACCOUNTS_PAYABLE,
+        FinancialConcept.ACCRUED_LIABILITIES,
+        FinancialConcept.DEFERRED_REVENUE_CURRENT,
+    }
+)
+DEBT_CONCEPTS = frozenset(
+    {
+        FinancialConcept.SHORT_TERM_DEBT,
+        FinancialConcept.LONG_TERM_DEBT_CURRENT,
+        FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+    }
+)
+NOPAT_CONCEPTS = frozenset(
+    {
+        FinancialConcept.OPERATING_INCOME,
+        FinancialConcept.PRETAX_INCOME,
+        FinancialConcept.INCOME_TAX_EXPENSE,
+    }
+)
 
 METRIC_CONCEPTS: dict[FinancialMetric, frozenset[FinancialConcept]] = {
     FinancialMetric.REVENUE_GROWTH: frozenset({FinancialConcept.REVENUE}),
@@ -25,6 +49,16 @@ METRIC_CONCEPTS: dict[FinancialMetric, frozenset[FinancialConcept]] = {
     ),
     FinancialMetric.NET_MARGIN: frozenset(
         {FinancialConcept.NET_INCOME, FinancialConcept.REVENUE}
+    ),
+    FinancialMetric.EFFECTIVE_TAX_RATE: frozenset(
+        {FinancialConcept.INCOME_TAX_EXPENSE, FinancialConcept.PRETAX_INCOME}
+    ),
+    FinancialMetric.NOPAT: NOPAT_CONCEPTS,
+    FinancialMetric.EBITDA: frozenset(
+        {
+            FinancialConcept.OPERATING_INCOME,
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+        }
     ),
     FinancialMetric.FREE_CASH_FLOW: frozenset(
         {
@@ -37,6 +71,28 @@ METRIC_CONCEPTS: dict[FinancialMetric, frozenset[FinancialConcept]] = {
             FinancialConcept.OPERATING_CASH_FLOW,
             FinancialConcept.CAPITAL_EXPENDITURES,
             FinancialConcept.REVENUE,
+        }
+    ),
+    FinancialMetric.OPERATING_WORKING_CAPITAL: OPERATING_WORKING_CAPITAL_CONCEPTS,
+    FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL: (
+        OPERATING_WORKING_CAPITAL_CONCEPTS
+    ),
+    FinancialMetric.GROSS_DEBT: DEBT_CONCEPTS,
+    FinancialMetric.NET_DEBT: DEBT_CONCEPTS
+    | frozenset({FinancialConcept.CASH_AND_EQUIVALENTS}),
+    FinancialMetric.TANGIBLE_BOOK_EQUITY: frozenset(
+        {
+            FinancialConcept.STOCKHOLDERS_EQUITY,
+            FinancialConcept.GOODWILL,
+            FinancialConcept.INTANGIBLE_ASSETS_NET,
+        }
+    ),
+    FinancialMetric.FCFF: NOPAT_CONCEPTS
+    | OPERATING_WORKING_CAPITAL_CONCEPTS
+    | frozenset(
+        {
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+            FinancialConcept.CAPITAL_EXPENDITURES,
         }
     ),
     FinancialMetric.RETURN_ON_ASSETS: frozenset(
@@ -147,12 +203,17 @@ class FinancialMetricsService:
     ) -> None:
         revenue = current.get(FinancialConcept.REVENUE)
         operating_income = current.get(FinancialConcept.OPERATING_INCOME)
+        pretax_income = current.get(FinancialConcept.PRETAX_INCOME)
+        income_tax_expense = current.get(FinancialConcept.INCOME_TAX_EXPENSE)
         net_income = current.get(FinancialConcept.NET_INCOME)
         assets = current.get(FinancialConcept.TOTAL_ASSETS)
         liabilities = current.get(FinancialConcept.TOTAL_LIABILITIES)
         equity = current.get(FinancialConcept.STOCKHOLDERS_EQUITY)
         cash = current.get(FinancialConcept.CASH_AND_EQUIVALENTS)
         operating_cash_flow = current.get(FinancialConcept.OPERATING_CASH_FLOW)
+        depreciation_and_amortization = current.get(
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION
+        )
         capital_expenditures = current.get(FinancialConcept.CAPITAL_EXPENDITURES)
 
         if FinancialMetric.REVENUE_GROWTH in selected_metrics and previous is not None:
@@ -196,6 +257,60 @@ class FinancialMetricsService:
                 (FinancialConcept.NET_INCOME, FinancialConcept.REVENUE),
             )
 
+        if FinancialMetric.EFFECTIVE_TAX_RATE in selected_metrics:
+            self._add_ratio(
+                results,
+                FinancialMetric.EFFECTIVE_TAX_RATE,
+                income_tax_expense,
+                pretax_income,
+                provider,
+                granularity,
+                period,
+                "100 × income tax expense / pretax income",
+                (
+                    FinancialConcept.INCOME_TAX_EXPENSE,
+                    FinancialConcept.PRETAX_INCOME,
+                ),
+            )
+
+        nopat = self._nopat(operating_income, pretax_income, income_tax_expense)
+        if FinancialMetric.NOPAT in selected_metrics and nopat is not None:
+            self._add_amount(
+                results,
+                FinancialMetric.NOPAT,
+                nopat,
+                provider,
+                granularity,
+                period,
+                "operating income × (1 - income tax expense / pretax income)",
+                (
+                    FinancialConcept.OPERATING_INCOME,
+                    FinancialConcept.INCOME_TAX_EXPENSE,
+                    FinancialConcept.PRETAX_INCOME,
+                ),
+            )
+
+        ebitda = self._combine_amounts(
+            (
+                (operating_income, 1),
+                (depreciation_and_amortization, 1),
+            )
+        )
+        if FinancialMetric.EBITDA in selected_metrics and ebitda is not None:
+            self._add_amount(
+                results,
+                FinancialMetric.EBITDA,
+                ebitda,
+                provider,
+                granularity,
+                period,
+                "operating income + depreciation and amortization",
+                (
+                    FinancialConcept.OPERATING_INCOME,
+                    FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+                ),
+            )
+
         free_cash_flow = self._free_cash_flow(operating_cash_flow, capital_expenditures)
         if (
             FinancialMetric.FREE_CASH_FLOW in selected_metrics
@@ -229,6 +344,129 @@ class FinancialMetricsService:
                     FinancialConcept.OPERATING_CASH_FLOW,
                     FinancialConcept.CAPITAL_EXPENDITURES,
                     FinancialConcept.REVENUE,
+                ),
+            )
+
+        operating_working_capital = self._operating_working_capital(current)
+        if (
+            FinancialMetric.OPERATING_WORKING_CAPITAL in selected_metrics
+            and operating_working_capital is not None
+        ):
+            self._add_amount(
+                results,
+                FinancialMetric.OPERATING_WORKING_CAPITAL,
+                operating_working_capital,
+                provider,
+                granularity,
+                period,
+                "receivables + inventory + prepaid/other current assets - "
+                "payables - accrued liabilities - current deferred revenue",
+                tuple(
+                    sorted(OPERATING_WORKING_CAPITAL_CONCEPTS, key=lambda c: c.value)
+                ),
+            )
+
+        previous_operating_working_capital = (
+            self._operating_working_capital(previous) if previous is not None else None
+        )
+        change_in_operating_working_capital = self._combine_amounts(
+            (
+                (operating_working_capital, 1),
+                (previous_operating_working_capital, -1),
+            )
+        )
+        if (
+            FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL in selected_metrics
+            and change_in_operating_working_capital is not None
+        ):
+            self._add_amount(
+                results,
+                FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL,
+                change_in_operating_working_capital,
+                provider,
+                granularity,
+                period,
+                "current operating working capital - prior operating working capital",
+                tuple(
+                    sorted(OPERATING_WORKING_CAPITAL_CONCEPTS, key=lambda c: c.value)
+                ),
+            )
+
+        gross_debt = self._gross_debt(current)
+        if FinancialMetric.GROSS_DEBT in selected_metrics and gross_debt is not None:
+            self._add_amount(
+                results,
+                FinancialMetric.GROSS_DEBT,
+                gross_debt,
+                provider,
+                granularity,
+                period,
+                "short-term debt + current long-term debt + noncurrent long-term debt",
+                tuple(sorted(DEBT_CONCEPTS, key=lambda c: c.value)),
+            )
+
+        net_debt = self._combine_amounts(((gross_debt, 1), (cash, -1)))
+        if FinancialMetric.NET_DEBT in selected_metrics and net_debt is not None:
+            self._add_amount(
+                results,
+                FinancialMetric.NET_DEBT,
+                net_debt,
+                provider,
+                granularity,
+                period,
+                "gross debt - cash and equivalents",
+                (
+                    *tuple(sorted(DEBT_CONCEPTS, key=lambda c: c.value)),
+                    FinancialConcept.CASH_AND_EQUIVALENTS,
+                ),
+            )
+
+        tangible_book_equity = self._combine_amounts(
+            (
+                (equity, 1),
+                (current.get(FinancialConcept.GOODWILL), -1),
+                (current.get(FinancialConcept.INTANGIBLE_ASSETS_NET), -1),
+            )
+        )
+        if (
+            FinancialMetric.TANGIBLE_BOOK_EQUITY in selected_metrics
+            and tangible_book_equity is not None
+        ):
+            self._add_amount(
+                results,
+                FinancialMetric.TANGIBLE_BOOK_EQUITY,
+                tangible_book_equity,
+                provider,
+                granularity,
+                period,
+                "stockholders' equity - goodwill - net intangible assets",
+                (
+                    FinancialConcept.STOCKHOLDERS_EQUITY,
+                    FinancialConcept.GOODWILL,
+                    FinancialConcept.INTANGIBLE_ASSETS_NET,
+                ),
+            )
+
+        fcff = self._combine_amounts(
+            (
+                (nopat, 1),
+                (depreciation_and_amortization, 1),
+                (capital_expenditures, -1),
+                (change_in_operating_working_capital, -1),
+            )
+        )
+        if FinancialMetric.FCFF in selected_metrics and fcff is not None:
+            self._add_amount(
+                results,
+                FinancialMetric.FCFF,
+                fcff,
+                provider,
+                granularity,
+                period,
+                "NOPAT + depreciation and amortization - capital expenditures - "
+                "change in operating working capital",
+                tuple(
+                    sorted(METRIC_CONCEPTS[FinancialMetric.FCFF], key=lambda c: c.value)
                 ),
             )
 
@@ -304,6 +542,94 @@ class FinancialMetricsService:
                 "100 × operating cash flow / net income",
                 (FinancialConcept.OPERATING_CASH_FLOW, FinancialConcept.NET_INCOME),
             )
+
+    @staticmethod
+    def _nopat(
+        operating_income: Optional[FinancialObservation],
+        pretax_income: Optional[FinancialObservation],
+        income_tax_expense: Optional[FinancialObservation],
+    ) -> Optional[FinancialObservation]:
+        if (
+            operating_income is None
+            or pretax_income is None
+            or income_tax_expense is None
+            or len(
+                {
+                    operating_income.unit,
+                    pretax_income.unit,
+                    income_tax_expense.unit,
+                }
+            )
+            != 1
+            or pretax_income.value == 0
+        ):
+            return None
+        tax_rate = income_tax_expense.value / pretax_income.value
+        return operating_income.model_copy(
+            update={"value": operating_income.value * (Decimal(1) - tax_rate)}
+        )
+
+    @staticmethod
+    def _operating_working_capital(
+        observations: Optional[dict[FinancialConcept, FinancialObservation]],
+    ) -> Optional[FinancialObservation]:
+        if observations is None:
+            return None
+        return FinancialMetricsService._combine_amounts(
+            (
+                (observations.get(FinancialConcept.ACCOUNTS_RECEIVABLE), 1),
+                (observations.get(FinancialConcept.INVENTORY), 1),
+                (
+                    observations.get(FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS),
+                    1,
+                ),
+                (observations.get(FinancialConcept.ACCOUNTS_PAYABLE), -1),
+                (observations.get(FinancialConcept.ACCRUED_LIABILITIES), -1),
+                (
+                    observations.get(FinancialConcept.DEFERRED_REVENUE_CURRENT),
+                    -1,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _gross_debt(
+        observations: dict[FinancialConcept, FinancialObservation],
+    ) -> Optional[FinancialObservation]:
+        return FinancialMetricsService._combine_amounts(
+            (
+                (observations.get(FinancialConcept.SHORT_TERM_DEBT), 1),
+                (observations.get(FinancialConcept.LONG_TERM_DEBT_CURRENT), 1),
+                (observations.get(FinancialConcept.LONG_TERM_DEBT_NONCURRENT), 1),
+            )
+        )
+
+    @staticmethod
+    def _combine_amounts(
+        terms: tuple[tuple[Optional[FinancialObservation], int], ...],
+    ) -> Optional[FinancialObservation]:
+        observations = [observation for observation, _ in terms]
+        if any(observation is None for observation in observations):
+            return None
+        present = [
+            observation for observation in observations if observation is not None
+        ]
+        if len({observation.unit for observation in present}) != 1:
+            return None
+        value = sum(
+            (
+                observation.value * coefficient
+                for observation, coefficient in terms
+                if observation is not None
+            ),
+            Decimal(0),
+        )
+        return present[0].model_copy(
+            update={
+                "value": value,
+                "period_end": max(observation.period_end for observation in present),
+            }
+        )
 
     @staticmethod
     def _free_cash_flow(

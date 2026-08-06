@@ -8,6 +8,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
     NormalizedCompanyFinancials,
+    ObservationDerivationKind,
 )
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts, Measurement
 
@@ -18,6 +19,8 @@ class ConceptDefinition:
     source_concepts: tuple[str, ...]
     unit: str = "USD"
     instant: bool = False
+    taxonomy: str = "us-gaap"
+    additive: bool = True
 
 
 @dataclass(frozen=True)
@@ -56,8 +59,31 @@ CONCEPT_DEFINITIONS = (
         ("OperatingIncomeLoss",),
     ),
     ConceptDefinition(
+        FinancialConcept.PRETAX_INCOME,
+        (
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+        ),
+    ),
+    ConceptDefinition(
+        FinancialConcept.INCOME_TAX_EXPENSE,
+        (
+            "IncomeTaxExpenseBenefit",
+            "IncomeTaxExpenseBenefitContinuingOperations",
+        ),
+    ),
+    ConceptDefinition(
         FinancialConcept.NET_INCOME,
         ("NetIncomeLoss",),
+    ),
+    ConceptDefinition(
+        FinancialConcept.INTEREST_EXPENSE,
+        (
+            "InterestExpenseNonoperating",
+            "InterestExpenseDebt",
+            "InterestExpense",
+        ),
     ),
     ConceptDefinition(
         FinancialConcept.TOTAL_ASSETS,
@@ -65,8 +91,83 @@ CONCEPT_DEFINITIONS = (
         instant=True,
     ),
     ConceptDefinition(
+        FinancialConcept.CURRENT_ASSETS,
+        ("AssetsCurrent",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.ACCOUNTS_RECEIVABLE,
+        (
+            "AccountsReceivableNetCurrent",
+            "AccountsReceivableNet",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.INVENTORY,
+        ("InventoryNet",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+        (
+            "PrepaidExpenseAndOtherAssetsCurrent",
+            "OtherAssetsCurrent",
+            "PrepaidExpenseCurrent",
+            "OtherPrepaidExpenseCurrent",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
         FinancialConcept.TOTAL_LIABILITIES,
         ("Liabilities",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.CURRENT_LIABILITIES,
+        ("LiabilitiesCurrent",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.ACCOUNTS_PAYABLE,
+        ("AccountsPayableCurrent", "AccountsPayable"),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.ACCRUED_LIABILITIES,
+        (
+            "AccruedLiabilitiesCurrent",
+            "OtherAccruedLiabilitiesCurrent",
+            "AccruedLiabilities",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.DEFERRED_REVENUE_CURRENT,
+        (
+            "ContractWithCustomerLiabilityCurrent",
+            "DeferredRevenueCurrent",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.SHORT_TERM_DEBT,
+        (
+            "ShortTermBorrowings",
+            "ShortTermDebtCurrent",
+            "OtherShortTermBorrowings",
+            "CommercialPaper",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.LONG_TERM_DEBT_CURRENT,
+        ("LongTermDebtCurrent",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+        ("LongTermDebtNoncurrent",),
         instant=True,
     ),
     ConceptDefinition(
@@ -86,12 +187,71 @@ CONCEPT_DEFINITIONS = (
         instant=True,
     ),
     ConceptDefinition(
+        FinancialConcept.GOODWILL,
+        ("Goodwill",),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.INTANGIBLE_ASSETS_NET,
+        (
+            "IntangibleAssetsNetExcludingGoodwill",
+            "FiniteLivedIntangibleAssetsNet",
+            "OtherIntangibleAssetsNet",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
         FinancialConcept.OPERATING_CASH_FLOW,
         ("NetCashProvidedByUsedInOperatingActivities",),
     ),
     ConceptDefinition(
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+        (
+            "DepreciationDepletionAndAmortization",
+            "DepreciationAmortizationAndAccretionNet",
+            "DepreciationAndAmortization",
+        ),
+    ),
+    ConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
         ("PaymentsToAcquirePropertyPlantAndEquipment",),
+    ),
+    ConceptDefinition(
+        FinancialConcept.DIVIDENDS_PAID,
+        ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
+    ),
+    ConceptDefinition(
+        FinancialConcept.DIVIDENDS_PER_SHARE,
+        (
+            "CommonStockDividendsPerShareCashPaid",
+            "CommonStockDividendsPerShareDeclared",
+        ),
+        unit="USD/shares",
+    ),
+    ConceptDefinition(
+        FinancialConcept.SHARES_OUTSTANDING,
+        ("EntityCommonStockSharesOutstanding",),
+        unit="shares",
+        instant=True,
+        taxonomy="dei",
+    ),
+    ConceptDefinition(
+        FinancialConcept.WEIGHTED_AVERAGE_BASIC_SHARES,
+        (
+            "WeightedAverageNumberOfSharesOutstandingBasic",
+            "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+        ),
+        unit="shares",
+        additive=False,
+    ),
+    ConceptDefinition(
+        FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
+        (
+            "WeightedAverageNumberOfDilutedSharesOutstanding",
+            "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+        ),
+        unit="shares",
+        additive=False,
     ),
 )
 
@@ -112,14 +272,19 @@ class SecUsGaapNormalizer:
         if not gaap_facts:
             raise ValueError("The SEC response does not contain US-GAAP facts")
 
+        facts_by_taxonomy = {
+            "us-gaap": gaap_facts,
+            "dei": company_facts.facts.dei,
+        }
         observations: list[FinancialObservation] = []
         for definition in CONCEPT_DEFINITIONS:
             if concepts and definition.concept not in concepts:
                 continue
 
+            taxonomy_facts = facts_by_taxonomy[definition.taxonomy]
             selected_periods: set[tuple[Granularity, int, FiscalPeriod]] = set()
             for source_concept in definition.source_concepts:
-                fact = gaap_facts.get(source_concept)
+                fact = taxonomy_facts.get(source_concept)
                 if fact is None:
                     continue
 
@@ -265,9 +430,10 @@ class SecUsGaapNormalizer:
                         fiscal_year,
                         period,
                     )
-                cumulative = self._pick_ytd(period_candidates)
-                if cumulative is not None:
-                    ytd[period] = cumulative
+                if definition.additive:
+                    cumulative = self._pick_ytd(period_candidates)
+                    if cumulative is not None:
+                        ytd[period] = cumulative
 
             if (
                 FiscalPeriod.Q2 not in quarterly
@@ -317,9 +483,13 @@ class SecUsGaapNormalizer:
                         else None,
                     )
 
-            if annual_candidate is not None and all(
-                period in quarterly
-                for period in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3)
+            if (
+                definition.additive
+                and annual_candidate is not None
+                and all(
+                    period in quarterly
+                    for period in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3)
+                )
             ):
                 q4_value = annual_candidate.measurement.val - sum(
                     quarterly[period].value
@@ -405,7 +575,7 @@ class SecUsGaapNormalizer:
             period_start=candidate.identity.start,
             period_end=candidate.identity.end,
             provider="sec",
-            taxonomy="us-gaap",
+            taxonomy=definition.taxonomy,
             source_concept=candidate.source_concept,
             accession_number=measurement.accn,
             form=measurement.form,
@@ -432,7 +602,7 @@ class SecUsGaapNormalizer:
         )
         observation.value = value
         observation.period_start = period_start
-        observation.is_derived = True
+        observation.derivation_kind = ObservationDerivationKind.PERIOD_RECONSTRUCTION
         observation.derivation = derivation
         return observation
 

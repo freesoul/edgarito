@@ -111,6 +111,17 @@ uv run python -m edgarito financials --ticker AAPL --user-agent "Your Name (your
 
 Provider responses are cached below `<cache_path>/providers/`. Use `--refresh` to bypass existing snapshots. In SEC quarterly output, an asterisk marks a value derived from a reported YTD or full-year fact.
 
+SEC normalization includes valuation-oriented reported inputs in addition to the
+core statements: pretax income and tax expense; depreciation and amortization;
+current assets, receivables, inventory, prepaid/other current assets, current
+liabilities, payables, accrued liabilities, and current deferred revenue;
+short-term and current/noncurrent long-term debt; interest expense; goodwill and
+net intangible assets; dividends paid and dividends per share; and current,
+basic weighted-average, and diluted weighted-average shares. Current shares are
+read from the SEC `dei` taxonomy and retain that provenance. Weighted-average
+shares are not additive, so quarterly values are only emitted when directly
+reported rather than derived from YTD or annual observations.
+
 ## Retrieve sector and industry
 
 ```bash
@@ -141,8 +152,17 @@ uv run edgarito metrics --ticker AAPL --crosscheck
 - `revenue_growth`
 - `operating_margin`
 - `net_margin`
+- `effective_tax_rate`
+- `nopat`
+- `ebitda`
 - `free_cash_flow`
 - `free_cash_flow_margin`
+- `operating_working_capital`
+- `change_in_operating_working_capital`
+- `gross_debt`
+- `net_debt`
+- `tangible_book_equity`
+- `fcff`
 - `return_on_assets`
 - `return_on_equity`
 - `liabilities_to_assets`
@@ -151,7 +171,29 @@ uv run edgarito metrics --ticker AAPL --crosscheck
 
 Metrics are calculated only from the selected provider's normalized observations. `--crosscheck` validates the underlying observations against other configured providers but does not merge their values.
 
-Revenue growth compares consecutive periods: year over year for annual data and quarter over quarter for quarterly data. Return on assets and return on equity use average beginning and ending balances; quarterly returns are not annualized. Free cash flow is operating cash flow minus capital expenditures. A metric is omitted when a required input is unavailable, input currencies differ, its denominator is zero, or a required prior period is not consecutive.
+Revenue growth compares consecutive periods: year over year for annual data and quarter over quarter for quarterly data. Return on assets and return on equity use average beginning and ending balances; quarterly returns are not annualized. Free cash flow is operating cash flow minus capital expenditures.
+
+Valuation building blocks use strict formulas over atomic normalized facts:
+
+```text
+effective tax rate = income tax expense / pretax income
+NOPAT              = operating income × (1 - effective tax rate)
+EBITDA              = operating income + depreciation and amortization
+operating NWC       = receivables + inventory + prepaid/other current assets
+                      - payables - accrued liabilities - current deferred revenue
+gross debt          = short-term debt + current long-term debt
+                      + noncurrent long-term debt
+net debt            = gross debt - cash and equivalents
+tangible book       = stockholders' equity - goodwill - net intangible assets
+FCFF                = NOPAT + depreciation and amortization - capex
+                      - change in operating NWC
+```
+
+These calculations deliberately require every listed component and consistent
+units rather than treating a missing filing fact as zero. A metric is also
+omitted when its denominator is zero or a required prior period is not
+consecutive. FCFE is not calculated yet because debt issuance and repayment have
+not been normalized.
 
 Programmatically, calculate all metrics from an existing `NormalizedCompanyFinancials` object, or pass a selected metric set:
 
