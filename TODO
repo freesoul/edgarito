@@ -1,7 +1,5 @@
 
 - **Add valuation methods**
-   - DCF first
-   - Comparables after sector, peer, price, shares, and enterprise-value data exist
 - **Add deterministic red-flag detection**
 - **Create the full report pipeline**
 - **Add exports**
@@ -10,3 +8,4 @@
 - **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs
 - Add a portfolio feature, that will do actions/report for the whole portfolio.
 - Autochoose provider when multiple : keep the one with most recent data, or with more results.
+- Poll recent market data (eg. add  yahoofinance if necessary) and determine whether cheap

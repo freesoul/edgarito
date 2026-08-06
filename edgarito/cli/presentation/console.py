@@ -20,6 +20,11 @@ from edgarito.services.metrics.models import (
     FinancialMetric,
     MetricObservation,
 )
+from edgarito.services.valuation import (
+    ModelRole,
+    ModelSuitability,
+    ValuationSelection,
+)
 
 CONCEPT_ORDER = {concept: index for index, concept in enumerate(FinancialConcept)}
 STATEMENT_LABELS = {
@@ -377,3 +382,72 @@ class ForecastConsolePresenter:
         if largest >= Decimal("1000"):
             return Decimal("1000"), "K"
         return Decimal(1), ""
+
+
+class ValuationSelectionConsolePresenter:
+    def render(self, selection: ValuationSelection) -> str:
+        profile = selection.profile
+        identifier = profile.ticker or f"CIK {profile.company_id}"
+        lines = [
+            f"{identifier} - {profile.company_name}",
+            f"Economic profile: {self._label(profile.business_archetype.value)}",
+            f"Sector: {profile.sector.value if profile.sector else '-'} | "
+            f"Industry: {profile.industry or '-'}",
+            f"Lifecycle: {self._label(profile.lifecycle.value)} | "
+            f"Cyclicality: {self._label(profile.cyclicality.value)}",
+        ]
+        if profile.economic_traits:
+            traits = ", ".join(
+                self._label(trait.value) for trait in sorted(profile.economic_traits)
+            )
+            lines.append(f"Economic traits: {traits}")
+        if profile.annual_fiscal_years:
+            lines.append(
+                f"Annual history: FY{profile.annual_fiscal_years[0]}–"
+                f"FY{profile.annual_fiscal_years[-1]}"
+            )
+
+        for role in (
+            ModelRole.PRIMARY,
+            ModelRole.CONDITIONAL,
+            ModelRole.CROSSCHECK,
+            ModelRole.NOT_RECOMMENDED,
+        ):
+            models = [model for model in selection.models if model.role == role]
+            if not models:
+                continue
+            lines.extend(["", self._label(role.value).upper()])
+            for model in models:
+                lines.extend(self._render_model(model))
+        return "\n".join(lines)
+
+    def _render_model(self, model: ModelSuitability) -> list[str]:
+        lines = [
+            f"{model.model.label} — suitability {model.suitability_score}/100; "
+            f"data {self._label(model.data_readiness.value)}"
+        ]
+        if model.forecast_profile:
+            lines.append(
+                f"  Forecast profile: {self._label(model.forecast_profile.value)}"
+            )
+        if model.relative_bases:
+            bases = ", ".join(
+                self._label(basis.value) for basis in model.relative_bases
+            )
+            lines.append(f"  Suggested bases: {bases}")
+        for reason in model.reasons:
+            lines.append(f"  + {reason}")
+        for rejection in model.hard_rejections:
+            lines.append(f"  ! {rejection}")
+        for limitation in model.limitations:
+            lines.append(f"  ~ {limitation}")
+        if model.missing_inputs:
+            missing = ", ".join(
+                self._label(item.value) for item in sorted(model.missing_inputs)
+            )
+            lines.append(f"  Missing: {missing}")
+        return lines
+
+    @staticmethod
+    def _label(value: str) -> str:
+        return value.replace("_", " ").title()
