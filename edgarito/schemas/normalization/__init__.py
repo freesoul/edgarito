@@ -8,6 +8,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     FinancialStatement,
     NormalizedCompanyFinancials,
+    ObservationDerivationKind,
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "FinancialStatement",
     "NormalizedCompanyFinancials",
     "NormalizedCompanyClassification",
+    "ObservationDerivationKind",
     "Sector",
 ]

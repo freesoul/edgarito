@@ -363,6 +363,52 @@ not marked as FCFF. Enterprise DCF remains blocked until an explicit FCFF foreca
 and its EBIT, tax, depreciation, working-capital and investment assumptions are
 available.
 
+## Market data and valuation assumptions
+
+Observed market data and selected valuation assumptions use separate schemas.
+`SecurityMarketData` stores dated prices, dividends, and splits for one security;
+`ReferenceMarketSeries` stores rates and macroeconomic observations such as a
+Treasury yield or ECB inflation series. Both retain provider, retrieval time,
+frequency, and source-version metadata. Retrieval timestamps must be
+timezone-aware.
+
+```python
+import datetime
+from decimal import Decimal
+
+from edgarito.schemas import (
+    MarketDataFrequency,
+    PriceBar,
+    SecurityIdentifiers,
+    SecurityMarketData,
+)
+
+
+market_data = SecurityMarketData(
+    provider="alphavantage",
+    provider_symbol="AAPL",
+    identifiers=SecurityIdentifiers(ticker="AAPL"),
+    currency="USD",
+    frequency=MarketDataFrequency.DAILY,
+    retrieved_at=datetime.datetime.now(datetime.timezone.utc),
+    prices=(
+        PriceBar(
+            observed_on=datetime.date(2026, 8, 6),
+            close=Decimal("212.00"),
+        ),
+    ),
+)
+```
+
+A `ValuationAssumption` records a selected scalar separately from its source.
+Rates and margins use percentage points, beta values use multiples, and an
+assumption can be scoped by currency, country, industry, company, and forecast
+year. `ValuationAssumptionSet` groups unique assumptions for one valuation date
+and scenario. Market-derived assumptions require a provider and observation
+date; reference-dataset assumptions additionally require a dataset name and
+version. This ensures that retrieving a rate does not silently turn it into a
+valuation input.
+
 ## Provider configuration
 
 The built-in provider routing is equivalent to:
