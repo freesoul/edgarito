@@ -5,15 +5,18 @@ from typing import Mapping, Optional, Protocol
 
 from edgarito.config.providers import ClassificationProviderConfiguration
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.classification import (
     NormalizedCompanyClassification,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.identifiers import SecurityIdentifierResolver
 from edgarito.services.normalization.classification import (
     CompanyClassificationNormalizer,
 )
 from edgarito.services.providers.alphavantage import AlphaVantageClient
 from edgarito.services.providers.fmp import FmpClient
+from edgarito.services.providers.openfigi import OpenFigiClient
 
 
 class ClassificationProvider(Protocol):
@@ -82,12 +85,16 @@ class CompanyClassificationService:
         alphavantage_api_key: Optional[str] = None,
         fmp_api_key: Optional[str] = None,
         providers: Optional[Mapping[ProviderName, ClassificationProvider]] = None,
+        identifier_resolver: Optional[SecurityIdentifierResolver] = None,
+        openfigi_api_key: Optional[str] = None,
     ):
         self._cache = cache
         self._configuration = provider_configuration
         self._alphavantage_api_key = alphavantage_api_key
         self._fmp_api_key = fmp_api_key
+        self._openfigi_api_key = openfigi_api_key
         self._providers = dict(providers or {})
+        self._identifier_resolver = identifier_resolver
         self._owned_clients = []
         self.last_crosschecks: list[ClassificationCrosscheckReport] = []
 
@@ -101,26 +108,73 @@ class CompanyClassificationService:
 
     async def retrieve(
         self,
-        ticker: str,
+        ticker: Optional[str] = None,
+        *,
+        cik: Optional[int] = None,
+        isin: Optional[str] = None,
+        exchange: Optional[str] = None,
+        exchange_symbols: Optional[Mapping[str, str]] = None,
+        provider_symbols: Optional[Mapping[ProviderName | str, str]] = None,
+        identifiers: Optional[SecurityIdentifiers] = None,
         provider: Optional[ProviderName] = None,
         use_cache: bool = True,
         make_cache: bool = True,
         crosscheck: bool = True,
     ) -> NormalizedCompanyClassification:
+        supplied_fields = any(
+            (ticker, cik, isin, exchange, exchange_symbols, provider_symbols)
+        )
+        if identifiers is not None and supplied_fields:
+            raise ValueError(
+                "Use identifiers or individual identifier arguments, not both"
+            )
+        if identifiers is None:
+            identifiers = SecurityIdentifiers(
+                ticker=ticker,
+                cik=cik,
+                isin=isin,
+                exchange=exchange,
+                exchange_symbols=dict(exchange_symbols or {}),
+                provider_symbols=dict(provider_symbols or {}),
+            )
         selected = provider or self._configuration.default_provider
         if selected not in self._configuration.available_providers:
             raise ValueError(
                 f"Classification provider '{selected.value}' is not available"
             )
         self.last_crosschecks = []
-        primary = await self._provider(selected).retrieve(ticker, use_cache, make_cache)
+        identifiers = await self._resolve_identifiers(
+            identifiers, selected, use_cache=use_cache, make_cache=make_cache
+        )
+        symbol = identifiers.symbol_for(selected)
+        if not symbol:
+            raise ValueError(
+                f"No symbol is available for classification provider {selected.value}"
+            )
+        primary = await self._provider(selected).retrieve(symbol, use_cache, make_cache)
+        identifiers = self._identifiers_from_result(identifiers, selected, primary)
+        primary.identifiers = identifiers
         if crosscheck:
             for secondary_name in self._configuration.available_providers:
                 if secondary_name == selected:
                     continue
                 try:
+                    secondary_identifiers = await self._resolve_identifiers(
+                        identifiers,
+                        secondary_name,
+                        use_cache=use_cache,
+                        make_cache=make_cache,
+                    )
+                    secondary_symbol = secondary_identifiers.symbol_for(secondary_name)
+                    if not secondary_symbol:
+                        raise ValueError(
+                            f"No symbol is available for {secondary_name.value}"
+                        )
                     secondary = await self._provider(secondary_name).retrieve(
-                        ticker, use_cache, make_cache
+                        secondary_symbol, use_cache, make_cache
+                    )
+                    secondary.identifiers = self._identifiers_from_result(
+                        secondary_identifiers, secondary_name, secondary
                     )
                     report = self._compare(primary, secondary)
                     self.last_crosschecks.append(report)
@@ -138,6 +192,51 @@ class CompanyClassificationService:
                         stacklevel=2,
                     )
         return primary
+
+    async def _resolve_identifiers(
+        self,
+        identifiers: SecurityIdentifiers,
+        provider: ProviderName,
+        *,
+        use_cache: bool,
+        make_cache: bool,
+    ) -> SecurityIdentifiers:
+        if self._identifier_resolver is None:
+            search_client = None
+            if self._fmp_api_key:
+                search_client = FmpClient(self._cache, self._fmp_api_key)
+                self._owned_clients.append(search_client)
+            isin_search_client = OpenFigiClient(
+                self._cache, api_key=self._openfigi_api_key
+            )
+            self._owned_clients.append(isin_search_client)
+            self._identifier_resolver = SecurityIdentifierResolver(
+                search_client, isin_search_client
+            )
+        return await self._identifier_resolver.resolve(
+            identifiers,
+            provider,
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
+
+    @staticmethod
+    def _identifiers_from_result(
+        identifiers: SecurityIdentifiers,
+        provider: ProviderName,
+        result: NormalizedCompanyClassification,
+    ) -> SecurityIdentifiers:
+        updates = {}
+        if provider not in identifiers.provider_symbols:
+            updates["provider_symbols"] = {provider: result.ticker}
+        if identifiers.ticker is None:
+            updates["ticker"] = result.ticker
+        if identifiers.cik is None and result.company_id.isdigit():
+            updates["cik"] = int(result.company_id)
+        if identifiers.exchange is None and result.exchange:
+            updates["exchange"] = result.exchange
+            updates["exchange_symbols"] = {result.exchange: result.ticker}
+        return identifiers.with_updates(**updates)
 
     def _provider(self, name: ProviderName) -> ClassificationProvider:
         existing = self._providers.get(name)

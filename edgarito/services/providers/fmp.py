@@ -13,6 +13,7 @@ from edgarito.schemas.providers.fmp.fundamentals import (
     CompanyProfileResponse,
     FmpCompanyFinancials,
     IncomeStatementResponse,
+    SecuritySearchResult,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 
@@ -133,6 +134,31 @@ class FmpClient:
             raise ValueError(f"FMP did not find a profile for {symbol.upper()}")
         return response.root[0]
 
+    async def search_isin(
+        self, isin: str, use_cache: bool = True, make_cache: bool = True
+    ) -> list[SecuritySearchResult]:
+        return await self._search_identifier(
+            "search-isin", "isin", isin.strip().upper(), use_cache, make_cache
+        )
+
+    async def search_cik(
+        self, cik: int, use_cache: bool = True, make_cache: bool = True
+    ) -> list[SecuritySearchResult]:
+        return await self._search_identifier(
+            "search-cik", "cik", str(cik).zfill(10), use_cache, make_cache
+        )
+
+    async def search_exchange_variants(
+        self, symbol: str, use_cache: bool = True, make_cache: bool = True
+    ) -> list[SecuritySearchResult]:
+        return await self._search_identifier(
+            "search-exchange-variants",
+            "symbol",
+            self._normalize_symbol(symbol),
+            use_cache,
+            make_cache,
+        )
+
     async def get_income_statements(
         self,
         symbol: str,
@@ -248,6 +274,56 @@ class FmpClient:
                 f"FMP returned an unexpected response for {endpoint.value} {symbol}"
             )
         return data
+
+    async def _search_identifier(
+        self,
+        endpoint: str,
+        parameter: str,
+        value: str,
+        use_cache: bool,
+        make_cache: bool,
+    ) -> list[SecuritySearchResult]:
+        cache_value = re.sub(r"[^A-Z0-9._-]", "_", value.upper())
+        cache_path = f"providers/fmp/search/{endpoint}/{cache_value}.json"
+        if use_cache:
+            cached_data = self._cache.read(cache_path)
+            if cached_data is not None:
+                return [
+                    SecuritySearchResult.model_validate(item)
+                    for item in json.loads(cached_data)
+                ]
+
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        url = f"{self._BASE_URL}/{endpoint}"
+        params = {parameter: value, "apikey": self._api_key}
+        try:
+            async with self._session.get(url, params=params, timeout=20) as response:
+                response_text = await response.text()
+                if response.status >= 400:
+                    raise RuntimeError(
+                        f"FMP identifier search failed with HTTP {response.status} "
+                        f"for {parameter} {value}"
+                    )
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"FMP identifier search failed for {parameter} {value}"
+            ) from exc
+
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("FMP identifier search returned invalid JSON") from exc
+        if isinstance(data, dict):
+            message = (
+                data.get("Error Message") or data.get("error") or data.get("message")
+            )
+            raise RuntimeError(f"FMP identifier search failed: {message or data}")
+        if not isinstance(data, list):
+            raise RuntimeError("FMP identifier search returned an unexpected response")
+        if make_cache:
+            self._cache.save(cache_path, json.dumps(data))
+        return [SecuritySearchResult.model_validate(item) for item in data]
 
     @classmethod
     def _normalize_symbol(cls, symbol: str) -> str:

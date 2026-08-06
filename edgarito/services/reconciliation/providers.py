@@ -5,6 +5,7 @@ from typing import Optional, Protocol
 
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     NormalizedCompanyFinancials,
@@ -21,10 +22,29 @@ from edgarito.services.providers.fmp import FmpClient
 class FinancialsQuery:
     ticker: Optional[str] = None
     cik: Optional[int] = None
+    identifiers: Optional[SecurityIdentifiers] = None
     granularity: Optional[Granularity] = Granularity.ANNUAL
     concepts: Optional[set[FinancialConcept]] = None
     use_cache: bool = True
     make_cache: bool = True
+
+    def __post_init__(self) -> None:
+        if self.identifiers is None:
+            if self.ticker is None and self.cik is None:
+                raise ValueError("FinancialsQuery requires security identifiers")
+            object.__setattr__(
+                self,
+                "identifiers",
+                SecurityIdentifiers(ticker=self.ticker, cik=self.cik),
+            )
+        elif self.ticker is not None or self.cik is not None:
+            raise ValueError("Use identifiers or ticker/cik, not both")
+
+        object.__setattr__(self, "ticker", self.identifiers.ticker)
+        object.__setattr__(self, "cik", self.identifiers.cik)
+
+    def symbol_for(self, provider: ProviderName) -> Optional[str]:
+        return self.identifiers.symbol_for(provider) if self.identifiers else None
 
 
 class NormalizedFinancialsProvider(Protocol):
@@ -45,7 +65,7 @@ class SecFinancialsProvider:
         self._normalizer = normalizer or SecUsGaapNormalizer()
 
     async def retrieve(self, query: FinancialsQuery) -> NormalizedCompanyFinancials:
-        ticker = query.ticker.upper() if query.ticker else None
+        ticker = query.symbol_for(self.name)
         cik = query.cik
         if ticker is not None:
             cik = await self._client.get_cik(
@@ -81,10 +101,11 @@ class AlphaVantageFinancialsProvider:
         self._normalizer = normalizer or AlphaVantageNormalizer()
 
     async def retrieve(self, query: FinancialsQuery) -> NormalizedCompanyFinancials:
-        if not query.ticker:
-            raise ValueError("Alpha Vantage retrieval requires a ticker")
+        symbol = query.symbol_for(self.name)
+        if not symbol:
+            raise ValueError("Alpha Vantage retrieval requires a symbol")
         source = await self._client.get_company_financials(
-            query.ticker,
+            symbol,
             use_cache=query.use_cache,
             make_cache=query.make_cache,
         )
@@ -107,10 +128,11 @@ class FmpFinancialsProvider:
         self._normalizer = normalizer or FmpNormalizer()
 
     async def retrieve(self, query: FinancialsQuery) -> NormalizedCompanyFinancials:
-        if not query.ticker:
-            raise ValueError("FMP retrieval requires a ticker")
+        symbol = query.symbol_for(self.name)
+        if not symbol:
+            raise ValueError("FMP retrieval requires a symbol")
         source = await self._client.get_company_financials(
-            query.ticker,
+            symbol,
             use_cache=query.use_cache,
             make_cache=query.make_cache,
         )

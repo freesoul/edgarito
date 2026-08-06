@@ -1,3 +1,4 @@
+from edgarito.enums.provider import ProviderName
 from edgarito.schemas.cli.use_cases.retrieve_financials import RetrieveFinancialsRequest
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
@@ -14,15 +15,21 @@ class RetrieveFinancials:
     async def execute(
         self, request: RetrieveFinancialsRequest
     ) -> NormalizedCompanyFinancials:
-        ticker = request.ticker.upper() if request.ticker else None
-        cik = request.cik
-        if ticker is not None:
+        identifiers = request.security_identifiers()
+        sec_symbol = identifiers.symbol_for(ProviderName.SEC)
+        ticker = identifiers.ticker or sec_symbol
+        cik = identifiers.cik
+        if sec_symbol is not None:
             cik = await self._edgar.get_cik(
-                ticker,
+                sec_symbol,
                 use_cache=request.use_cache,
                 make_cache=request.make_cache,
             )
 
+        if cik is None:
+            raise ValueError(
+                "SEC retrieval requires a CIK, ticker, or SEC provider symbol"
+            )
         facts = await self._edgar.get_company_facts(
             cik,
             use_cache=request.use_cache,

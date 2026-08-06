@@ -2,7 +2,14 @@ import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+)
 
 from edgarito.enums.edgar.period import FiscalPeriod
 
@@ -31,6 +38,20 @@ class CompanyProfile(FmpModel):
 
 class CompanyProfileResponse(RootModel[list[CompanyProfile]]):
     pass
+
+
+class SecuritySearchResult(FmpModel):
+    """The common subset returned by FMP's identifier search endpoints."""
+
+    symbol: str
+    name: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("name", "companyName")
+    )
+    cik: Optional[str] = None
+    isin: Optional[str] = None
+    currency: Optional[str] = None
+    stock_exchange: Optional[str] = Field(default=None, alias="stockExchange")
+    exchange_short_name: Optional[str] = Field(default=None, alias="exchangeShortName")
 
 
 class FinancialStatement(FmpModel):

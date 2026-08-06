@@ -5,14 +5,17 @@ from edgarito.config.providers import ProviderConfiguration
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     NormalizedCompanyFinancials,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.identifiers import SecurityIdentifierResolver
 from edgarito.services.providers.alphavantage import AlphaVantageClient
 from edgarito.services.providers.edgar import EdgarClient
 from edgarito.services.providers.fmp import FmpClient
+from edgarito.services.providers.openfigi import OpenFigiClient
 from edgarito.services.reconciliation.crosscheck import (
     CrosscheckReport,
     FinancialDataCrosscheckWarning,
@@ -39,14 +42,18 @@ class FinancialDataService:
         fmp_api_key: Optional[str] = None,
         providers: Optional[Mapping[ProviderName, NormalizedFinancialsProvider]] = None,
         crosschecker: Optional[FinancialsCrosschecker] = None,
+        identifier_resolver: Optional[SecurityIdentifierResolver] = None,
+        openfigi_api_key: Optional[str] = None,
     ):
         self._cache = cache
         self._configuration = provider_configuration
         self._user_agent = user_agent
         self._alphavantage_api_key = alphavantage_api_key
         self._fmp_api_key = fmp_api_key
+        self._openfigi_api_key = openfigi_api_key
         self._providers = dict(providers or {})
         self._crosschecker = crosschecker or FinancialsCrosschecker()
+        self._identifier_resolver = identifier_resolver
         self._owned_clients = []
         self.last_crosschecks: list[CrosscheckReport] = []
 
@@ -63,6 +70,11 @@ class FinancialDataService:
         *,
         ticker: Optional[str] = None,
         cik: Optional[int] = None,
+        isin: Optional[str] = None,
+        exchange: Optional[str] = None,
+        exchange_symbols: Optional[Mapping[str, str]] = None,
+        provider_symbols: Optional[Mapping[ProviderName | str, str]] = None,
+        identifiers: Optional[SecurityIdentifiers] = None,
         market: Market = Market.US,
         provider: Optional[ProviderName] = None,
         granularity: Optional[Granularity] = Granularity.ANNUAL,
@@ -73,10 +85,22 @@ class FinancialDataService:
     ) -> NormalizedCompanyFinancials:
         market = Market(market)
         provider = ProviderName(provider) if provider is not None else None
-        if (ticker is None) == (cik is None):
-            raise ValueError("Provide exactly one of ticker or cik")
-        if cik is not None and market != Market.US:
-            raise ValueError("CIK identifiers are only supported for US stocks")
+        supplied_fields = any(
+            (ticker, cik, isin, exchange, exchange_symbols, provider_symbols)
+        )
+        if identifiers is not None and supplied_fields:
+            raise ValueError(
+                "Use identifiers or individual identifier arguments, not both"
+            )
+        if identifiers is None:
+            identifiers = SecurityIdentifiers(
+                ticker=ticker,
+                cik=cik,
+                isin=isin,
+                exchange=exchange,
+                exchange_symbols=dict(exchange_symbols or {}),
+                provider_symbols=dict(provider_symbols or {}),
+            )
 
         market_configuration = self._configuration.for_market(market)
         selected_provider = provider or market_configuration.default_provider
@@ -84,14 +108,15 @@ class FinancialDataService:
             raise ValueError(
                 f"Provider '{selected_provider.value}' is not available for {market.value}"
             )
-        if cik is not None and selected_provider != ProviderName.SEC:
-            raise ValueError(
-                f"Provider '{selected_provider.value}' requires a ticker, not a CIK"
-            )
+        identifiers = await self._resolve_identifiers(
+            identifiers,
+            selected_provider,
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
 
         query = FinancialsQuery(
-            ticker=ticker,
-            cik=cik,
+            identifiers=identifiers,
             granularity=granularity,
             concepts=concepts,
             use_cache=use_cache,
@@ -100,6 +125,9 @@ class FinancialDataService:
         self.last_crosschecks = []
         primary_provider = self._provider(selected_provider)
         primary = await primary_provider.retrieve(query)
+        primary.identifiers = self._identifiers_from_result(
+            identifiers, selected_provider, primary
+        )
 
         if crosscheck:
             await self._crosscheck_available_providers(
@@ -117,20 +145,27 @@ class FinancialDataService:
         selected_provider: ProviderName,
         available_providers: tuple[ProviderName, ...],
     ) -> None:
-        ticker = query.ticker or primary.ticker
         for provider_name in available_providers:
             if provider_name == selected_provider:
                 continue
-            if not ticker:
+            identifiers = primary.identifiers or query.identifiers
+            try:
+                identifiers = await self._resolve_identifiers(
+                    identifiers,
+                    provider_name,
+                    use_cache=query.use_cache,
+                    make_cache=query.make_cache,
+                )
+            except Exception as exc:
                 warnings.warn(
-                    f"Crosscheck with {provider_name.value} skipped: no ticker is available",
+                    f"Crosscheck with {provider_name.value} skipped: {exc}",
                     FinancialDataCrosscheckWarning,
                     stacklevel=3,
                 )
                 continue
 
             crosscheck_query = FinancialsQuery(
-                ticker=ticker,
+                identifiers=identifiers,
                 granularity=query.granularity,
                 concepts=query.concepts,
                 use_cache=query.use_cache,
@@ -139,6 +174,9 @@ class FinancialDataService:
             try:
                 secondary = await self._provider(provider_name).retrieve(
                     crosscheck_query
+                )
+                secondary.identifiers = self._identifiers_from_result(
+                    identifiers, provider_name, secondary
                 )
                 report = self._crosschecker.compare(primary, secondary)
                 self.last_crosschecks.append(report)
@@ -154,6 +192,49 @@ class FinancialDataService:
                     FinancialDataCrosscheckWarning,
                     stacklevel=3,
                 )
+
+    async def _resolve_identifiers(
+        self,
+        identifiers: SecurityIdentifiers,
+        provider: ProviderName,
+        *,
+        use_cache: bool,
+        make_cache: bool,
+    ) -> SecurityIdentifiers:
+        if self._identifier_resolver is None:
+            search_client = None
+            if self._fmp_api_key:
+                search_client = FmpClient(self._cache, self._fmp_api_key)
+                self._owned_clients.append(search_client)
+            isin_search_client = OpenFigiClient(
+                self._cache, api_key=self._openfigi_api_key
+            )
+            self._owned_clients.append(isin_search_client)
+            self._identifier_resolver = SecurityIdentifierResolver(
+                search_client, isin_search_client
+            )
+        return await self._identifier_resolver.resolve(
+            identifiers,
+            provider,
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
+
+    @staticmethod
+    def _identifiers_from_result(
+        identifiers: SecurityIdentifiers,
+        provider: ProviderName,
+        result: NormalizedCompanyFinancials,
+    ) -> SecurityIdentifiers:
+        updates = {}
+        if result.ticker:
+            if provider not in identifiers.provider_symbols:
+                updates["provider_symbols"] = {provider: result.ticker}
+            if identifiers.ticker is None:
+                updates["ticker"] = result.ticker
+        if identifiers.cik is None and result.company_id.isdigit():
+            updates["cik"] = int(result.company_id)
+        return identifiers.with_updates(**updates) if updates else identifiers
 
     def _provider(self, name: ProviderName) -> NormalizedFinancialsProvider:
         existing = self._providers.get(name)

@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from edgarito.schemas.identifiers import SecurityIdentifiers
+
 
 class Sector(str, Enum):
     COMMUNICATION_SERVICES = "Communication Services"
@@ -23,6 +25,7 @@ class NormalizedCompanyClassification(BaseModel):
     company_id: str
     company_name: str
     ticker: str
+    identifiers: Optional[SecurityIdentifiers] = None
     sector: Optional[Sector] = None
     industry: Optional[str] = None
     source_sector: Optional[str] = None

@@ -31,6 +31,7 @@ from edgarito.settings import (
     EDGARITO_CACHE_DIR,
     EDGARITO_USER_AGENT,
     FMP_API_KEY,
+    OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
 
@@ -65,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[metric.value for metric in FinancialMetric],
         help="Limit output to a metric; repeat this option for multiple metrics",
     )
-    classification.add_argument("--ticker", required=True)
+    _add_identifier_arguments(classification)
     classification.add_argument(
         "--provider",
         choices=[
@@ -82,9 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_retrieval_arguments(command_parser: argparse.ArgumentParser) -> None:
-    identifier = command_parser.add_mutually_exclusive_group(required=True)
-    identifier.add_argument("--ticker", help="Stock ticker, for example AAPL")
-    identifier.add_argument("--cik", type=int, help="SEC Central Index Key")
+    _add_identifier_arguments(command_parser)
 
     command_parser.add_argument(
         "--market",
@@ -131,6 +130,31 @@ def _add_retrieval_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--verbose", action="store_true")
 
 
+def _add_identifier_arguments(command_parser: argparse.ArgumentParser) -> None:
+    identifier = command_parser.add_mutually_exclusive_group(required=True)
+    identifier.add_argument("--ticker", help="Stock ticker, for example AAPL")
+    identifier.add_argument("--cik", type=int, help="SEC Central Index Key")
+    identifier.add_argument(
+        "--isin", help="12-character ISIN, for example US0378331005"
+    )
+    command_parser.add_argument(
+        "--exchange",
+        help="Exchange used to disambiguate a ticker or identifier, for example XETRA",
+    )
+    command_parser.add_argument(
+        "--exchange-symbol",
+        action="append",
+        metavar="EXCHANGE=SYMBOL",
+        help="Map an exchange to its symbol; repeat for multiple exchanges",
+    )
+    command_parser.add_argument(
+        "--provider-symbol",
+        action="append",
+        metavar="PROVIDER=SYMBOL",
+        help="Map a provider to its symbol; repeat for multiple providers",
+    )
+
+
 async def _run_financials(args: argparse.Namespace) -> int:
     _validate_limit(args.limit)
     granularity = _granularity(args.period)
@@ -168,9 +192,15 @@ async def _run_classification(args: argparse.Namespace) -> int:
         provider_configuration=CLASSIFICATION_PROVIDER_CONFIGURATION,
         alphavantage_api_key=ALPHAVANTAGE_API_KEY,
         fmp_api_key=FMP_API_KEY,
+        openfigi_api_key=OPENFIGI_API_KEY,
     ) as service:
         classification = await service.retrieve(
             ticker=args.ticker,
+            cik=args.cik,
+            isin=args.isin,
+            exchange=args.exchange,
+            exchange_symbols=_parse_mappings(args.exchange_symbol, "--exchange-symbol"),
+            provider_symbols=_parse_provider_symbols(args.provider_symbol),
             provider=ProviderName(args.provider) if args.provider else None,
             use_cache=not args.refresh,
             make_cache=True,
@@ -192,10 +222,15 @@ async def _retrieve_financials(
         user_agent=args.user_agent,
         alphavantage_api_key=ALPHAVANTAGE_API_KEY,
         fmp_api_key=FMP_API_KEY,
+        openfigi_api_key=OPENFIGI_API_KEY,
     ) as service:
         return await service.retrieve(
             ticker=args.ticker,
             cik=args.cik,
+            isin=args.isin,
+            exchange=args.exchange,
+            exchange_symbols=_parse_mappings(args.exchange_symbol, "--exchange-symbol"),
+            provider_symbols=_parse_provider_symbols(args.provider_symbol),
             market=Market(args.market),
             provider=ProviderName(args.provider) if args.provider else None,
             granularity=granularity,
@@ -213,6 +248,34 @@ def _granularity(period: str) -> Optional[Granularity]:
 def _validate_limit(limit: int) -> None:
     if limit < 1:
         raise ValueError("--limit must be at least 1")
+
+
+def _parse_mappings(values: Optional[list[str]], option: str) -> dict[str, str]:
+    mappings = {}
+    for value in values or []:
+        key, separator, mapped_value = value.partition("=")
+        key = key.strip()
+        mapped_value = mapped_value.strip()
+        if not separator or not key or not mapped_value:
+            raise ValueError(f"{option} must use NAME=SYMBOL syntax")
+        normalized_key = key.lower()
+        if normalized_key in mappings:
+            raise ValueError(f"Duplicate {option} mapping for {key}")
+        mappings[normalized_key] = mapped_value
+    return mappings
+
+
+def _parse_provider_symbols(values: Optional[list[str]]) -> dict[ProviderName, str]:
+    raw_mappings = _parse_mappings(values, "--provider-symbol")
+    try:
+        return {
+            ProviderName(provider): symbol for provider, symbol in raw_mappings.items()
+        }
+    except ValueError as exc:
+        choices = ", ".join(provider.value for provider in ProviderName)
+        raise ValueError(
+            f"Unknown provider in --provider-symbol; choose one of: {choices}"
+        ) from exc
 
 
 def main(argv: Optional[list[str]] = None) -> int:

@@ -16,9 +16,12 @@ cache_path=./cache
 user_agent="Your Name (your-email@example.com)"
 alphavantage_api_key="your-api-key"
 fmp_key="your-api-key"
+# Optional: raises the rate limit for otherwise free ISIN mapping.
+# openfigi_api_key="your-api-key"
 ```
 
-Replace the placeholders needed by the providers you use.
+Replace the placeholders needed by the providers you use. OpenFIGI does not
+require a key; omit `openfigi_api_key` unless you want its higher rate limit.
 
 `user_agent` is required only when the SEC provider is selected. The SEC asks clients to identify themselves with contact information. `alphavantage_api_key` and `fmp_key` are required only for their respective providers. `cache_path` defaults to `cache` when omitted.
 
@@ -28,6 +31,7 @@ The CLI reads `.env` automatically. `--user-agent` and `--cache-dir` override th
 
 ```bash
 uv run edgarito financials --ticker AAPL
+uv run edgarito financials --isin US0378331005 --provider fmp
 uv run edgarito financials --ticker AAPL --period quarterly --limit 8
 uv run edgarito financials --cik 320193 --period all
 uv run edgarito financials --ticker AAPL --concept revenue --concept net_income
@@ -37,6 +41,67 @@ uv run edgarito financials --ticker SAP.DEX --market eu
 uv run edgarito financials --ticker RACE --market eu --period quarterly --limit 8
 uv run edgarito financials --ticker AAPL --crosscheck
 ```
+
+## Security identifiers and symbol mappings
+
+Every financials, metrics, and classification command accepts a ticker, CIK, or
+ISIN as its primary identifier. A CIK can be used directly with SEC. ISINs are
+mapped through OpenFIGI's free public API and the result is cached. Resolving a
+CIK for a symbol-based provider or an exchange-qualified ticker uses FMP's search
+directory and therefore requires `fmp_key`:
+
+```bash
+uv run edgarito financials --isin US0378331005 --provider fmp
+uv run edgarito financials --cik 320193 --provider fmp
+uv run edgarito financials --ticker RACE --exchange MIL --provider fmp
+```
+
+Use explicit mappings when providers spell the same listing differently. They
+also avoid a lookup and are used during crosschecks:
+
+```bash
+uv run edgarito financials \
+  --ticker SAP \
+  --market eu \
+  --exchange XETRA \
+  --exchange-symbol XETRA=SAP.DE \
+  --provider-symbol alphavantage=SAP.DEX \
+  --provider-symbol fmp=SAP.DE \
+  --crosscheck
+```
+
+Symbol precedence is provider mapping, selected exchange mapping, then canonical
+ticker. `--exchange-symbol` and `--provider-symbol` can each be repeated. If an
+ISIN has several listings, add `--exchange` or an explicit provider mapping to
+remove the ambiguity. See the official
+[OpenFIGI mapping documentation](https://www.openfigi.com/api/documentation) and
+FMP's [exchange variants documentation](https://site.financialmodelingprep.com/developer/docs/stable/search-exchange-variants).
+
+Programmatic callers can pass the same fields individually or use one reusable
+mapping object:
+
+```python
+from edgarito.enums.provider import ProviderName
+from edgarito.schemas.identifiers import SecurityIdentifiers
+
+
+identifiers = SecurityIdentifiers(
+    ticker="SAP",
+    isin="DE0007164600",
+    exchange="XETRA",
+    exchange_symbols={"XETRA": "SAP.DE"},
+    provider_symbols={
+        ProviderName.ALPHAVANTAGE: "SAP.DEX",
+        ProviderName.FMP: "SAP.DE",
+    },
+)
+
+financials = await service.retrieve(identifiers=identifiers, market="eu")
+```
+
+Resolved and explicit mappings are retained on
+`NormalizedCompanyFinancials.identifiers` and
+`NormalizedCompanyClassification.identifiers` for traceability.
 
 You can also run the Python module directly:
 

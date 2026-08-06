@@ -1,5 +1,4 @@
 
-- **Add identifier mappings** such as ISIN, CIK, exchange-specific symbols, and provider symbols
 - **Compute parametrized forecasts**
 - **Add valuation methods**
    - DCF first
@@ -10,3 +9,5 @@
    - CSV/Excel can arrive earlier for raw financials and metrics
    - PDF should wait until the report structure stabilizes
 - **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs
+- Add a portfolio feature, that will do actions/report for the whole portfolio.
+- Autochoose provider when multiple : keep the one with most recent data, or with more results.

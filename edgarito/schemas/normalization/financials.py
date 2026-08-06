@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.identifiers import SecurityIdentifiers
 
 
 class FinancialStatement(str, Enum):
@@ -90,6 +91,7 @@ class NormalizedCompanyFinancials(BaseModel):
     company_id: str
     company_name: str
     ticker: Optional[str] = None
+    identifiers: Optional[SecurityIdentifiers] = None
     observations: list[FinancialObservation] = Field(default_factory=list)
 
     def filtered(
