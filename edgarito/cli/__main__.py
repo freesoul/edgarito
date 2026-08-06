@@ -24,8 +24,10 @@ from edgarito.schemas.normalization.financials import (
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.forecasting import (
-    FreeCashFlowForecastParameters,
-    FreeCashFlowForecastService,
+    FcffForecastParameters,
+    FcffForecastService,
+    SimplifiedFcfForecastParameters,
+    SimplifiedFcfForecastService,
 )
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.reconciliation.classification import (
@@ -65,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         "metrics", help="Calculate metrics from normalized financials"
     )
     forecast = subparsers.add_parser(
-        "forecast", help="Project annual free cash flow from explicit assumptions"
+        "forecast", help="Project annual driver-based FCFF"
     )
     valuation_models = subparsers.add_parser(
         "valuation-models",
@@ -93,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit output to a metric; repeat this option for multiple metrics",
     )
     forecast.add_argument(
+        "--forecast-method",
+        "--method",
+        choices=("fcff", "simplified"),
+        default="fcff",
+        help="Forecast method (default: fcff)",
+    )
+    forecast.add_argument(
         "--years",
         type=int,
         default=5,
@@ -109,13 +118,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     forecast.add_argument(
+        "--operating-margin",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="EBIT margin; provide once or once per forecast year",
+    )
+    forecast.add_argument(
+        "--tax-rate",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Normalized operating tax rate; provide once or once per forecast year",
+    )
+    forecast.add_argument(
+        "--depreciation-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="D&A as a percentage of revenue; provide once or per forecast year",
+    )
+    forecast.add_argument(
+        "--capex-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Capex as a percentage of revenue; provide once or per forecast year",
+    )
+    forecast.add_argument(
+        "--operating-working-capital-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help=(
+            "Operating working capital as a percentage of revenue; provide once "
+            "or per forecast year"
+        ),
+    )
+    forecast.add_argument(
         "--fcf-margin",
         type=_percentage,
         action="append",
         metavar="PERCENT",
         help=(
-            "FCF margin in percentage points; provide once for a constant margin "
-            "or once per forecast year"
+            "FCF margin for --forecast-method simplified; provide once or once "
+            "per forecast year"
         ),
     )
     forecast.add_argument(
@@ -288,18 +335,50 @@ async def _run_metrics(args: argparse.Namespace) -> int:
 
 
 async def _run_forecast(args: argparse.Namespace) -> int:
-    parameters = FreeCashFlowForecastParameters(
-        forecast_years=args.years,
-        revenue_growth=args.revenue_growth,
-        free_cash_flow_margin=args.fcf_margin,
-        historical_window=args.historical_window,
+    fcff_driver_arguments = (
+        args.operating_margin,
+        args.tax_rate,
+        args.depreciation_to_revenue,
+        args.capex_to_revenue,
+        args.operating_working_capital_to_revenue,
     )
+    if args.forecast_method == "simplified":
+        if any(value is not None for value in fcff_driver_arguments):
+            raise ValueError(
+                "FCFF driver options cannot be used with --forecast-method simplified"
+            )
+        parameters = SimplifiedFcfForecastParameters(
+            forecast_years=args.years,
+            revenue_growth=args.revenue_growth,
+            free_cash_flow_margin=args.fcf_margin,
+            historical_window=args.historical_window,
+        )
+        service = SimplifiedFcfForecastService()
+    else:
+        if args.fcf_margin is not None:
+            raise ValueError(
+                "--fcf-margin requires --forecast-method simplified; use the "
+                "FCFF operating, tax, D&A, capex, and working-capital drivers"
+            )
+        parameters = FcffForecastParameters(
+            forecast_years=args.years,
+            revenue_growth=args.revenue_growth,
+            operating_margin=args.operating_margin,
+            tax_rate=args.tax_rate,
+            depreciation_to_revenue=args.depreciation_to_revenue,
+            capex_to_revenue=args.capex_to_revenue,
+            operating_working_capital_to_revenue=(
+                args.operating_working_capital_to_revenue
+            ),
+            historical_window=args.historical_window,
+        )
+        service = FcffForecastService()
     financials = await _retrieve_financials(
         args,
         Granularity.ANNUAL,
-        FreeCashFlowForecastService.required_concepts(),
+        service.required_concepts(),
     )
-    forecast = FreeCashFlowForecastService().forecast(financials, parameters)
+    forecast = service.forecast(financials, parameters)
     print(ForecastConsolePresenter().render(forecast))
     return 0
 

@@ -14,10 +14,16 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.services.forecasting import (
+    FcffForecast,
+    FcffForecastDriver,
+    FcffForecastParameters,
+    FcffForecastService,
     ForecastAssumptionSource,
-    FreeCashFlowForecastParameters,
     FreeCashFlowForecastService,
+    SimplifiedFcfForecastParameters,
+    SimplifiedFcfForecastService,
 )
+from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 
@@ -67,13 +73,13 @@ def _financials() -> NormalizedCompanyFinancials:
 
 
 def test_forecasts_fcf_with_constant_explicit_assumptions():
-    parameters = FreeCashFlowForecastParameters(
+    parameters = SimplifiedFcfForecastParameters(
         forecast_years=2,
         revenue_growth=Decimal("10"),
         free_cash_flow_margin=Decimal("12.5"),
     )
 
-    forecast = FreeCashFlowForecastService().forecast(_financials(), parameters)
+    forecast = SimplifiedFcfForecastService().forecast(_financials(), parameters)
 
     assert forecast.base_fiscal_year == 2024
     assert forecast.base_revenue == Decimal("120")
@@ -92,13 +98,13 @@ def test_forecasts_fcf_with_constant_explicit_assumptions():
 
 
 def test_forecasts_with_year_specific_paths():
-    parameters = FreeCashFlowForecastParameters(
+    parameters = SimplifiedFcfForecastParameters(
         forecast_years=2,
         revenue_growth=(Decimal("10"), Decimal("5")),
         free_cash_flow_margin=(Decimal("10"), Decimal("12")),
     )
 
-    forecast = FreeCashFlowForecastService().forecast(_financials(), parameters)
+    forecast = SimplifiedFcfForecastService().forecast(_financials(), parameters)
 
     assert [observation.revenue_growth for observation in forecast.observations] == [
         Decimal("10"),
@@ -111,9 +117,9 @@ def test_forecasts_with_year_specific_paths():
 
 
 def test_infers_trailing_average_growth_and_fcf_margin():
-    parameters = FreeCashFlowForecastParameters(forecast_years=1)
+    parameters = SimplifiedFcfForecastParameters(forecast_years=1)
 
-    forecast = FreeCashFlowForecastService().forecast(_financials(), parameters)
+    forecast = SimplifiedFcfForecastService().forecast(_financials(), parameters)
 
     assert forecast.revenue_growth_source == ForecastAssumptionSource.TRAILING_AVERAGE
     assert (
@@ -129,7 +135,7 @@ def test_infers_trailing_average_growth_and_fcf_margin():
 
 def test_parameters_reject_an_incomplete_year_specific_path():
     with pytest.raises(ValueError, match="must contain one value or 3 values"):
-        FreeCashFlowForecastParameters(
+        SimplifiedFcfForecastParameters(
             forecast_years=3,
             revenue_growth=(Decimal("5"), Decimal("4")),
         )
@@ -147,10 +153,199 @@ def test_forecast_reports_missing_annual_inputs():
     )
 
     with pytest.raises(ValueError, match="requires annual revenue"):
-        FreeCashFlowForecastService().forecast(financials)
+        SimplifiedFcfForecastService().forecast(financials)
 
 
-def test_cli_forecasts_from_cached_sec_data(tmp_path, capsys):
+def _fcff_financials() -> NormalizedCompanyFinancials:
+    financials = _financials()
+    values = {
+        2023: {
+            FinancialConcept.OPERATING_INCOME: "20",
+            FinancialConcept.PRETAX_INCOME: "18",
+            FinancialConcept.INCOME_TAX_EXPENSE: "3.6",
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "4",
+            FinancialConcept.ACCOUNTS_RECEIVABLE: "15",
+            FinancialConcept.INVENTORY: "10",
+            FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "5",
+            FinancialConcept.ACCOUNTS_PAYABLE: "8",
+            FinancialConcept.ACCRUED_LIABILITIES: "4",
+            FinancialConcept.DEFERRED_REVENUE_CURRENT: "2",
+        },
+        2024: {
+            FinancialConcept.OPERATING_INCOME: "30",
+            FinancialConcept.PRETAX_INCOME: "24",
+            FinancialConcept.INCOME_TAX_EXPENSE: "4.8",
+            FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "5",
+            FinancialConcept.ACCOUNTS_RECEIVABLE: "18",
+            FinancialConcept.INVENTORY: "12",
+            FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "6",
+            FinancialConcept.ACCOUNTS_PAYABLE: "9",
+            FinancialConcept.ACCRUED_LIABILITIES: "5",
+            FinancialConcept.DEFERRED_REVENUE_CURRENT: "2",
+        },
+    }
+    return financials.model_copy(
+        update={
+            "observations": [
+                *financials.observations,
+                *[
+                    _observation(concept, value, fiscal_year)
+                    for fiscal_year, period_values in values.items()
+                    for concept, value in period_values.items()
+                ],
+            ]
+        }
+    )
+
+
+def test_driver_based_fcff_forecasts_the_full_operating_bridge():
+    parameters = FcffForecastParameters(
+        forecast_years=2,
+        revenue_growth=(Decimal("10"), Decimal("5")),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        capex_to_revenue=Decimal("6"),
+        operating_working_capital_to_revenue=Decimal("15"),
+    )
+
+    forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
+
+    assert forecast.method == "driver_based_fcff"
+    assert forecast.base_operating_working_capital == Decimal("20")
+    assert forecast.base_tax_rate == Decimal("20.0")
+    assert forecast.base_nopat == Decimal("24.0")
+    assert forecast.base_fcff == Decimal("19.0")
+    first, second = forecast.observations
+    assert first.revenue == Decimal("132.0")
+    assert first.operating_income == Decimal("33.000")
+    assert first.nopat == Decimal("26.4000")
+    assert first.depreciation_and_amortization == Decimal("5.280")
+    assert first.capital_expenditures == Decimal("7.920")
+    assert first.change_in_operating_working_capital == Decimal("-0.20")
+    assert first.fcff == Decimal("23.9600")
+    assert second.fcff == Decimal("23.95800")
+    assert first.formula.startswith("NOPAT + depreciation")
+    assert FcffForecast.model_validate_json(forecast.model_dump_json()) == forecast
+
+
+def test_fcff_infers_each_omitted_driver_from_trailing_history():
+    forecast = FcffForecastService().forecast(
+        _fcff_financials(), FcffForecastParameters(forecast_years=1)
+    )
+
+    assert set(forecast.assumption_sources) == set(FcffForecastDriver)
+    assert set(forecast.assumption_sources.values()) == {
+        ForecastAssumptionSource.TRAILING_AVERAGE
+    }
+    observation = forecast.observations[0]
+    assert observation.revenue_growth == Decimal("20.0")
+    assert observation.operating_margin == Decimal("22.500")
+    assert observation.tax_rate == Decimal("20.0")
+    assert observation.fcff == (
+        observation.nopat
+        + observation.depreciation_and_amortization
+        - observation.capital_expenditures
+        - observation.change_in_operating_working_capital
+    )
+
+
+def test_generic_forecast_service_is_the_fcff_default():
+    assert FreeCashFlowForecastService is FcffForecastService
+    assert FcffForecastService.required_concepts() == (
+        FinancialMetricsService.required_concepts({FinancialMetric.FCFF})
+        | {FinancialConcept.REVENUE}
+    )
+
+
+def test_fcff_reports_periods_missing_both_liability_representations():
+    financials = _fcff_financials().model_copy(
+        update={
+            "observations": [
+                item
+                for item in _fcff_financials().observations
+                if item.concept != FinancialConcept.ACCRUED_LIABILITIES
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="working-capital liabilities"):
+        FcffForecastService().forecast(financials)
+
+
+def test_fcff_falls_back_to_aggregate_current_liabilities_for_working_capital():
+    financials = _fcff_financials()
+    current_liabilities = {2023: "14", 2024: "16"}
+    financials = financials.model_copy(
+        update={
+            "observations": [
+                item
+                for item in financials.observations
+                if item.concept != FinancialConcept.ACCRUED_LIABILITIES
+            ]
+            + [
+                _observation(
+                    FinancialConcept.CURRENT_LIABILITIES,
+                    value,
+                    fiscal_year,
+                )
+                for fiscal_year, value in current_liabilities.items()
+            ]
+        }
+    )
+
+    forecast = FcffForecastService().forecast(
+        financials,
+        FcffForecastParameters(
+            forecast_years=1,
+            revenue_growth=Decimal("5"),
+            operating_margin=Decimal("25"),
+            tax_rate=Decimal("20"),
+            depreciation_to_revenue=Decimal("4"),
+            capex_to_revenue=Decimal("5"),
+            operating_working_capital_to_revenue=Decimal("10"),
+        ),
+    )
+
+    assert forecast.base_operating_working_capital == Decimal("20")
+    assert forecast.base_fcff == Decimal("19.0")
+
+
+def test_fcff_accepts_inventory_folded_into_other_current_assets():
+    financials = _fcff_financials()
+    combined_other_assets = {2023: "15", 2024: "18"}
+    financials = financials.model_copy(
+        update={
+            "observations": [
+                item
+                for item in financials.observations
+                if item.concept
+                not in {
+                    FinancialConcept.INVENTORY,
+                    FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+                }
+            ]
+            + [
+                _observation(
+                    FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+                    value,
+                    fiscal_year,
+                )
+                for fiscal_year, value in combined_other_assets.items()
+            ]
+        }
+    )
+
+    forecast = FcffForecastService().forecast(
+        financials,
+        FcffForecastParameters(forecast_years=1),
+    )
+
+    assert forecast.historical_fiscal_years == (2023, 2024)
+    assert forecast.base_operating_working_capital == Decimal("20")
+
+
+def test_cli_defaults_to_driver_based_fcff_from_cached_sec_data(tmp_path, capsys):
     ticker_path = (
         tmp_path
         / "providers"
@@ -186,8 +381,16 @@ def test_cli_forecasts_from_cached_sec_data(tmp_path, capsys):
             "2",
             "--revenue-growth",
             "5",
-            "--fcf-margin",
-            "20",
+            "--operating-margin",
+            "25",
+            "--tax-rate",
+            "21",
+            "--depreciation-to-revenue",
+            "4",
+            "--capex-to-revenue",
+            "3",
+            "--operating-working-capital-to-revenue",
+            "10",
             "--cache-dir",
             str(tmp_path),
             "--user-agent",
@@ -198,8 +401,33 @@ def test_cli_forecasts_from_cached_sec_data(tmp_path, capsys):
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "AAPL - Apple Inc." in output
-    assert "Method: projected revenue × free cash flow margin" in output
-    assert "Revenue growth assumptions: explicit" in output
+    assert "Method: driver-based FCFF" in output
+    assert "Revenue Growth: explicit" in output
     assert "FY2026E" in output
     assert "FY2027E" in output
-    assert "Free Cash Flow (USD B)" in output
+    assert "FCFF (USD B)" in output
+
+    simplified_exit_code = main(
+        [
+            "forecast",
+            "--ticker",
+            "AAPL",
+            "--method",
+            "simplified",
+            "--years",
+            "1",
+            "--revenue-growth",
+            "5",
+            "--fcf-margin",
+            "20",
+            "--cache-dir",
+            str(tmp_path),
+            "--user-agent",
+            "Edgarito Tests (tests@example.com)",
+        ]
+    )
+    simplified_output = capsys.readouterr().out
+    assert simplified_exit_code == 0
+    assert "Method: simplified projected revenue × free cash flow margin" in (
+        simplified_output
+    )

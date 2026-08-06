@@ -21,6 +21,7 @@ class ConceptDefinition:
     instant: bool = False
     taxonomy: str = "us-gaap"
     additive: bool = True
+    fallback_component_groups: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,10 @@ CONCEPT_DEFINITIONS = (
             "DepreciationAmortizationAndAccretionNet",
             "DepreciationAndAmortization",
         ),
+        fallback_component_groups=(
+            ("Depreciation", "AmortizationOfIntangibleAssets"),
+            ("Depreciation",),
+        ),
     ),
     ConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
@@ -309,6 +314,21 @@ class SecUsGaapNormalizer:
                         observations.append(observation)
                         selected_periods.add(period_key)
 
+            for component_group in definition.fallback_component_groups:
+                for observation in self._normalize_component_fallback(
+                    definition,
+                    taxonomy_facts,
+                    component_group,
+                ):
+                    period_key = (
+                        observation.granularity,
+                        observation.fiscal_year,
+                        observation.fiscal_period,
+                    )
+                    if period_key not in selected_periods:
+                        observations.append(observation)
+                        selected_periods.add(period_key)
+
         if granularity is not None:
             observations = [o for o in observations if o.granularity == granularity]
 
@@ -320,6 +340,74 @@ class SecUsGaapNormalizer:
             ticker=ticker.upper() if ticker else None,
             observations=observations,
         )
+
+    def _normalize_component_fallback(
+        self,
+        definition: ConceptDefinition,
+        taxonomy_facts,
+        component_group: tuple[str, ...],
+    ) -> list[FinancialObservation]:
+        """Compose a canonical concept when the filer reports all atomic parts."""
+        by_component: list[
+            dict[tuple[Granularity, int, FiscalPeriod], FinancialObservation]
+        ] = []
+        for source_concept in component_group:
+            fact = taxonomy_facts.get(source_concept)
+            if fact is None:
+                return []
+            candidates = self._deduplicate_periods(
+                source_concept,
+                definition.unit,
+                fact.units.get(definition.unit),
+            )
+            normalized = (
+                self._normalize_instant(definition, candidates)
+                if definition.instant
+                else self._normalize_duration(definition, candidates)
+            )
+            by_component.append(
+                {
+                    (
+                        observation.granularity,
+                        observation.fiscal_year,
+                        observation.fiscal_period,
+                    ): observation
+                    for observation in normalized
+                }
+            )
+
+        common_periods = set.intersection(
+            *(set(component) for component in by_component)
+        )
+        results = []
+        source_label = " + ".join(component_group)
+        derivation_kind = (
+            ObservationDerivationKind.COMPONENT_AGGREGATION
+            if len(component_group) > 1
+            else ObservationDerivationKind.CONCEPT_FALLBACK
+        )
+        for period_key in common_periods:
+            components = [component[period_key] for component in by_component]
+            if len({component.unit for component in components}) != 1:
+                continue
+            base = max(
+                components,
+                key=lambda component: component.filed or datetime.date.min,
+            )
+            results.append(
+                base.model_copy(
+                    update={
+                        "value": sum(
+                            (component.value for component in components),
+                            start=0,
+                        ),
+                        "source_concept": source_label,
+                        "derivation_kind": derivation_kind,
+                        "derivation": f"{definition.concept.value} = {source_label}",
+                    }
+                )
+            )
+        return results
 
     def _deduplicate_periods(
         self,
@@ -370,7 +458,13 @@ class SecUsGaapNormalizer:
             if fiscal_year is None or fiscal_period is None:
                 continue
 
-            if fiscal_period == FiscalPeriod.FY:
+            if self._is_comparative_fiscal_year_end(candidate, candidates):
+                fiscal_year = candidate.identity.end.year
+                annual_key = (Granularity.ANNUAL, fiscal_year, FiscalPeriod.FY)
+                quarterly_key = (Granularity.QUARTERLY, fiscal_year, FiscalPeriod.Q4)
+                self._choose_latest(chosen, annual_key, candidate)
+                self._choose_latest(chosen, quarterly_key, candidate)
+            elif fiscal_period == FiscalPeriod.FY:
                 annual_key = (Granularity.ANNUAL, fiscal_year, FiscalPeriod.FY)
                 quarterly_key = (Granularity.QUARTERLY, fiscal_year, FiscalPeriod.Q4)
                 self._choose_latest(chosen, annual_key, candidate)
@@ -390,6 +484,23 @@ class SecUsGaapNormalizer:
                 )
             )
         return results
+
+    @staticmethod
+    def _is_comparative_fiscal_year_end(
+        candidate: _Candidate,
+        candidates: list[_Candidate],
+    ) -> bool:
+        """Identify a prior FY balance first disclosed in a quarterly filing."""
+        identity = candidate.identity
+        if identity.fp not in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3):
+            return False
+        return any(
+            other.identity.accn == identity.accn
+            and other.identity.fy == identity.fy
+            and other.identity.fp == identity.fp
+            and other.identity.end > identity.end
+            for other in candidates
+        )
 
     def _normalize_duration(
         self,

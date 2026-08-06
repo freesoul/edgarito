@@ -8,16 +8,17 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import (
     ForecastAssumptionSource,
-    FreeCashFlowForecast,
-    FreeCashFlowForecastObservation,
-    FreeCashFlowForecastParameters,
+    SimplifiedFcfForecast,
+    SimplifiedFcfForecastObservation,
+    SimplifiedFcfForecastParameters,
 )
 
 
-class FreeCashFlowForecastService:
-    """Build deterministic annual FCF forecasts from normalized financials."""
+class SimplifiedFcfForecastService:
+    """Build simplified revenue-times-FCF-margin scenario forecasts."""
 
     _REQUIRED_CONCEPTS = {
         FinancialConcept.REVENUE,
@@ -32,9 +33,9 @@ class FreeCashFlowForecastService:
     def forecast(
         self,
         financials: NormalizedCompanyFinancials,
-        parameters: FreeCashFlowForecastParameters | None = None,
-    ) -> FreeCashFlowForecast:
-        parameters = parameters or FreeCashFlowForecastParameters()
+        parameters: SimplifiedFcfForecastParameters | None = None,
+    ) -> SimplifiedFcfForecast:
+        parameters = parameters or SimplifiedFcfForecastParameters()
         periods = self._complete_annual_periods(financials)
         if not periods:
             raise ValueError(
@@ -58,7 +59,7 @@ class FreeCashFlowForecastService:
             projected_revenue *= Decimal(1) + growth / Decimal(100)
             projected_fcf = projected_revenue * margin / Decimal(100)
             observations.append(
-                FreeCashFlowForecastObservation(
+                SimplifiedFcfForecastObservation(
                     forecast_year=index,
                     fiscal_year=base_year + index,
                     period_end=self._future_date(base_revenue.period_end, index),
@@ -70,7 +71,7 @@ class FreeCashFlowForecastService:
                 )
             )
 
-        return FreeCashFlowForecast(
+        return SimplifiedFcfForecast(
             provider=financials.provider,
             company_id=financials.company_id,
             company_name=financials.company_name,
@@ -90,7 +91,7 @@ class FreeCashFlowForecastService:
 
     def _growth_path(
         self,
-        parameters: FreeCashFlowForecastParameters,
+        parameters: SimplifiedFcfForecastParameters,
         historical_periods: list[
             tuple[int, dict[FinancialConcept, FinancialObservation]]
         ],
@@ -131,7 +132,7 @@ class FreeCashFlowForecastService:
 
     def _margin_path(
         self,
-        parameters: FreeCashFlowForecastParameters,
+        parameters: SimplifiedFcfForecastParameters,
         historical_periods: list[
             tuple[int, dict[FinancialConcept, FinancialObservation]]
         ],
@@ -177,11 +178,11 @@ class FreeCashFlowForecastService:
 
         complete = []
         for fiscal_year, values in sorted(by_year.items()):
-            if not FreeCashFlowForecastService._REQUIRED_CONCEPTS <= values.keys():
+            if not SimplifiedFcfForecastService._REQUIRED_CONCEPTS <= values.keys():
                 continue
             units = {
                 values[concept].unit
-                for concept in FreeCashFlowForecastService._REQUIRED_CONCEPTS
+                for concept in SimplifiedFcfForecastService._REQUIRED_CONCEPTS
             }
             if len(units) != 1:
                 continue
@@ -207,3 +208,10 @@ class FreeCashFlowForecastService:
             return base_date.replace(year=base_date.year + years)
         except ValueError:
             return base_date.replace(year=base_date.year + years, day=28)
+
+
+# Keep the historical module-level import pointed at the new default.
+FreeCashFlowForecastService = FcffForecastService
+
+
+__all__ = ["FreeCashFlowForecastService", "SimplifiedFcfForecastService"]

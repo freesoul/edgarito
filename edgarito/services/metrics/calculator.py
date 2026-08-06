@@ -17,15 +17,34 @@ from edgarito.services.metrics.models import (
 
 PeriodKey = tuple[int, FiscalPeriod]
 
-OPERATING_WORKING_CAPITAL_CONCEPTS = frozenset(
+OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS = frozenset(
     {
         FinancialConcept.ACCOUNTS_RECEIVABLE,
-        FinancialConcept.INVENTORY,
         FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+    }
+)
+OPERATING_WORKING_CAPITAL_ASSET_CONCEPTS = (
+    OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
+    | {FinancialConcept.INVENTORY}
+)
+OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS = frozenset(
+    {
         FinancialConcept.ACCOUNTS_PAYABLE,
         FinancialConcept.ACCRUED_LIABILITIES,
         FinancialConcept.DEFERRED_REVENUE_CURRENT,
     }
+)
+OPERATING_WORKING_CAPITAL_AGGREGATE_LIABILITY_CONCEPTS = frozenset(
+    {
+        FinancialConcept.CURRENT_LIABILITIES,
+        FinancialConcept.SHORT_TERM_DEBT,
+        FinancialConcept.LONG_TERM_DEBT_CURRENT,
+    }
+)
+OPERATING_WORKING_CAPITAL_CONCEPTS = (
+    OPERATING_WORKING_CAPITAL_ASSET_CONCEPTS
+    | OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS
+    | OPERATING_WORKING_CAPITAL_AGGREGATE_LIABILITY_CONCEPTS
 )
 DEBT_CONCEPTS = frozenset(
     {
@@ -114,6 +133,92 @@ METRIC_CONCEPTS: dict[FinancialMetric, frozenset[FinancialConcept]] = {
         {FinancialConcept.OPERATING_CASH_FLOW, FinancialConcept.NET_INCOME}
     ),
 }
+
+
+def operating_working_capital_input_concepts(
+    observations: dict[FinancialConcept, FinancialObservation],
+) -> tuple[FinancialConcept, ...]:
+    """Return the concepts used by the best available OWC calculation."""
+    if OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS <= observations.keys():
+        concepts = (
+            OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
+            | OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS
+        )
+    elif FinancialConcept.CURRENT_LIABILITIES in observations:
+        concepts = OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS | {
+            FinancialConcept.CURRENT_LIABILITIES,
+            *(
+                concept
+                for concept in (
+                    FinancialConcept.SHORT_TERM_DEBT,
+                    FinancialConcept.LONG_TERM_DEBT_CURRENT,
+                )
+                if concept in observations
+            ),
+        }
+    else:
+        return ()
+    if FinancialConcept.INVENTORY in observations:
+        concepts = concepts | {FinancialConcept.INVENTORY}
+    return tuple(sorted(concepts, key=lambda concept: concept.value))
+
+
+def operating_working_capital_formula(
+    observations: dict[FinancialConcept, FinancialObservation],
+) -> str:
+    if OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS <= observations.keys():
+        return (
+            "receivables + separately reported inventory + prepaid/other current "
+            "assets - payables - accrued liabilities - current deferred revenue"
+        )
+    return (
+        "receivables + separately reported inventory + prepaid/other current "
+        "assets - current liabilities + reported current debt"
+    )
+
+
+def operating_working_capital_value(
+    observations: Optional[dict[FinancialConcept, FinancialObservation]],
+) -> Optional[FinancialObservation]:
+    """Calculate OWC from detailed liabilities or a current-liability residual."""
+    if observations is None or not (
+        OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS <= observations.keys()
+    ):
+        return None
+
+    asset_terms = (
+        (observations.get(FinancialConcept.ACCOUNTS_RECEIVABLE), 1),
+        (observations.get(FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS), 1),
+        *(
+            ((observations[FinancialConcept.INVENTORY], 1),)
+            if FinancialConcept.INVENTORY in observations
+            else ()
+        ),
+    )
+
+    if OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS <= observations.keys():
+        terms = asset_terms + (
+            (observations.get(FinancialConcept.ACCOUNTS_PAYABLE), -1),
+            (observations.get(FinancialConcept.ACCRUED_LIABILITIES), -1),
+            (observations.get(FinancialConcept.DEFERRED_REVENUE_CURRENT), -1),
+        )
+    elif FinancialConcept.CURRENT_LIABILITIES in observations:
+        # A missing current-debt tag means the filing reported no value under the
+        # supported debt concepts; only explicitly reported debt is added back.
+        terms = asset_terms + (
+            (observations.get(FinancialConcept.CURRENT_LIABILITIES), -1),
+            *(
+                (observations[concept], 1)
+                for concept in (
+                    FinancialConcept.SHORT_TERM_DEBT,
+                    FinancialConcept.LONG_TERM_DEBT_CURRENT,
+                )
+                if concept in observations
+            ),
+        )
+    else:
+        return None
+    return FinancialMetricsService._combine_amounts(terms)
 
 
 class FinancialMetricsService:
@@ -347,7 +452,7 @@ class FinancialMetricsService:
                 ),
             )
 
-        operating_working_capital = self._operating_working_capital(current)
+        operating_working_capital = operating_working_capital_value(current)
         if (
             FinancialMetric.OPERATING_WORKING_CAPITAL in selected_metrics
             and operating_working_capital is not None
@@ -359,15 +464,14 @@ class FinancialMetricsService:
                 provider,
                 granularity,
                 period,
-                "receivables + inventory + prepaid/other current assets - "
-                "payables - accrued liabilities - current deferred revenue",
-                tuple(
-                    sorted(OPERATING_WORKING_CAPITAL_CONCEPTS, key=lambda c: c.value)
-                ),
+                operating_working_capital_formula(current),
+                operating_working_capital_input_concepts(current),
             )
 
         previous_operating_working_capital = (
-            self._operating_working_capital(previous) if previous is not None else None
+            operating_working_capital_value(previous)
+            if previous is not None
+            else None
         )
         change_in_operating_working_capital = self._combine_amounts(
             (
@@ -567,29 +671,6 @@ class FinancialMetricsService:
         tax_rate = income_tax_expense.value / pretax_income.value
         return operating_income.model_copy(
             update={"value": operating_income.value * (Decimal(1) - tax_rate)}
-        )
-
-    @staticmethod
-    def _operating_working_capital(
-        observations: Optional[dict[FinancialConcept, FinancialObservation]],
-    ) -> Optional[FinancialObservation]:
-        if observations is None:
-            return None
-        return FinancialMetricsService._combine_amounts(
-            (
-                (observations.get(FinancialConcept.ACCOUNTS_RECEIVABLE), 1),
-                (observations.get(FinancialConcept.INVENTORY), 1),
-                (
-                    observations.get(FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS),
-                    1,
-                ),
-                (observations.get(FinancialConcept.ACCOUNTS_PAYABLE), -1),
-                (observations.get(FinancialConcept.ACCRUED_LIABILITIES), -1),
-                (
-                    observations.get(FinancialConcept.DEFERRED_REVENUE_CURRENT),
-                    -1,
-                ),
-            )
         )
 
     @staticmethod

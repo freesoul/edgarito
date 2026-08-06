@@ -13,7 +13,7 @@ class ForecastAssumptionSource(str, Enum):
     TRAILING_AVERAGE = "trailing_average"
 
 
-class FreeCashFlowForecastParameters(BaseModel):
+class SimplifiedFcfForecastParameters(BaseModel):
     """Inputs for a revenue-times-FCF-margin forecast.
 
     Rates and margins use percentage points: ``5`` means 5%, not 0.05. A
@@ -64,7 +64,7 @@ class FreeCashFlowForecastParameters(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_path_lengths(self) -> "FreeCashFlowForecastParameters":
+    def validate_path_lengths(self) -> "SimplifiedFcfForecastParameters":
         for name, path in (
             ("revenue_growth", self.revenue_growth),
             ("free_cash_flow_margin", self.free_cash_flow_margin),
@@ -76,7 +76,7 @@ class FreeCashFlowForecastParameters(BaseModel):
         return self
 
 
-class FreeCashFlowForecastObservation(BaseModel):
+class SimplifiedFcfForecastObservation(BaseModel):
     forecast_year: int
     fiscal_year: int
     period_end: datetime.date
@@ -88,7 +88,7 @@ class FreeCashFlowForecastObservation(BaseModel):
     formula: str = "revenue × free cash flow margin"
 
 
-class FreeCashFlowForecast(BaseModel):
+class SimplifiedFcfForecast(BaseModel):
     provider: str
     company_id: str
     company_name: str
@@ -102,8 +102,189 @@ class FreeCashFlowForecast(BaseModel):
     base_free_cash_flow: Decimal
     unit: str
 
-    parameters: FreeCashFlowForecastParameters
+    parameters: SimplifiedFcfForecastParameters
     historical_fiscal_years: tuple[int, ...]
     revenue_growth_source: ForecastAssumptionSource
     free_cash_flow_margin_source: ForecastAssumptionSource
-    observations: list[FreeCashFlowForecastObservation] = Field(default_factory=list)
+    observations: list[SimplifiedFcfForecastObservation] = Field(default_factory=list)
+
+
+class FcffForecastDriver(str, Enum):
+    REVENUE_GROWTH = "revenue_growth"
+    OPERATING_MARGIN = "operating_margin"
+    TAX_RATE = "tax_rate"
+    DEPRECIATION_TO_REVENUE = "depreciation_to_revenue"
+    CAPEX_TO_REVENUE = "capex_to_revenue"
+    OPERATING_WORKING_CAPITAL_TO_REVENUE = "operating_working_capital_to_revenue"
+
+    @property
+    def label(self) -> str:
+        return self.value.replace("_", " ").title()
+
+
+class FcffForecastParameters(BaseModel):
+    """Year-specific operating drivers for an unlevered FCFF forecast.
+
+    Every value uses percentage points. A one-value path is repeated for each
+    forecast year; otherwise one value per year is required. Omitted paths are
+    inferred from complete annual historical periods.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    forecast_years: int = Field(default=5, ge=1, le=30)
+    revenue_growth: Optional[tuple[Decimal, ...]] = None
+    operating_margin: Optional[tuple[Decimal, ...]] = None
+    tax_rate: Optional[tuple[Decimal, ...]] = None
+    depreciation_to_revenue: Optional[tuple[Decimal, ...]] = None
+    capex_to_revenue: Optional[tuple[Decimal, ...]] = None
+    operating_working_capital_to_revenue: Optional[tuple[Decimal, ...]] = None
+    historical_window: int = Field(default=3, ge=1, le=10)
+
+    @field_validator(
+        "revenue_growth",
+        "operating_margin",
+        "tax_rate",
+        "depreciation_to_revenue",
+        "capex_to_revenue",
+        "operating_working_capital_to_revenue",
+        mode="before",
+    )
+    @classmethod
+    def normalize_path(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, Decimal)):
+            return (value,)
+        return tuple(value)
+
+    @field_validator(
+        "revenue_growth",
+        "operating_margin",
+        "tax_rate",
+        "depreciation_to_revenue",
+        "capex_to_revenue",
+        "operating_working_capital_to_revenue",
+    )
+    @classmethod
+    def validate_finite_path(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and any(not item.is_finite() for item in value):
+            raise ValueError("FCFF driver paths must contain finite values")
+        return value
+
+    @field_validator("revenue_growth")
+    @classmethod
+    def validate_growth(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and any(
+            item <= Decimal("-100") or item > Decimal("1000") for item in value
+        ):
+            raise ValueError(
+                "Revenue growth must be greater than -100% and at most 1000%"
+            )
+        return value
+
+    @field_validator("tax_rate")
+    @classmethod
+    def validate_tax_rate(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and any(
+            item < Decimal(0) or item > Decimal(100) for item in value
+        ):
+            raise ValueError("Tax rate must be between 0% and 100%")
+        return value
+
+    @field_validator("depreciation_to_revenue", "capex_to_revenue")
+    @classmethod
+    def validate_nonnegative_ratio(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and any(
+            item < Decimal(0) or item > Decimal(500) for item in value
+        ):
+            raise ValueError("D&A and capex ratios must be between 0% and 500%")
+        return value
+
+    @field_validator("operating_margin", "operating_working_capital_to_revenue")
+    @classmethod
+    def validate_signed_ratio(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and any(abs(item) > Decimal(500) for item in value):
+            raise ValueError(
+                "Operating margin and working-capital ratio must be "
+                "between -500% and 500%"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_path_lengths(self) -> "FcffForecastParameters":
+        for driver in FcffForecastDriver:
+            path = getattr(self, driver.value)
+            if path is not None and len(path) not in (1, self.forecast_years):
+                raise ValueError(
+                    f"{driver.value} must contain one value or "
+                    f"{self.forecast_years} values"
+                )
+        return self
+
+
+class FcffForecastObservation(BaseModel):
+    forecast_year: int
+    fiscal_year: int
+    period_end: datetime.date
+    revenue_growth: Decimal
+    revenue: Decimal
+    operating_margin: Decimal
+    operating_income: Decimal
+    tax_rate: Decimal
+    nopat: Decimal
+    depreciation_to_revenue: Decimal
+    depreciation_and_amortization: Decimal
+    capex_to_revenue: Decimal
+    capital_expenditures: Decimal
+    operating_working_capital_to_revenue: Decimal
+    operating_working_capital: Decimal
+    change_in_operating_working_capital: Decimal
+    fcff: Decimal
+    unit: str
+    formula: str = (
+        "NOPAT + depreciation and amortization - capital expenditures - "
+        "change in operating working capital"
+    )
+
+
+class FcffForecast(BaseModel):
+    provider: str
+    company_id: str
+    company_name: str
+    ticker: Optional[str] = None
+    identifiers: Optional[SecurityIdentifiers] = None
+    method: str = "driver_based_fcff"
+
+    base_fiscal_year: int
+    base_period_end: datetime.date
+    base_revenue: Decimal
+    base_operating_income: Decimal
+    base_tax_rate: Decimal
+    base_nopat: Decimal
+    base_depreciation_and_amortization: Decimal
+    base_capital_expenditures: Decimal
+    base_operating_working_capital: Decimal
+    base_fcff: Optional[Decimal] = None
+    unit: str
+
+    parameters: FcffForecastParameters
+    historical_fiscal_years: tuple[int, ...]
+    assumption_sources: dict[FcffForecastDriver, ForecastAssumptionSource]
+    observations: list[FcffForecastObservation] = Field(default_factory=list)
+
+
+# The generic historical public names now point to the valuation-grade default.
+FreeCashFlowForecastParameters = FcffForecastParameters
+FreeCashFlowForecastObservation = FcffForecastObservation
+FreeCashFlowForecast = FcffForecast

@@ -206,6 +206,145 @@ def test_normalizes_interest_goodwill_and_intangibles_with_fallback_tags():
     assert intangibles.source_concept == "IntangibleAssetsNetExcludingGoodwill"
 
 
+def test_combines_separately_reported_depreciation_and_amortization():
+    facts = CompanyFacts.model_validate(
+        {
+            "cik": 789019,
+            "entityName": "Microsoft Corporation",
+            "facts": {
+                "dei": {},
+                "us-gaap": {
+                    source_concept: {
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2025-07-01",
+                                    "end": "2026-06-30",
+                                    "val": value,
+                                    "accn": "0001193125-26-000001",
+                                    "fy": 2026,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-07-29",
+                                }
+                            ]
+                        }
+                    }
+                    for source_concept, value in {
+                        "Depreciation": 34_300_000_000,
+                        "AmortizationOfIntangibleAssets": 4_700_000_000,
+                    }.items()
+                },
+            },
+        }
+    )
+
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        granularity=Granularity.ANNUAL,
+        concepts={FinancialConcept.DEPRECIATION_AND_AMORTIZATION},
+    )
+    depreciation = find_observation(
+        financials,
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+        2026,
+        FiscalPeriod.FY,
+    )
+
+    assert depreciation.value == Decimal("39000000000")
+    assert depreciation.source_concept == (
+        "Depreciation + AmortizationOfIntangibleAssets"
+    )
+    assert depreciation.derivation_kind == (
+        ObservationDerivationKind.COMPONENT_AGGREGATION
+    )
+
+
+def test_uses_depreciation_when_no_amortization_fact_is_reported():
+    facts = CompanyFacts.model_validate(
+        {
+            "cik": 1652044,
+            "entityName": "Alphabet Inc.",
+            "facts": {
+                "dei": {},
+                "us-gaap": {
+                    "Depreciation": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "val": 21_136_000_000,
+                                    "accn": "0001652044-26-000018",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-05",
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        granularity=Granularity.ANNUAL,
+        concepts={FinancialConcept.DEPRECIATION_AND_AMORTIZATION},
+    )
+    depreciation = financials.observations[0]
+
+    assert depreciation.value == Decimal("21136000000")
+    assert depreciation.source_concept == "Depreciation"
+    assert depreciation.derivation_kind == ObservationDerivationKind.CONCEPT_FALLBACK
+
+
+def test_recovers_prior_fy_balance_first_disclosed_as_quarterly_comparative():
+    facts = CompanyFacts.model_validate(
+        {
+            "cik": 1652044,
+            "entityName": "Alphabet Inc.",
+            "facts": {
+                "dei": {},
+                "us-gaap": {
+                    "InventoryNet": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": end,
+                                    "val": value,
+                                    "accn": "0001652044-26-000071",
+                                    "fy": 2026,
+                                    "fp": "Q2",
+                                    "form": "10-Q",
+                                    "filed": "2026-07-23",
+                                }
+                                for end, value in (
+                                    ("2025-12-31", 2_439_000_000),
+                                    ("2026-06-30", 9_991_000_000),
+                                )
+                            ]
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        granularity=Granularity.ANNUAL,
+        concepts={FinancialConcept.INVENTORY},
+    )
+    inventory = financials.observations[0]
+
+    assert inventory.fiscal_year == 2025
+    assert inventory.fiscal_period == FiscalPeriod.FY
+    assert inventory.value == Decimal("2439000000")
+
+
 def test_does_not_derive_non_additive_weighted_average_shares():
     financials = SecUsGaapNormalizer().normalize(
         load_aapl_facts(),

@@ -18,6 +18,8 @@ class FinancialStatement(str, Enum):
 
 class ObservationDerivationKind(str, Enum):
     PERIOD_RECONSTRUCTION = "period_reconstruction"
+    COMPONENT_AGGREGATION = "component_aggregation"
+    CONCEPT_FALLBACK = "concept_fallback"
 
 
 class FinancialConcept(str, Enum):

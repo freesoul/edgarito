@@ -245,78 +245,92 @@ company_metrics = FinancialMetricsService().calculate(
 
 Each metric observation retains its formula and required input concepts for traceability.
 
-## Forecast free cash flow
+## Forecast free cash flow to the firm
 
-The `forecast` command projects annual revenue and free cash flow using explicit,
-auditable assumptions. Percentage arguments use percentage points, so `6` means
-6%:
-
-```bash
-uv run edgarito forecast --ticker AAPL --years 5 \
-  --revenue-growth 6 --fcf-margin 25
-```
-
-A single growth or margin value is held constant for every projected year. To
-provide a year-by-year path, repeat each option exactly once per forecast year:
-
-```bash
-uv run edgarito forecast --isin US0378331005 --years 3 \
-  --revenue-growth 8 --revenue-growth 6 --revenue-growth 4 \
-  --fcf-margin 26 --fcf-margin 25 --fcf-margin 24
-```
-
-Either assumption can be omitted. Edgarito then uses its trailing average from
-up to the latest complete annual periods; `--historical-window` controls the
-maximum window and defaults to three years:
+The `forecast` command now defaults to a driver-based FCFF forecast. Omitted
+drivers are inferred as trailing averages from the latest complete annual
+periods; `--historical-window` defaults to three years:
 
 ```bash
 uv run edgarito forecast --ticker AAPL --years 5
-uv run edgarito forecast --ticker AAPL --years 5 --historical-window 5 \
-  --revenue-growth 5
 ```
 
-The deterministic forecast method is:
+Every driver can instead be supplied explicitly. Percentage arguments use
+percentage points, so `6` means 6%. A value supplied once is held constant; to
+define a path, repeat an option exactly once per forecast year:
+
+```bash
+uv run edgarito forecast --ticker AAPL --years 5 \
+  --revenue-growth 6 \
+  --operating-margin 30 \
+  --tax-rate 21 \
+  --depreciation-to-revenue 3 \
+  --capex-to-revenue 4 \
+  --operating-working-capital-to-revenue -10
+```
+
+The deterministic operating bridge is:
 
 ```text
-projected revenue[t] = projected revenue[t-1] × (1 + revenue growth[t])
-projected FCF[t]     = projected revenue[t] × FCF margin[t]
-historical FCF       = operating cash flow - capital expenditures
+revenue[t]       = revenue[t-1] × (1 + revenue growth[t])
+EBIT[t]          = revenue[t] × operating margin[t]
+NOPAT[t]         = EBIT[t] × (1 - tax rate[t])
+D&A[t]           = revenue[t] × D&A / revenue[t]
+capex[t]         = revenue[t] × capex / revenue[t]
+operating NWC[t] = revenue[t] × operating NWC / revenue[t]
+change NWC[t]    = operating NWC[t] - operating NWC[t-1]
+FCFF[t]          = NOPAT[t] + D&A[t] - capex[t] - change NWC[t]
 ```
 
-Forecasting requires normalized annual revenue, operating cash flow, and capital
-expenditures in one currency. It does not discount cash flows or calculate a
-terminal value yet; the resulting annual FCF observations are the intended input
-for the later DCF valuation layer.
+The base operating NWC and inferred drivers use the same calculations as the
+historical FCFF metrics. Detailed working-capital liabilities are preferred. If
+a filing does not expose a standalone accrued-liabilities fact, operating NWC
+falls back to receivables + separately reported inventory + prepaid/other
+current assets - total current liabilities + reported current debt. SEC
+depreciation and intangible
+amortization facts are also combined when the filer does not publish one D&A
+fact. These fallbacks retain their formulas and source concepts; unsupported
+missing inputs are still reported rather than silently replaced with zero.
 
-Programmatically, assumptions can be constant scalars or complete paths:
+This standard corporate FCFF bridge is intended for ordinary non-financial
+companies. The valuation-model selector can recommend specialized forecast
+profiles for financial intermediaries, REITs, resource producers, project
+pipelines, highly cyclical companies, and other exceptions; those profiles are
+not silently approximated by this command.
+
+The previous revenue-times-FCF-margin approach remains available as a simplified
+scenario. Its cash flow is not FCFF and must not be used as an enterprise DCF
+input:
+
+```bash
+uv run edgarito forecast --ticker AAPL --method simplified --years 5 \
+  --revenue-growth 6 --fcf-margin 25
+```
+
+Programmatically, use the explicit FCFF types. The older generic
+`FreeCashFlowForecast...` names are compatibility aliases for this new default:
 
 ```python
 from decimal import Decimal
 
-from edgarito.services.forecasting import (
-    FreeCashFlowForecastParameters,
-    FreeCashFlowForecastService,
-)
+from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
 
 
-parameters = FreeCashFlowForecastParameters(
+parameters = FcffForecastParameters(
     forecast_years=5,
     revenue_growth=Decimal("6"),
-    free_cash_flow_margin=(
-        Decimal("26"),
-        Decimal("25.5"),
-        Decimal("25"),
-        Decimal("24.5"),
-        Decimal("24"),
-    ),
+    operating_margin=Decimal("30"),
+    tax_rate=Decimal("21"),
+    depreciation_to_revenue=Decimal("3"),
+    capex_to_revenue=Decimal("4"),
+    operating_working_capital_to_revenue=Decimal("-10"),
 )
-forecast = FreeCashFlowForecastService().forecast(financials, parameters)
+forecast = FcffForecastService().forecast(financials, parameters)
 ```
 
-Each forecast observation retains its fiscal year, period end, revenue, FCF,
-growth assumption, margin assumption, currency, and formula. The forecast also
-records whether each assumption path was explicit or inferred from historical
-averages.
+Use `SimplifiedFcfForecastParameters` and `SimplifiedFcfForecastService` for the
+retained scenario model. Neither method discounts cash flows or calculates a
+terminal value; that remains the responsibility of the later valuation layer.
 
 ## Select suitable valuation models
 
@@ -394,10 +408,10 @@ selection = ValuationModelSelector().select(profile)
 primary = selection.primary
 ```
 
-The current `operating cash flow - capital expenditures` history is deliberately
-not marked as FCFF. Enterprise DCF remains blocked until an explicit FCFF forecast
-and its EBIT, tax, depreciation, working-capital and investment assumptions are
-available.
+The simplified `operating cash flow - capital expenditures` history and forecast
+are deliberately not marked as FCFF. `valuation-models` assesses readiness but
+does not execute the forecast; enterprise DCF becomes ready only when the
+driver-based FCFF result and the remaining valuation inputs are supplied.
 
 ## Market data and valuation assumptions
 
@@ -499,14 +513,14 @@ The built-in provider routing is equivalent to:
 
 ```dotenv
 us_default_provider=sec
-us_available_providers=sec,alphavantage,fmp
-eu_default_provider=alphavantage
-eu_available_providers=alphavantage,fmp
+us_available_providers=sec,alphavantage,fmp,yahoo
+eu_default_provider=yahoo
+eu_available_providers=yahoo,alphavantage,fmp
 classification_default_provider=fmp
 classification_available_providers=fmp,alphavantage
 ```
 
-Add any of these lowercase keys to `.env` to override the corresponding default. A default provider must appear in its corresponding available-provider list. SEC supports US financial statements; Alpha Vantage and FMP support financial statements and classifications for both US and EU stocks.
+Add any of these lowercase keys to `.env` to override the corresponding default. A default provider must appear in its corresponding available-provider list. SEC supports US financial statements; Alpha Vantage and FMP support financial statements and classifications for both US and EU stocks. Yahoo supports keyless US and EU financial statements but is not used for classification.
 
 The CLI uses the configured provider for the selected market unless `--provider` is supplied. Market detection is not automatic: `--market` defaults to `us`, so use `--market eu` explicitly for EU companies and other IFRS-reporting issuers that should use the EU provider configuration.
 
@@ -528,7 +542,8 @@ FinancialDataService
     -> optional FinancialsCrosschecker
     -> FinancialsConsolePresenter
        or FinancialMetricsService -> MetricsConsolePresenter
-       or FreeCashFlowForecastService -> ForecastConsolePresenter
+       or FcffForecastService -> ForecastConsolePresenter
+       or SimplifiedFcfForecastService -> ForecastConsolePresenter
        or ValuationProfileBuilder -> ValuationModelSelector
           -> ValuationSelectionConsolePresenter
 
