@@ -130,6 +130,25 @@ def test_provider_surfaces_api_information_without_caching_it(tmp_path):
     assert not list(tmp_path.rglob("*.json"))
 
 
+def test_provider_redacts_api_key_from_information_message(tmp_path):
+    api_key = "private-api-key"
+    session = _FakeSession(
+        {"OVERVIEW": {"Information": f"The API key {api_key} has reached its limit"}}
+    )
+    client = AlphaVantageClient(
+        FileSystemCache(tmp_path),
+        api_key,
+        session=session,
+        min_request_interval=0,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(client.get_overview("AAPL"))
+
+    assert api_key not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
+
+
 def test_provider_retries_a_per_second_burst_limit_once(tmp_path):
     responses = _api_responses()
     session = _FakeSession(

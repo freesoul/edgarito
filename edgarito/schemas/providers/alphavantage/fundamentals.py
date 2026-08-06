@@ -22,6 +22,10 @@ class CompanyOverview(AlphaVantageModel):
     cik: Optional[str] = Field(default=None, alias="CIK")
     currency: Optional[str] = Field(default=None, alias="Currency")
     fiscal_year_end: Optional[str] = Field(default=None, alias="FiscalYearEnd")
+    sector: Optional[str] = Field(default=None, alias="Sector")
+    industry: Optional[str] = Field(default=None, alias="Industry")
+    country: Optional[str] = Field(default=None, alias="Country")
+    exchange: Optional[str] = Field(default=None, alias="Exchange")
 
 
 class FinancialReport(AlphaVantageModel):

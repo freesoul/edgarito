@@ -1,6 +1,6 @@
 # Edgarito
 
-Edgarito retrieves company fundamentals from configured providers, caches raw responses, normalizes them into provider-neutral observations, optionally crosschecks providers, and calculates historical financial metrics.
+Edgarito retrieves company fundamentals and classifications from configured providers, caches raw responses, normalizes them into provider-neutral models, optionally crosschecks providers, and calculates historical financial metrics.
 
 ## Setup
 
@@ -45,6 +45,18 @@ uv run python -m edgarito financials --ticker AAPL --user-agent "Your Name (your
 ```
 
 Provider responses are cached below `<cache_path>/providers/`. Use `--refresh` to bypass existing snapshots. In SEC quarterly output, an asterisk marks a value derived from a reported YTD or full-year fact.
+
+## Retrieve sector and industry
+
+```bash
+uv run edgarito classification --ticker AAPL
+uv run edgarito classification --ticker RACE --provider alphavantage
+uv run edgarito classification --ticker AAPL --crosscheck
+```
+
+Classification defaults to FMP and can also use Alpha Vantage. Edgarito maps provider sector labels into one 11-sector vocabulary. Industry classifications remain provider-defined; the normalized result retains the cleaned industry name, original provider labels, and taxonomy metadata rather than silently treating different taxonomies as equivalent.
+
+`--provider` overrides the classification default. `--crosscheck` compares the selected classification with every other configured classification provider, emits warnings for sector or industry differences, and never merges the results. `--refresh` bypasses cached provider profiles.
 
 ## Compute metrics
 
@@ -99,9 +111,11 @@ us_default_provider=sec
 us_available_providers=sec,alphavantage,fmp
 eu_default_provider=alphavantage
 eu_available_providers=alphavantage,fmp
+classification_default_provider=fmp
+classification_available_providers=fmp,alphavantage
 ```
 
-Add any of these lowercase keys to `.env` to override the corresponding default. A default provider must appear in its market's available-provider list. SEC supports US stocks; Alpha Vantage and FMP support both US and EU stocks.
+Add any of these lowercase keys to `.env` to override the corresponding default. A default provider must appear in its corresponding available-provider list. SEC supports US financial statements; Alpha Vantage and FMP support financial statements and classifications for both US and EU stocks.
 
 The CLI uses the configured provider for the selected market unless `--provider` is supplied. Market detection is not automatic: `--market` defaults to `us`, so use `--market eu` explicitly for EU companies and other IFRS-reporting issuers that should use the EU provider configuration.
 
@@ -123,6 +137,13 @@ FinancialDataService
     -> optional FinancialsCrosschecker
     -> FinancialsConsolePresenter
        or FinancialMetricsService -> MetricsConsolePresenter
+
+CompanyClassificationService
+    -> configured FMP or Alpha Vantage profile client
+    -> CompanyClassificationNormalizer
+    -> NormalizedCompanyClassification
+    -> optional classification crosscheck
+    -> ClassificationConsolePresenter
 ```
 
 Normalized observations share concept, statement, value, currency, fiscal period, source taxonomy, source concept, and filing metadata fields. Provider-specific metadata such as SEC accession numbers and filing forms remains populated when the source supplies it.
@@ -209,6 +230,39 @@ financials = asyncio.run(main())
 ```
 
 FMP profile, income statement, balance sheet, and cash-flow responses are cached separately below `<cache_path>/providers/fmp/`. Annual and quarterly statement responses use separate snapshots. Statement retrieval defaults to the latest five periods; direct `FmpClient` callers can set `statement_limit` when their subscription allows more. The API key is not included in cache paths or cached responses.
+
+## Programmatic classification retrieval
+
+`CompanyClassificationService.retrieve()` crosschecks other configured classification providers by default and returns the selected provider's result unchanged. Pass `crosscheck=False` to disable warnings. The CLI is intentionally opt-in through `--crosscheck`.
+
+```python
+import asyncio
+import os
+
+from dotenv import load_dotenv
+
+from edgarito.config.providers import ClassificationProviderConfiguration
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.reconciliation.classification import CompanyClassificationService
+
+
+load_dotenv()
+
+
+async def main():
+    async with CompanyClassificationService(
+        cache=FileSystemCache(os.getenv("cache_path", "cache")),
+        provider_configuration=ClassificationProviderConfiguration.from_environment(
+            os.environ
+        ),
+        alphavantage_api_key=os.getenv("alphavantage_api_key"),
+        fmp_api_key=os.getenv("fmp_key"),
+    ) as service:
+        return await service.retrieve("AAPL")
+
+
+classification = asyncio.run(main())
+```
 
 ## Programmatic retrieval and crosschecking
 

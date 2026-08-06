@@ -2,6 +2,9 @@ from decimal import Decimal
 
 from edgarito.enums.edgar.period import FISCAL_PERIOD_PRIORITY, FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.normalization.classification import (
+    NormalizedCompanyClassification,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -21,6 +24,25 @@ STATEMENT_LABELS = {
     FinancialStatement.CASH_FLOW: "Cash flow statement",
 }
 METRIC_ORDER = {metric: index for index, metric in enumerate(FinancialMetric)}
+
+
+class ClassificationConsolePresenter:
+    def render(self, classification: NormalizedCompanyClassification) -> str:
+        lines = [
+            f"{classification.ticker} - {classification.company_name}",
+            f"Provider: {classification.provider.upper()} | "
+            f"Company ID: {classification.company_id}",
+            "",
+            f"Sector: {classification.sector.value if classification.sector else '-'}",
+            f"Industry: {classification.industry or '-'}",
+            f"Country: {classification.country or '-'}",
+            f"Exchange: {classification.exchange or '-'}",
+            "",
+            f"Source sector: {classification.source_sector or '-'}",
+            f"Source industry: {classification.source_industry or '-'}",
+            f"Industry taxonomy: {classification.industry_taxonomy}",
+        ]
+        return "\n".join(lines)
 
 
 class FinancialsConsolePresenter:

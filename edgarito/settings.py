@@ -2,7 +2,10 @@ import os
 
 from dotenv import find_dotenv, load_dotenv
 
-from edgarito.config.providers import ProviderConfiguration
+from edgarito.config.providers import (
+    ClassificationProviderConfiguration,
+    ProviderConfiguration,
+)
 
 # Keep compatibility with the existing CLI configuration, then load any
 # additional values from the conventional .env file. Existing shell variables
@@ -19,3 +22,6 @@ ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY") or os.getenv(
 )
 FMP_API_KEY = os.getenv("FMP_API_KEY") or os.getenv("fmp_key")
 PROVIDER_CONFIGURATION = ProviderConfiguration.from_environment(os.environ)
+CLASSIFICATION_PROVIDER_CONFIGURATION = (
+    ClassificationProviderConfiguration.from_environment(os.environ)
+)

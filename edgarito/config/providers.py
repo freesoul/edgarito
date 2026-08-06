@@ -9,6 +9,57 @@ PROVIDER_MARKETS = {
     ProviderName.ALPHAVANTAGE: frozenset({Market.US, Market.EU}),
     ProviderName.FMP: frozenset({Market.US, Market.EU}),
 }
+CLASSIFICATION_PROVIDERS = frozenset({ProviderName.ALPHAVANTAGE, ProviderName.FMP})
+
+
+@dataclass(frozen=True)
+class ClassificationProviderConfiguration:
+    default_provider: ProviderName = ProviderName.FMP
+    available_providers: tuple[ProviderName, ...] = (
+        ProviderName.FMP,
+        ProviderName.ALPHAVANTAGE,
+    )
+
+    def __post_init__(self):
+        if self.default_provider not in self.available_providers:
+            raise ValueError("The classification default must be listed as available")
+        unsupported = set(self.available_providers) - CLASSIFICATION_PROVIDERS
+        if unsupported:
+            names = ", ".join(sorted(provider.value for provider in unsupported))
+            raise ValueError(f"Providers do not support classification: {names}")
+        if len(set(self.available_providers)) != len(self.available_providers):
+            raise ValueError("Classification providers cannot contain duplicates")
+
+    @classmethod
+    def from_environment(
+        cls, environment: Optional[Mapping[str, str]] = None
+    ) -> "ClassificationProviderConfiguration":
+        values = environment or {}
+        default_value = ProviderConfiguration._environment_value(
+            values,
+            "EDGARITO_CLASSIFICATION_DEFAULT_PROVIDER",
+            "classification_default_provider",
+        )
+        available_value = ProviderConfiguration._environment_value(
+            values,
+            "EDGARITO_CLASSIFICATION_AVAILABLE_PROVIDERS",
+            "classification_available_providers",
+        )
+        default_provider = (
+            ProviderName(default_value.strip().lower())
+            if default_value
+            else ProviderName.FMP
+        )
+        available_providers = (
+            tuple(
+                ProviderName(item.strip().lower())
+                for item in available_value.split(",")
+                if item.strip()
+            )
+            if available_value is not None
+            else (ProviderName.FMP, ProviderName.ALPHAVANTAGE)
+        )
+        return cls(default_provider, available_providers)
 
 
 @dataclass(frozen=True)

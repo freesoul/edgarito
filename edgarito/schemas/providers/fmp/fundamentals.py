@@ -25,6 +25,8 @@ class CompanyProfile(FmpModel):
     currency: Optional[str] = None
     country: Optional[str] = None
     exchange: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
 
 
 class CompanyProfileResponse(RootModel[list[CompanyProfile]]):

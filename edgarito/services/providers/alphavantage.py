@@ -182,7 +182,7 @@ class AlphaVantageClient:
                 None,
             )
             if error_key is not None:
-                message = str(data[error_key])
+                message = self._redact_secrets(str(data[error_key]))
                 is_burst_limit = "1 request per second" in message.lower()
                 if is_burst_limit and attempt == 0:
                     continue
@@ -197,6 +197,9 @@ class AlphaVantageClient:
         raise RuntimeError(
             f"Alpha Vantage request failed after retry for {function.value} {symbol}"
         )
+
+    def _redact_secrets(self, message: str) -> str:
+        return message.replace(self._api_key, "[REDACTED]")
 
     async def _request(
         self, function: AlphaVantageFunction, symbol: str, params: dict

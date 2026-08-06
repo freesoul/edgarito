@@ -1,3 +1,7 @@
+from edgarito.schemas.normalization.classification import (
+    NormalizedCompanyClassification,
+    Sector,
+)
 from edgarito.schemas.normalization.financials import (
     CONCEPT_STATEMENTS,
     FinancialConcept,
@@ -12,4 +16,6 @@ __all__ = [
     "FinancialObservation",
     "FinancialStatement",
     "NormalizedCompanyFinancials",
+    "NormalizedCompanyClassification",
+    "Sector",
 ]

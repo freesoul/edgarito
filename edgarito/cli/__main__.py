@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import ValidationError
 
 from edgarito.cli.presentation.console import (
+    ClassificationConsolePresenter,
     FinancialsConsolePresenter,
     MetricsConsolePresenter,
 )
@@ -20,9 +21,13 @@ from edgarito.schemas.normalization.financials import (
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
+from edgarito.services.reconciliation.classification import (
+    CompanyClassificationService,
+)
 from edgarito.services.reconciliation.financials import FinancialDataService
 from edgarito.settings import (
     ALPHAVANTAGE_API_KEY,
+    CLASSIFICATION_PROVIDER_CONFIGURATION,
     EDGARITO_CACHE_DIR,
     EDGARITO_USER_AGENT,
     FMP_API_KEY,
@@ -41,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     metrics = subparsers.add_parser(
         "metrics", help="Calculate metrics from normalized financials"
     )
+    classification = subparsers.add_parser(
+        "classification", help="Retrieve normalized company sector and industry"
+    )
 
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
@@ -57,6 +65,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[metric.value for metric in FinancialMetric],
         help="Limit output to a metric; repeat this option for multiple metrics",
     )
+    classification.add_argument("--ticker", required=True)
+    classification.add_argument(
+        "--provider",
+        choices=[
+            provider.value
+            for provider in CLASSIFICATION_PROVIDER_CONFIGURATION.available_providers
+        ],
+        help="Override the configured classification provider",
+    )
+    classification.add_argument("--refresh", action="store_true")
+    classification.add_argument("--crosscheck", action="store_true")
+    classification.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
+    classification.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -141,6 +162,24 @@ async def _run_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_classification(args: argparse.Namespace) -> int:
+    async with CompanyClassificationService(
+        cache=FileSystemCache(Path(args.cache_dir)),
+        provider_configuration=CLASSIFICATION_PROVIDER_CONFIGURATION,
+        alphavantage_api_key=ALPHAVANTAGE_API_KEY,
+        fmp_api_key=FMP_API_KEY,
+    ) as service:
+        classification = await service.retrieve(
+            ticker=args.ticker,
+            provider=ProviderName(args.provider) if args.provider else None,
+            use_cache=not args.refresh,
+            make_cache=True,
+            crosscheck=args.crosscheck,
+        )
+    print(ClassificationConsolePresenter().render(classification))
+    return 0
+
+
 async def _retrieve_financials(
     args: argparse.Namespace,
     granularity: Optional[Granularity],
@@ -187,6 +226,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_financials(args))
         if args.command == "metrics":
             return asyncio.run(_run_metrics(args))
+        if args.command == "classification":
+            return asyncio.run(_run_classification(args))
     except (ValueError, RuntimeError, FileNotFoundError, ValidationError) as exc:
         parser.error(str(exc))
     return 1

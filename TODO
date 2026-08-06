@@ -1,6 +1,4 @@
 
-- pylint
-- **Retrieve and normalize sector/industry**
 - **Add identifier mappings** such as ISIN, CIK, exchange-specific symbols, and provider symbols
 - **Compute parametrized forecasts**
 - **Add valuation methods**
