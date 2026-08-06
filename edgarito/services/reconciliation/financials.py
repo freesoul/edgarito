@@ -16,6 +16,7 @@ from edgarito.services.providers.alphavantage import AlphaVantageClient
 from edgarito.services.providers.edgar import EdgarClient
 from edgarito.services.providers.fmp import FmpClient
 from edgarito.services.providers.openfigi import OpenFigiClient
+from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.reconciliation.crosscheck import (
     CrosscheckReport,
     FinancialDataCrosscheckWarning,
@@ -27,6 +28,7 @@ from edgarito.services.reconciliation.providers import (
     FmpFinancialsProvider,
     NormalizedFinancialsProvider,
     SecFinancialsProvider,
+    YahooFinancialsProvider,
 )
 
 
@@ -261,6 +263,9 @@ class FinancialDataService:
                 raise ValueError("The FMP provider requires FMP_API_KEY / fmp_api_key")
             client = FmpClient(self._cache, self._fmp_api_key)
             provider = FmpFinancialsProvider(client)
+        elif name == ProviderName.YAHOO:
+            client = YahooFinanceClient(self._cache)
+            provider = YahooFinancialsProvider(client)
         else:
             raise ValueError(f"Unsupported provider: {name.value}")
 

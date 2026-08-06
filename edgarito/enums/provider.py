@@ -5,3 +5,4 @@ class ProviderName(str, Enum):
     SEC = "sec"
     ALPHAVANTAGE = "alphavantage"
     FMP = "fmp"
+    YAHOO = "yahoo"

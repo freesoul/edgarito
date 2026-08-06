@@ -1,6 +1,6 @@
 # Edgarito
 
-Edgarito retrieves company fundamentals and classifications from configured providers, caches raw responses, normalizes them into provider-neutral models, optionally crosschecks providers, calculates historical financial metrics, and builds assumption-driven free cash flow forecasts.
+Edgarito retrieves company fundamentals and classifications from configured providers, caches raw responses, normalizes them into provider-neutral models, optionally crosschecks providers, calculates historical financial metrics, and builds assumption-driven free cash flow forecasts. Yahoo Finance support is provided through `yfinance` for keyless financial statements and daily market history.
 
 ## Setup
 
@@ -23,7 +23,7 @@ fmp_key="your-api-key"
 Replace the placeholders needed by the providers you use. OpenFIGI does not
 require a key; omit `openfigi_api_key` unless you want its higher rate limit.
 
-`user_agent` is required only when the SEC provider is selected. The SEC asks clients to identify themselves with contact information. `alphavantage_api_key` and `fmp_key` are required only for their respective providers. `cache_path` defaults to `cache` when omitted.
+`user_agent` is required only when the SEC provider is selected. The SEC asks clients to identify themselves with contact information. `alphavantage_api_key` and `fmp_key` are required only for their respective providers. Yahoo requires no API key. `cache_path` defaults to `cache` when omitted.
 
 The CLI reads `.env` automatically. `--user-agent` and `--cache-dir` override their corresponding dotenv values for an individual command.
 
@@ -37,7 +37,8 @@ uv run edgarito financials --cik 320193 --period all
 uv run edgarito financials --ticker AAPL --concept revenue --concept net_income
 uv run edgarito financials --ticker AAPL --provider alphavantage
 uv run edgarito financials --ticker AAPL --provider fmp
-uv run edgarito financials --ticker SAP.DEX --market eu
+uv run edgarito financials --ticker AAPL --provider yahoo
+uv run edgarito financials --ticker SAP.DE --market eu
 uv run edgarito financials --ticker RACE --market eu --period quarterly --limit 8
 uv run edgarito financials --ticker AAPL --crosscheck
 ```
@@ -65,6 +66,7 @@ uv run edgarito financials \
   --market eu \
   --exchange XETRA \
   --exchange-symbol XETRA=SAP.DE \
+  --provider-symbol yahoo=SAP.DE \
   --provider-symbol alphavantage=SAP.DEX \
   --provider-symbol fmp=SAP.DE \
   --crosscheck
@@ -93,6 +95,7 @@ identifiers = SecurityIdentifiers(
     provider_symbols={
         ProviderName.ALPHAVANTAGE: "SAP.DEX",
         ProviderName.FMP: "SAP.DE",
+        ProviderName.YAHOO: "SAP.DE",
     },
 )
 
@@ -110,6 +113,39 @@ uv run python -m edgarito financials --ticker AAPL --user-agent "Your Name (your
 ```
 
 Provider responses are cached below `<cache_path>/providers/`. Use `--refresh` to bypass existing snapshots. In SEC quarterly output, an asterisk marks a value derived from a reported YTD or full-year fact.
+
+US financial retrieval still defaults to SEC. EU financial retrieval defaults to
+Yahoo because it is keyless and accepts Yahoo's exchange-qualified symbols such
+as `SAP.DE`, `AIR.PA`, and `ASML.AS`; Alpha Vantage and FMP remain available as
+overrides and crosschecks. Yahoo statements are standardized secondary-source
+tables, not a substitute for an audited filing. Their available history and line
+items vary by security, and Edgarito only maps rows whose meaning is sufficiently
+clear. `yfinance` is not affiliated with or endorsed by Yahoo; review Yahoo's
+[terms](https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html)
+before using its data outside personal research. The implemented methods follow
+the [yfinance Ticker API](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.html).
+
+## Retrieve Yahoo market history
+
+Yahoo also supplies daily raw and adjusted prices, dividends, and splits. The
+client runs yfinance's synchronous calls off the event loop, caches a serializable
+snapshot, and enables its price-repair option by default. Normalize the snapshot
+into Edgarito's shared market schema as follows:
+
+```python
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.normalization import YahooMarketNormalizer
+from edgarito.services.providers import YahooFinanceClient
+
+
+client = YahooFinanceClient(FileSystemCache("cache"))
+source = await client.get_price_history("SAP.DE", period="5y")
+market_data = YahooMarketNormalizer().normalize(source)
+latest_close = market_data.latest_price.close
+```
+
+For London and Johannesburg listings quoted in pence/cents (`GBp`/`GBX` and
+`ZAc`), normalization converts prices and dividends to base GBP/ZAR units.
 
 SEC normalization includes valuation-oriented reported inputs in addition to the
 core statements: pretax income and tax expense; depreciation and amortization;

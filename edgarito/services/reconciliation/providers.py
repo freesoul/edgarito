@@ -13,9 +13,11 @@ from edgarito.schemas.normalization.financials import (
 from edgarito.services.normalization.alphavantage import AlphaVantageNormalizer
 from edgarito.services.normalization.fmp import FmpNormalizer
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
+from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
 from edgarito.services.providers.alphavantage import AlphaVantageClient
 from edgarito.services.providers.edgar import EdgarClient
 from edgarito.services.providers.fmp import FmpClient
+from edgarito.services.providers.yahoo import YahooFinanceClient
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,33 @@ class FmpFinancialsProvider:
         symbol = query.symbol_for(self.name)
         if not symbol:
             raise ValueError("FMP retrieval requires a symbol")
+        source = await self._client.get_company_financials(
+            symbol,
+            use_cache=query.use_cache,
+            make_cache=query.make_cache,
+        )
+        return self._normalizer.normalize(
+            source,
+            granularity=query.granularity,
+            concepts=query.concepts,
+        )
+
+
+class YahooFinancialsProvider:
+    name = ProviderName.YAHOO
+
+    def __init__(
+        self,
+        client: YahooFinanceClient,
+        normalizer: Optional[YahooFinancialsNormalizer] = None,
+    ):
+        self._client = client
+        self._normalizer = normalizer or YahooFinancialsNormalizer()
+
+    async def retrieve(self, query: FinancialsQuery) -> NormalizedCompanyFinancials:
+        symbol = query.symbol_for(self.name)
+        if not symbol:
+            raise ValueError("Yahoo retrieval requires a symbol")
         source = await self._client.get_company_financials(
             symbol,
             use_cache=query.use_cache,

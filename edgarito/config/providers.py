@@ -8,6 +8,7 @@ PROVIDER_MARKETS = {
     ProviderName.SEC: frozenset({Market.US}),
     ProviderName.ALPHAVANTAGE: frozenset({Market.US, Market.EU}),
     ProviderName.FMP: frozenset({Market.US, Market.EU}),
+    ProviderName.YAHOO: frozenset({Market.US, Market.EU}),
 }
 CLASSIFICATION_PROVIDERS = frozenset({ProviderName.ALPHAVANTAGE, ProviderName.FMP})
 
@@ -110,13 +111,18 @@ class ProviderConfiguration:
                     ProviderName.SEC,
                     ProviderName.ALPHAVANTAGE,
                     ProviderName.FMP,
+                    ProviderName.YAHOO,
                 ),
             ),
             eu=cls._market_from_environment(
                 Market.EU,
                 values,
-                default_provider=ProviderName.ALPHAVANTAGE,
-                default_available=(ProviderName.ALPHAVANTAGE, ProviderName.FMP),
+                default_provider=ProviderName.YAHOO,
+                default_available=(
+                    ProviderName.YAHOO,
+                    ProviderName.ALPHAVANTAGE,
+                    ProviderName.FMP,
+                ),
             ),
         )
 

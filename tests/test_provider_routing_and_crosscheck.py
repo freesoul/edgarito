@@ -81,9 +81,11 @@ def test_provider_configuration_defaults_and_environment_overrides():
         ProviderName.SEC,
         ProviderName.ALPHAVANTAGE,
         ProviderName.FMP,
+        ProviderName.YAHOO,
     )
-    assert defaults.eu.default_provider == ProviderName.ALPHAVANTAGE
+    assert defaults.eu.default_provider == ProviderName.YAHOO
     assert defaults.eu.available_providers == (
+        ProviderName.YAHOO,
         ProviderName.ALPHAVANTAGE,
         ProviderName.FMP,
     )
@@ -200,3 +202,19 @@ def test_service_rejects_an_unavailable_market_provider(tmp_path):
                 crosscheck=False,
             )
         )
+
+
+def test_service_uses_yahoo_as_the_keyless_eu_default(tmp_path):
+    yahoo = _FakeProvider(ProviderName.YAHOO, _financials("yahoo"))
+    service = FinancialDataService(
+        FileSystemCache(tmp_path),
+        ProviderConfiguration.from_environment({}),
+        providers={ProviderName.YAHOO: yahoo},
+    )
+
+    result = asyncio.run(
+        service.retrieve(ticker="SAP.DE", market=Market.EU, crosscheck=False)
+    )
+
+    assert result.provider == "yahoo"
+    assert yahoo.queries[0].symbol_for(ProviderName.YAHOO) == "SAP.DE"

@@ -14,3 +14,4 @@
 - Add a portfolio feature, that will do actions/report for the whole portfolio.
 - Autochoose provider when multiple : keep the one with most recent data, or with more results.
 - Poll recent market data (eg. add  yahoofinance if necessary) and determine whether cheap
+- maybe modify to take into account ttm in forecasts
