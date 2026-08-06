@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "name": "default",
-  "description": "Provider-backed defaults for forecasting and valuation workflows; null valuation assumptions are resolved automatically.",
+  "name": "race",
+  "description": "Ferrari profile using its global luxury economics instead of provider auto-manufacturer labels.",
   "forecast": {
     "default_method": "fcff",
     "fcff": {
@@ -60,8 +60,8 @@
     }
   },
   "model_selection": {
-    "sector": null,
-    "industry": null,
+    "sector": "Consumer Discretionary",
+    "industry": "Luxury Goods",
     "business_archetype": null,
     "lifecycle": null,
     "cyclicality": null,

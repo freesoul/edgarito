@@ -85,6 +85,31 @@ def test_mid_year_timing_changes_explicit_cash_flows_but_not_terminal_timing():
     assert any("mid-year timing" in warning for warning in mid_year.warnings)
 
 
+def test_perpetuity_growth_warns_when_explicit_fcff_has_not_converged():
+    service = FcffDcfService()
+    abrupt = service.value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    converged_forecast = _forecast()
+    converged_forecast.observations[-1].fcff = Decimal("102")
+    converged = service.value(
+        converged_forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+
+    assert any(
+        "Final explicit FCFF growth (10.0%)" in warning
+        and "sensitive to --years" in warning
+        for warning in abrupt.warnings
+    )
+    assert not any(
+        "terminal transition is abrupt" in warning for warning in converged.warnings
+    )
+
+
 def test_exit_multiple_supports_explicit_terminal_metrics():
     result = FcffDcfService().value(
         _forecast(),

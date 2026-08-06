@@ -7,6 +7,7 @@ import pytest
 from edgarito.cli.__main__ import build_parser, main
 from edgarito.config import ForecastMethod, ValuationProfileLoader
 from edgarito.config.valuation import CashFlowTiming, ForecastValuationProfile
+from edgarito.schemas.normalization.classification import Sector
 from edgarito.services.valuation import ValuationInput
 
 ROOT = Path(__file__).parents[1]
@@ -26,11 +27,26 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
     assert profile.valuation.discount_rates.risk_free_rate is None
     assert profile.valuation.discount_rates.wacc is None
     assert profile.valuation.terminal_value.perpetual_growth_rate is None
+    assert profile.valuation.multistage.enabled
+    assert profile.valuation.multistage.max_annual_growth_fade == Decimal("3")
+    assert profile.valuation.multistage.extend_to_stable
+    assert profile.model_selection.sector is None
+    assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
     assert profile.specialized_inputs.history == 5
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
         profile
     )
+
+
+def test_race_profile_overrides_provider_classification_with_luxury_economics():
+    profile = ValuationProfileLoader.load(
+        ROOT / "configs" / "valuation" / "race.json"
+    )
+
+    assert profile.name == "race"
+    assert profile.model_selection.sector == Sector.CONSUMER_DISCRETIONARY
+    assert profile.model_selection.industry == "Luxury Goods"
 
 
 def test_custom_profile_can_partially_override_defaults(tmp_path):
@@ -95,6 +111,17 @@ def test_profile_validation_rejects_unknown_or_invalid_parameters(tmp_path):
         ValuationProfileLoader.load(invalid)
     with pytest.raises(FileNotFoundError, match="not found"):
         ValuationProfileLoader.load(tmp_path / "missing.json")
+    with pytest.raises(ValueError, match="minimum_transition_years"):
+        ForecastValuationProfile.model_validate(
+            {
+                "valuation": {
+                    "multistage": {
+                        "minimum_transition_years": 8,
+                        "maximum_transition_years": 4,
+                    }
+                }
+            }
+        )
 
 
 def test_configured_rates_are_exposed_as_ready_selector_inputs():

@@ -268,6 +268,16 @@ uv run edgarito specialized-inputs --ticker PLD --type reit \
   --profile configs/valuation/reit.json
 ```
 
+Company-specific profiles may override unreliable provider classifications for
+valuation purposes. For example, the bundled Ferrari profile treats `RACE` as a
+consumer-discretionary luxury-goods business; Damodaran's `Apparel` row is used
+as the closest available luxury beta proxy:
+
+```bash
+uv run edgarito valuation --ticker RACE --market eu \
+  --profile configs/valuation/race.json
+```
+
 Custom files may contain only the sections they change. Omitted values inherit
 the validated schema defaults. Decimal parameters should be written as JSON
 strings to preserve their exact value:
@@ -452,6 +462,37 @@ market, reference, and company data:
 uv run edgarito valuation --ticker AAPL --years 5
 ```
 
+FCFF valuation uses an adaptive multistage projection by default. It derives the
+initial growth regime, assigns up to three high-growth years according to the
+gap from perpetual growth, and then fades growth by no more than three
+percentage points per year. `--years` is a minimum horizon: when it ends before
+the first complete stable year, the projection is extended automatically. Once
+stability has been reached, requesting more years only moves stable cash flows
+between the explicit and terminal portions, so value remains effectively
+unchanged.
+
+Use `--projection-method constant` to retain the previous constant-driver
+projection. Multistage behavior can also be tuned or disabled in a profile:
+
+```json
+{
+  "valuation": {
+    "multistage": {
+      "enabled": true,
+      "max_annual_growth_fade": "3",
+      "minimum_transition_years": 3,
+      "maximum_transition_years": 10,
+      "maximum_high_growth_years": 3,
+      "extend_to_stable": true
+    }
+  }
+}
+```
+
+An explicit multi-year revenue-growth path is preserved as the first stage and
+the adaptive fade begins after its final value. Other explicit driver paths are
+preserved and extended using their final supplied values.
+
 For EUR companies, the risk-free rate is the ECB 10-year AAA euro-area yield and
 terminal growth uses the trailing ECB HICP distribution. For USD companies, the
 risk-free rate is the U.S. Treasury 10-year yield; terminal growth uses FRED
@@ -461,10 +502,20 @@ industry-beta references. Yahoo supplies the latest price, classification, and
 market capitalization; reported tax, interest, debt, and shares complete the
 company-specific calculation.
 
+For dual listings and ADRs, Yahoo's quote currency can differ from the financial
+statement currency. Before calculating market capitalization, valuation converts
+the latest quote through the ECB's daily currency-per-euro reference rates and
+records `yahoo+ecb-fx` in the WACC source. This includes direct conversions such
+as USD to EUR and euro-cross conversions between two non-EUR currencies.
+
 The CLI prints every selected assumption and its provider. Historical cost of
 debt and book debt as a market-debt proxy are estimates, so override `--wacc` or
 the component fields in a company-specific profile when the issuer's economics
 make them unsuitable.
+
+When final explicit FCFF growth remains at least one percentage point away from
+perpetual growth, the valuation also warns that the terminal transition is
+abrupt and that the result may be sensitive to `--years`.
 
 Or retain them in a selected profile:
 

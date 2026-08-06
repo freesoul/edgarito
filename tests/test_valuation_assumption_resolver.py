@@ -96,6 +96,40 @@ def test_resolver_derives_wacc_and_terminal_growth_from_provider_inputs():
     assert assumptions[ValuationAssumptionKind.UNLEVERED_BETA].value == Decimal("0.85")
 
 
+def test_luxury_goods_uses_damodaran_apparel_beta_proxy():
+    classification = _classification().model_copy(update={"industry": "Luxury Goods"})
+    snapshot = _industry_snapshot().model_copy(
+        update={
+            "industries": (
+                _industry_snapshot().industries[0].model_copy(
+                    update={"industry": "Apparel"}
+                ),
+            )
+        }
+    )
+
+    result = ValuationAssumptionResolver().resolve(
+        financials=_financials(),
+        capital_bridge=_bridge(),
+        discount_configuration=DiscountRateConfiguration(),
+        terminal_configuration=TerminalValueConfiguration(perpetual_growth_rate="2"),
+        terminal_is_perpetuity=True,
+        valuation_date=TODAY,
+        classification=classification,
+        market_data=_market_data(),
+        risk_free_series=_reference_series(
+            "ECB 10-year AAA yield", ReferenceSeriesKind.GOVERNMENT_YIELD, ["3"]
+        ),
+        country_snapshot=_country_snapshot(),
+        industry_snapshot=snapshot,
+    )
+
+    beta = result.assumption_set.find(ValuationAssumptionKind.UNLEVERED_BETA)
+    assert beta is not None
+    assert beta.value == Decimal("0.85")
+    assert beta.industry == "Apparel"
+
+
 def _financials():
     return NormalizedCompanyFinancials(
         provider="test",

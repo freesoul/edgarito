@@ -7,6 +7,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from edgarito.schemas.normalization.classification import Sector
 from edgarito.services.forecasting.models import (
     FcffForecastParameters,
     SimplifiedFcfForecastParameters,
@@ -165,6 +166,38 @@ class CapitalBridgeConfiguration(_ProfileModel):
         return self
 
 
+class MultistageValuationConfiguration(_ProfileModel):
+    """Adaptive convergence from current operating drivers to terminal growth."""
+
+    enabled: bool = True
+    convergence_tolerance: Decimal = Decimal("1")
+    max_annual_growth_fade: Decimal = Decimal("3")
+    growth_gap_per_high_growth_year: Decimal = Decimal("10")
+    minimum_transition_years: int = Field(default=3, ge=1, le=15)
+    maximum_transition_years: int = Field(default=10, ge=1, le=20)
+    maximum_high_growth_years: int = Field(default=3, ge=0, le=10)
+    extend_to_stable: bool = True
+
+    @field_validator(
+        "convergence_tolerance",
+        "max_annual_growth_fade",
+        "growth_gap_per_high_growth_year",
+    )
+    @classmethod
+    def validate_positive_rate(cls, value: Decimal) -> Decimal:
+        if not value.is_finite() or value <= 0:
+            raise ValueError("Multistage rate parameters must be finite and positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_stage_bounds(self) -> "MultistageValuationConfiguration":
+        if self.minimum_transition_years > self.maximum_transition_years:
+            raise ValueError(
+                "minimum_transition_years cannot exceed maximum_transition_years"
+            )
+        return self
+
+
 class ValuationCalculationConfiguration(_ProfileModel):
     cash_flow_timing: CashFlowTiming = CashFlowTiming.END_OF_PERIOD
     discount_rates: DiscountRateConfiguration = Field(
@@ -176,15 +209,30 @@ class ValuationCalculationConfiguration(_ProfileModel):
     capital_bridge: CapitalBridgeConfiguration = Field(
         default_factory=CapitalBridgeConfiguration
     )
+    multistage: MultistageValuationConfiguration = Field(
+        default_factory=MultistageValuationConfiguration
+    )
 
 
 class ModelSelectionConfiguration(_ProfileModel):
+    sector: Optional[Sector] = None
+    industry: Optional[str] = None
     business_archetype: Optional[BusinessArchetype] = None
     lifecycle: Optional[CompanyLifecycle] = None
     cyclicality: Optional[Cyclicality] = None
     economic_traits: frozenset[EconomicTrait] = frozenset()
     available_inputs: frozenset[ValuationInput] = frozenset()
     peer_count: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("industry")
+    @classmethod
+    def normalize_industry(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Model-selection industry cannot be blank")
+        return normalized
 
 
 class ComparableSelectionConfiguration(_ProfileModel):
@@ -306,6 +354,7 @@ __all__ = [
     "ForecastMethod",
     "ForecastValuationProfile",
     "ModelSelectionConfiguration",
+    "MultistageValuationConfiguration",
     "SpecializedInputConfiguration",
     "TerminalValueConfiguration",
     "ValuationCalculationConfiguration",

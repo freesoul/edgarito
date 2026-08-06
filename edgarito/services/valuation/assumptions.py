@@ -48,6 +48,11 @@ class ValuationAssumptionResolver:
 
     _INDUSTRY_ALIASES = {
         "aerospacedefense": "aerospacedefense",
+        "automanufacturers": "autotruck",
+        # Damodaran's US industry-beta dataset does not publish a separate
+        # luxury-goods row. Apparel is its closest available luxury proxy.
+        "luxurygoods": "apparel",
+        "apparelluxurygoods": "apparel",
         "consumerelectronics": "electronicsconsumeroffice",
         "softwareinfrastructure": "softwaresystemapplication",
         "softwareapplication": "softwaresystemapplication",
@@ -136,7 +141,7 @@ class ValuationAssumptionResolver:
                 }
             )
             if market_data is not None:
-                providers.append("yahoo")
+                providers.append(market_data.provider)
             wacc_source = "automatic: " + ", ".join(providers)
 
         perpetual_growth = None
@@ -346,7 +351,7 @@ class ValuationAssumptionResolver:
                     provider="edgarito",
                     methodology=(
                         "Hamada relevering using latest book debt as a market-debt "
-                        "proxy and Yahoo market capitalization"
+                        "proxy and FX-aligned market capitalization"
                     ),
                 ),
             )

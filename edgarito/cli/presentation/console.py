@@ -600,6 +600,26 @@ class FcffDcfConsolePresenter:
             f"WACC: {result.parameters.wacc:,.2f}% ({result.parameters.wacc_source})",
             f"Terminal method: {terminal_method}",
         ]
+        if result.multistage_plan is not None:
+            plan = result.multistage_plan
+            stages = []
+            if plan.explicit_growth_prefix_years:
+                stages.append(f"{plan.explicit_growth_prefix_years} explicit")
+            if plan.high_growth_years:
+                stages.append(f"{plan.high_growth_years} high-growth")
+            if plan.transition_years:
+                stages.append(f"{plan.transition_years} transition")
+            if plan.stable_years:
+                stages.append(f"{plan.stable_years} stable")
+            extension = (
+                f"; extended from {plan.requested_years} requested years"
+                if plan.extended_to_stable
+                else ""
+            )
+            lines.append(
+                "Projection: adaptive multistage | "
+                f"{' + '.join(stages)} years{extension}"
+            )
         if result.parameters.perpetual_growth_rate is not None:
             source = result.parameters.perpetual_growth_source or "explicit"
             lines.append(

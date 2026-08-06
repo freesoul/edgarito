@@ -11,6 +11,7 @@ from edgarito.schemas.identifiers import SecurityIdentifiers
 class ForecastAssumptionSource(str, Enum):
     EXPLICIT = "explicit"
     TRAILING_AVERAGE = "trailing_average"
+    ADAPTIVE_MULTISTAGE = "adaptive_multistage"
 
 
 class SimplifiedFcfForecastParameters(BaseModel):
@@ -282,6 +283,37 @@ class FcffForecast(BaseModel):
     historical_fiscal_years: tuple[int, ...]
     assumption_sources: dict[FcffForecastDriver, ForecastAssumptionSource]
     observations: list[FcffForecastObservation] = Field(default_factory=list)
+
+
+class AdaptiveMultistagePlan(BaseModel):
+    """Stages selected to converge an FCFF projection to perpetual growth."""
+
+    model_config = ConfigDict(frozen=True)
+
+    requested_years: int = Field(ge=1, le=30)
+    effective_years: int = Field(ge=1, le=30)
+    high_growth_years: int = Field(ge=0, le=30)
+    transition_years: int = Field(ge=0, le=30)
+    stable_years: int = Field(ge=0, le=30)
+    initial_growth_rate: Decimal
+    terminal_growth_rate: Decimal
+    max_annual_growth_fade: Decimal = Field(gt=0)
+    extended_to_stable: bool = False
+    explicit_growth_prefix_years: int = Field(default=0, ge=0, le=30)
+
+    @model_validator(mode="after")
+    def validate_stages(self) -> "AdaptiveMultistagePlan":
+        if self.effective_years < self.requested_years:
+            raise ValueError("effective_years cannot be below requested_years")
+        if (
+            self.high_growth_years
+            + self.explicit_growth_prefix_years
+            + self.transition_years
+            + self.stable_years
+            != self.effective_years
+        ):
+            raise ValueError("Adaptive stages must span the effective forecast")
+        return self
 
 
 # The generic historical public names now point to the valuation-grade default.

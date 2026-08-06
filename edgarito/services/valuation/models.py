@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
+from edgarito.services.forecasting.models import AdaptiveMultistagePlan
 
 
 def _decimal_close(left: Decimal, right: Decimal) -> bool:
@@ -704,6 +705,7 @@ class FcffDcfResult(BaseModel):
     unit: str
     parameters: FcffDcfParameters
     assumptions: Optional[ValuationAssumptionSet] = None
+    multistage_plan: Optional[AdaptiveMultistagePlan] = None
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult

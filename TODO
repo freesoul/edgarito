@@ -1,7 +1,22 @@
+An unsuitable Auto & Truck beta.
+A full Italy country-risk premium applied to a global business.
+Consolidated rather than industrial net debt.
+No guidance-aware margin transition.
+A stale valuation date relative to the price comparison.
+
+
+
+
+ uv run edgarito valuation --ticker MSFT
+usage: edgarito [-h]
+                {financials,metrics,forecast,valuation,valuation-models,classification,comparables,specialized-inputs} ...
+edgarito: error: FCFF DCF requires complete debt and cash inputs for FY2026; provide valuation.capital_bridge.net_debt in the profile or --net-debt
+
+
+
 
 
 - **Add valuation methods**
-      FCFF DCF.
       Comparable implied valuation.
       Equity DCF/DDM.
       Residual Income.
@@ -17,3 +32,4 @@
 - Autochoose provider when multiple : keep the one with most recent data, or with more results.
 - Poll recent market data (eg. add  yahoofinance if necessary) and determine whether cheap
 - maybe modify to take into account ttm in forecasts
+- margin of safety + bull/bear/base cases

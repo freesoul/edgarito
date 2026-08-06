@@ -28,9 +28,11 @@ from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     NormalizedCompanyFinancials,
 )
+from edgarito.schemas.valuation.assumptions import ValuationAssumptionKind
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.forecasting import (
+    AdaptiveMultistageFcffForecastService,
     FcffForecastParameters,
     FcffForecastService,
     SimplifiedFcfForecastParameters,
@@ -59,6 +61,7 @@ from edgarito.services.valuation import (
     ComparableMultiplesService,
     Cyclicality,
     DiscountRateService,
+    EcbMarketDataCurrencyConverter,
     EconomicTrait,
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
@@ -229,7 +232,18 @@ def build_parser() -> argparse.ArgumentParser:
     valuation.add_argument(
         "--years",
         type=int,
-        help="Number of annual forecast periods; overrides the selected profile",
+        help=(
+            "Minimum annual projection horizon; adaptive valuation extends it "
+            "when needed to reach the stable stage"
+        ),
+    )
+    valuation.add_argument(
+        "--projection-method",
+        choices=("adaptive", "constant"),
+        help=(
+            "FCFF projection strategy; defaults to adaptive multistage from the "
+            "selected profile"
+        ),
     )
     valuation.add_argument(
         "--revenue-growth",
@@ -707,6 +721,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         forecast.unit,
         needs_wacc=needs_automatic_wacc,
         needs_terminal=needs_automatic_terminal,
+        sector_override=profile.model_selection.sector,
+        industry_override=profile.model_selection.industry,
     )
     resolved = ValuationAssumptionResolver().resolve(
         financials=financials,
@@ -721,6 +737,35 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         terminal_growth_override=args.terminal_growth,
         **automatic_inputs,
     )
+    multistage_plan = None
+    multistage_configuration = profile.valuation.multistage
+    use_multistage = args.projection_method == "adaptive" or (
+        args.projection_method is None
+        and multistage_configuration.enabled
+        and terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+    )
+    if use_multistage:
+        if terminal_method != TerminalValueMethod.PERPETUITY_GROWTH:
+            raise ValueError(
+                "Adaptive multistage projection requires perpetuity-growth terminal "
+                "value; use --projection-method constant with an exit multiple"
+            )
+        assert resolved.perpetual_growth_rate is not None
+        tax_assumption = resolved.assumption_set.find(
+            ValuationAssumptionKind.NORMALIZED_TAX_RATE
+        )
+        forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
+            forecast_service
+        ).forecast(
+            financials,
+            forecast,
+            forecast_parameters,
+            resolved.perpetual_growth_rate,
+            multistage_configuration,
+            normalized_tax_rate=(
+                tax_assumption.value if tax_assumption is not None else None
+            ),
+        )
     parameters = FcffDcfParameters(
         wacc=resolved.wacc,
         wacc_source=resolved.wacc_source,
@@ -744,7 +789,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         ),
     )
     result = FcffDcfService().value(
-        forecast, parameters, capital_bridge, resolved.assumption_set
+        forecast,
+        parameters,
+        capital_bridge,
+        resolved.assumption_set,
+        multistage_plan,
     )
     print(FcffDcfConsolePresenter().render(result))
     return 0
@@ -768,6 +817,8 @@ async def _run_valuation_models(args: argparse.Namespace) -> int:
         crosscheck=False,
     )
     overrides = ValuationProfileOverrides(
+        sector=configuration.sector,
+        industry=configuration.industry,
         business_archetype=(
             BusinessArchetype(args.business_type)
             if args.business_type
@@ -817,7 +868,9 @@ async def _run_classification(args: argparse.Namespace) -> int:
 
 
 async def _run_comparables(args: argparse.Namespace) -> int:
-    configuration = ValuationProfileLoader.load(args.profile).comparables
+    valuation_profile = ValuationProfileLoader.load(args.profile)
+    configuration = valuation_profile.comparables
+    selection_configuration = valuation_profile.model_selection
     target_symbol = args.ticker.strip().upper()
     peer_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in args.peer))
     parameters = PeerSelectionParameters(
@@ -873,7 +926,18 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         source, history = result
         financials = financials_normalizer.normalize(source)
         classification = classification_normalizer.normalize_yahoo(source)
-        profile = profile_builder.build(financials, classification)
+        profile = profile_builder.build(
+            financials,
+            classification,
+            (
+                ValuationProfileOverrides(
+                    sector=selection_configuration.sector,
+                    industry=selection_configuration.industry,
+                )
+                if symbol == target_symbol
+                else None
+            ),
+        )
         market_data = market_normalizer.normalize(history)
         try:
             multiples = multiples_service.compute(financials, market_data, args.as_of)
@@ -1074,6 +1138,8 @@ async def _retrieve_automatic_assumption_inputs(
     *,
     needs_wacc: bool,
     needs_terminal: bool,
+    sector_override=None,
+    industry_override: Optional[str] = None,
 ) -> dict:
     inputs = {
         "classification": None,
@@ -1108,16 +1174,46 @@ async def _retrieve_automatic_assumption_inputs(
                         make_cache=True,
                     ),
                 )
-            inputs["classification"] = (
-                CompanyClassificationNormalizer().normalize_yahoo(source)
-            )
-            inputs["market_data"] = YahooMarketNormalizer().normalize(history)
+                classification = CompanyClassificationNormalizer().normalize_yahoo(
+                    source
+                )
+                if classification.industry is None or classification.country is None:
+                    source = await yahoo.get_company_financials(
+                        symbol, use_cache=False, make_cache=True
+                    )
+                    classification = CompanyClassificationNormalizer().normalize_yahoo(
+                        source
+                    )
+                classification = _apply_classification_overrides(
+                    classification,
+                    sector=sector_override,
+                    industry=industry_override,
+                )
+            inputs["classification"] = classification
+            market_data = YahooMarketNormalizer().normalize(history)
         except (RuntimeError, ValueError) as exc:
             raise ValueError(
                 "Automatic WACC could not retrieve Yahoo classification/price data; "
                 "set WACC or the missing CAPM/capital-weight inputs in the profile. "
                 f"Cause: {exc}"
             ) from exc
+        if market_data.currency != currency.strip().upper():
+            try:
+                async with EcbClient(cache) as ecb:
+                    market_data = await EcbMarketDataCurrencyConverter(ecb).convert(
+                        market_data,
+                        currency,
+                        use_cache=use_cache,
+                        make_cache=True,
+                    )
+            except (RuntimeError, ValueError) as exc:
+                raise ValueError(
+                    f"Automatic WACC could not align the Yahoo quote currency "
+                    f"({market_data.currency}) with the financial-statement currency "
+                    f"({currency}); provide an explicit WACC or market-value equity. "
+                    f"Cause: {exc}"
+                ) from exc
+        inputs["market_data"] = market_data
 
         try:
             async with DamodaranClient(cache) as damodaran:
@@ -1202,6 +1298,23 @@ async def _retrieve_automatic_assumption_inputs(
             f"the profile. Cause: {exc}"
         ) from exc
     return inputs
+
+
+def _apply_classification_overrides(
+    classification,
+    *,
+    sector=None,
+    industry: Optional[str] = None,
+):
+    """Apply explicit valuation-profile economics without erasing raw labels."""
+    updates = {}
+    if sector is not None:
+        updates["sector"] = sector
+        updates["sector_taxonomy"] = "valuation-profile"
+    if industry is not None:
+        updates["industry"] = industry
+        updates["industry_taxonomy"] = "valuation-profile"
+    return classification.model_copy(update=updates) if updates else classification
 
 
 def _resolve_wacc(override: Optional[Decimal], configuration) -> tuple[Decimal, str]:

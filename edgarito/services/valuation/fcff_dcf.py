@@ -9,7 +9,11 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
-from edgarito.services.forecasting.models import FcffForecast, FcffForecastObservation
+from edgarito.services.forecasting.models import (
+    AdaptiveMultistagePlan,
+    FcffForecast,
+    FcffForecastObservation,
+)
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.valuation.discounting import (
     PresentValueService,
@@ -202,12 +206,15 @@ class FcffDcfCapitalBridgeResolver:
 class FcffDcfService:
     """Value forecast FCFF and bridge enterprise value to diluted equity value."""
 
+    _TERMINAL_GROWTH_GAP_WARNING = Decimal("1")
+
     def value(
         self,
         forecast: FcffForecast,
         parameters: FcffDcfParameters,
         capital_bridge: FcffDcfCapitalBridge,
         assumptions: ValuationAssumptionSet | None = None,
+        multistage_plan: AdaptiveMultistagePlan | None = None,
     ) -> FcffDcfResult:
         if not forecast.observations:
             raise ValueError("FCFF DCF requires at least one forecast cash flow")
@@ -285,6 +292,9 @@ class FcffDcfService:
                 "Discounted terminal value exceeds 75% of enterprise value; "
                 "the result is highly sensitive to terminal assumptions"
             )
+        transition_warning = self._terminal_transition_warning(forecast, parameters)
+        if transition_warning is not None:
+            warnings.append(transition_warning)
         if equity_value <= 0:
             warnings.append("Enterprise value does not cover reported net debt")
         if parameters.cash_flow_timing == CashFlowTiming.MID_YEAR:
@@ -302,6 +312,7 @@ class FcffDcfService:
             unit=forecast.unit,
             parameters=parameters,
             assumptions=assumptions,
+            multistage_plan=multistage_plan,
             capital_bridge=capital_bridge,
             explicit_forecast_present_value=explicit_present_value,
             terminal_value=terminal_value,
@@ -311,6 +322,37 @@ class FcffDcfService:
             value_per_share=value_per_share,
             terminal_value_percentage=terminal_percentage,
             warnings=tuple(warnings),
+        )
+
+    @classmethod
+    def _terminal_transition_warning(
+        cls,
+        forecast: FcffForecast,
+        parameters: FcffDcfParameters,
+    ) -> str | None:
+        if (
+            parameters.terminal_method != TerminalValueMethod.PERPETUITY_GROWTH
+            or parameters.perpetual_growth_rate is None
+        ):
+            return None
+        final = forecast.observations[-1]
+        metric = "revenue"
+        explicit_growth = final.revenue_growth
+        if len(forecast.observations) >= 2:
+            previous_fcff = forecast.observations[-2].fcff
+            if previous_fcff > 0 and final.fcff > 0:
+                metric = "FCFF"
+                explicit_growth = (
+                    (final.fcff - previous_fcff) / previous_fcff * Decimal(100)
+                )
+        gap = abs(explicit_growth - parameters.perpetual_growth_rate)
+        if gap < cls._TERMINAL_GROWTH_GAP_WARNING:
+            return None
+        return (
+            f"Final explicit {metric} growth ({explicit_growth:,.1f}%) differs from "
+            f"perpetual growth ({parameters.perpetual_growth_rate:,.1f}%) by "
+            f"{gap:,.1f} percentage points; the terminal transition is abrupt, so "
+            "value may be highly sensitive to --years"
         )
 
     @staticmethod

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from edgarito.cli import main
+from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
@@ -14,6 +15,7 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.services.forecasting import (
+    AdaptiveMultistageFcffForecastService,
     FcffForecast,
     FcffForecastDriver,
     FcffForecastParameters,
@@ -24,6 +26,11 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastService,
 )
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
+from edgarito.services.valuation import (
+    FcffDcfCapitalBridge,
+    FcffDcfParameters,
+    FcffDcfService,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 
@@ -247,6 +254,62 @@ def test_fcff_infers_each_omitted_driver_from_trailing_history():
         + observation.depreciation_and_amortization
         - observation.capital_expenditures
         - observation.change_in_operating_working_capital
+    )
+
+
+def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
+    financials = _fcff_financials()
+    base_service = FcffForecastService()
+    adaptive = AdaptiveMultistageFcffForecastService(base_service)
+    configuration = MultistageValuationConfiguration()
+
+    forecasts = []
+    plans = []
+    for requested_years in (5, 10):
+        parameters = FcffForecastParameters(forecast_years=requested_years)
+        seed = base_service.forecast(financials, parameters)
+        forecast, plan = adaptive.forecast(
+            financials,
+            seed,
+            parameters,
+            Decimal("3"),
+            configuration,
+            normalized_tax_rate=Decimal("25"),
+        )
+        forecasts.append(forecast)
+        plans.append(plan)
+
+    assert plans[0].requested_years == 5
+    assert plans[0].effective_years == 9
+    assert plans[0].extended_to_stable
+    assert plans[0].high_growth_years == 2
+    assert plans[0].transition_years == 6
+    assert plans[0].stable_years == 1
+    assert plans[1].effective_years == 10
+    assert plans[1].stable_years == 2
+    assert [item.revenue_growth for item in forecasts[0].observations] == [
+        item.revenue_growth for item in forecasts[1].observations[:9]
+    ]
+
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2024,
+        period_end=datetime.date(2024, 12, 31),
+        unit="USD",
+        net_debt=Decimal(0),
+        diluted_shares=Decimal(1),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    dcf_parameters = FcffDcfParameters(wacc="8", perpetual_growth_rate="3")
+    values = [
+        FcffDcfService().value(forecast, dcf_parameters, bridge)
+        for forecast in forecasts
+    ]
+    assert abs(values[0].enterprise_value - values[1].enterprise_value) < Decimal(
+        "1e-20"
+    )
+    assert not any(
+        "terminal transition is abrupt" in item for item in values[0].warnings
     )
 
 

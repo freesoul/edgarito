@@ -11,6 +11,7 @@ from edgarito.services.valuation.fcff_dcf import (
     FcffDcfCapitalBridgeResolver,
     FcffDcfService,
 )
+from edgarito.services.valuation.fx import EcbMarketDataCurrencyConverter
 from edgarito.services.valuation.models import (
     BusinessArchetype,
     CashFlow,
@@ -79,6 +80,7 @@ __all__ = [
     "DiscountedCashFlow",
     "DiscountRateService",
     "EconomicTrait",
+    "EcbMarketDataCurrencyConverter",
     "ForecastProfile",
     "FcffDcfCapitalBridge",
     "FcffDcfCapitalBridgeResolver",
