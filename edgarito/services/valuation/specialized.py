@@ -45,9 +45,7 @@ class _SecSpecializedExtractor:
             -historical_periods:
         ]
         fields = [field for field in fields if field.period_end in latest_period_ends]
-        fields.sort(
-            key=lambda item: (item.period_end, item.fiscal_year, item.name)
-        )
+        fields.sort(key=lambda item: (item.period_end, item.fiscal_year, item.name))
         return SpecializedValuationExtraction(
             provider="sec",
             company_id=str(company_facts.cik).zfill(10),
@@ -73,9 +71,7 @@ class _SecSpecializedExtractor:
         facts,
         definition: _FieldDefinition,
     ) -> list[ExtractedValuationField]:
-        selected: dict[
-            tuple[int, FiscalPeriod], tuple[str, str, Measurement]
-        ] = {}
+        selected: dict[tuple[int, FiscalPeriod], tuple[str, str, Measurement]] = {}
         for source_concept in definition.source_concepts:
             fact = facts.get(source_concept)
             if fact is None:
@@ -84,9 +80,7 @@ class _SecSpecializedExtractor:
                 measurements = fact.units.get(unit)
                 if not measurements:
                     continue
-                by_period: dict[
-                    tuple[int, FiscalPeriod], list[Measurement]
-                ] = {}
+                by_period: dict[tuple[int, FiscalPeriod], list[Measurement]] = {}
                 for measurement in measurements:
                     if (
                         measurement.form not in {"10-K", "10-K/A", "10-Q", "10-Q/A"}
@@ -98,9 +92,9 @@ class _SecSpecializedExtractor:
                         if measurement.fp == FiscalPeriod.FY
                         else measurement.fy or measurement.end.year
                     )
-                    by_period.setdefault(
-                        (fiscal_year, measurement.fp), []
-                    ).append(measurement)
+                    by_period.setdefault((fiscal_year, measurement.fp), []).append(
+                        measurement
+                    )
                 for period_key, period_measurements in by_period.items():
                     if period_key in selected:
                         continue
@@ -202,14 +196,10 @@ class ReitInputExtractor(_SecSpecializedExtractor):
             (field.name, field.fiscal_year, field.fiscal_period): field
             for field in fields
         }
-        periods = sorted(
-            {(field.fiscal_year, field.fiscal_period) for field in fields}
-        )
+        periods = sorted({(field.fiscal_year, field.fiscal_period) for field in fields})
         derived = []
         for fiscal_year, fiscal_period in periods:
-            net_income = by_name_period.get(
-                ("net_income", fiscal_year, fiscal_period)
-            )
+            net_income = by_name_period.get(("net_income", fiscal_year, fiscal_period))
             depreciation = by_name_period.get(
                 (
                     "reported_depreciation_and_amortization",

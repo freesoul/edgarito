@@ -251,8 +251,9 @@ The default profile is the versioned JSON file at
 `configs/valuation/default.json`. It centralizes parameters for FCFF and
 simplified forecasts, discount rates, present-value timing, terminal value,
 model-selection overrides, comparable selection, and specialized input history.
-Company- and date-specific market assumptions are `null` by default rather than
-silently embedding stale rates.
+The default WACC and perpetual growth are `null`: for `valuation`, that means
+"resolve from provider and company data." A CLI or profile value always takes
+precedence over an automatically resolved value.
 
 All profile-enabled commands use the root default automatically. Supply another
 profile with `--profile`; explicitly supplied CLI options take precedence over
@@ -430,6 +431,96 @@ growth uses the final explicit-period cash flow and grows it once before applyin
 the Gordon formula. Terminal values are returned at the end of the explicit
 forecast and must be discounted using their stated period. Exit-multiple terminal
 values are also supported through `TerminalValueService.exit_multiple`.
+
+## Value a company with FCFF DCF
+
+The `valuation` command now executes a complete FCFF DCF. It builds the
+driver-based forecast, discounts each projected FCFF, calculates and discounts
+terminal value, then bridges enterprise value to diluted per-share equity value:
+
+```text
+enterprise value = PV(explicit FCFF) + PV(terminal value)
+equity value     = enterprise value - net debt
+value per share  = equity value / diluted shares
+```
+
+The root profile leaves WACC and perpetual growth unset. A basic valuation still
+runs without valuation-assumption flags because the CLI resolves them from
+market, reference, and company data:
+
+```bash
+uv run edgarito valuation --ticker AAPL --years 5
+```
+
+For EUR companies, the risk-free rate is the ECB 10-year AAA euro-area yield and
+terminal growth uses the trailing ECB HICP distribution. For USD companies, the
+risk-free rate is the U.S. Treasury 10-year yield; terminal growth uses FRED
+inflation when `FRED_API_KEY` is configured and otherwise a conservative
+Treasury-yield-based proxy. Damodaran supplies versioned country-risk/tax and
+industry-beta references. Yahoo supplies the latest price, classification, and
+market capitalization; reported tax, interest, debt, and shares complete the
+company-specific calculation.
+
+The CLI prints every selected assumption and its provider. Historical cost of
+debt and book debt as a market-debt proxy are estimates, so override `--wacc` or
+the component fields in a company-specific profile when the issuer's economics
+make them unsuitable.
+
+Or retain them in a selected profile:
+
+```json
+{
+  "name": "base-dcf",
+  "valuation": {
+    "discount_rates": {"wacc": "8"},
+    "terminal_value": {"perpetual_growth_rate": "2"}
+  }
+}
+```
+
+```bash
+uv run edgarito valuation --ticker AAPL \
+  --profile configs/valuation/base-dcf.json
+```
+
+The valuation inherits all FCFF drivers from the same profile used by
+`forecast`. CLI forecast-driver options remain available as overrides. Net debt
+is calculated from normalized debt and cash components, while diluted
+weighted-average shares are preferred over basic shares. For Yahoo statements,
+aggregate `CurrentDebt` takes precedence over a separately reported current
+portion, preventing double counting when that atomic field is absent.
+
+Missing bridge data can be supplied as net debt directly, or as gross debt and
+cash components:
+
+```json
+{
+  "valuation": {
+    "capital_bridge": {
+      "gross_debt": "1800000000",
+      "cash_and_equivalents": "2500000000",
+      "diluted_shares": "46700000"
+    }
+  }
+}
+```
+
+Equivalent CLI overrides are `--net-debt`, or `--gross-debt` together with
+`--cash`; use `--shares` to override the diluted count. Reported and manual
+amounts must use the financial statements' currency and unscaled base units.
+
+Use `--cash-flow-timing mid_year` for mid-year explicit FCFF discounting.
+Terminal value remains at the end of the final forecast year. An exit-multiple
+terminal value is available as a separate method and should be treated as a
+market cross-check:
+
+```bash
+uv run edgarito valuation --ticker AAPL --wacc 8 \
+  --terminal-method exit_multiple --exit-multiple 12 --exit-metric ebitda
+```
+
+The result reports every cash flow, discount period and factor, terminal-value
+contribution, enterprise/equity bridge, input sources, and sensitivity warnings.
 
 ## Select suitable valuation models
 
@@ -646,6 +737,19 @@ and scenario. Market-derived assumptions require a provider and observation
 date; reference-dataset assumptions additionally require a dataset name and
 version. This ensures that retrieving a rate does not silently turn it into a
 valuation input.
+
+The FCFF DCF resolver applies this precedence:
+
+1. CLI override.
+2. Selected profile value.
+3. Provider-backed or company-derived value.
+4. A specific error naming the unresolved input and its manual profile field.
+
+Automatically derived WACC uses CAPM plus country risk, Hamada relevering of the
+industry beta, the latest Yahoo market capitalization, gross debt as the debt
+market-value proxy, and an after-tax historical cost of debt. Terminal growth is
+bounded below WACC and retains the macro series and methodology in the returned
+`ValuationAssumptionSet`.
 
 ### Reference providers
 

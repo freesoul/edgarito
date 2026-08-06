@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
     ComparableMultiplesConsolePresenter,
+    FcffDcfConsolePresenter,
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
     MetricsConsolePresenter,
@@ -22,6 +23,7 @@ from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
 from edgarito.logger import configure_logger
+from edgarito.schemas.market import ReferenceSeriesKind, ReferenceValueUnit
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     NormalizedCompanyFinancials,
@@ -40,7 +42,11 @@ from edgarito.services.normalization.classification import (
 )
 from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
+from edgarito.services.providers.damodaran import DamodaranClient
+from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.edgar import EdgarClient
+from edgarito.services.providers.fred import FredClient
+from edgarito.services.providers.treasury import TreasuryClient
 from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
@@ -48,14 +54,22 @@ from edgarito.services.reconciliation.classification import (
 from edgarito.services.reconciliation.financials import FinancialDataService
 from edgarito.services.valuation import (
     BusinessArchetype,
+    CashFlowTiming,
     CompanyLifecycle,
     ComparableMultiplesService,
     Cyclicality,
+    DiscountRateService,
     EconomicTrait,
+    FcffDcfCapitalBridgeResolver,
+    FcffDcfParameters,
+    FcffDcfService,
     LtmMultiplesService,
     PeerSelectionParameters,
     PeerUniverseSelector,
     SpecializedValuationExtractor,
+    TerminalMetric,
+    TerminalValueMethod,
+    ValuationAssumptionResolver,
     ValuationInput,
     ValuationModelSelector,
     ValuationProfileBuilder,
@@ -67,6 +81,7 @@ from edgarito.settings import (
     EDGARITO_CACHE_DIR,
     EDGARITO_USER_AGENT,
     FMP_API_KEY,
+    FRED_API_KEY,
     OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
@@ -85,6 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     forecast = subparsers.add_parser(
         "forecast", help="Project annual driver-based FCFF"
+    )
+    valuation = subparsers.add_parser(
+        "valuation", help="Calculate an intrinsic or relative valuation"
     )
     valuation_models = subparsers.add_parser(
         "valuation-models",
@@ -105,9 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
     _add_retrieval_arguments(forecast, include_period=False)
+    _add_retrieval_arguments(valuation, include_period=False)
     _add_retrieval_arguments(valuation_models, include_period=False)
     for command_parser in (
         forecast,
+        valuation,
         valuation_models,
         comparables,
         specialized_inputs,
@@ -199,6 +219,121 @@ def build_parser() -> argparse.ArgumentParser:
         "--historical-window",
         type=int,
         help="Annual periods used to infer omitted assumptions; overrides the profile",
+    )
+    valuation.add_argument(
+        "--model",
+        choices=("fcff-dcf",),
+        default="fcff-dcf",
+        help="Valuation model (default: fcff-dcf)",
+    )
+    valuation.add_argument(
+        "--years",
+        type=int,
+        help="Number of annual forecast periods; overrides the selected profile",
+    )
+    valuation.add_argument(
+        "--revenue-growth",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Revenue growth; provide once or once per forecast year",
+    )
+    valuation.add_argument(
+        "--operating-margin",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="EBIT margin; provide once or once per forecast year",
+    )
+    valuation.add_argument(
+        "--tax-rate",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Operating tax rate; provide once or once per forecast year",
+    )
+    valuation.add_argument(
+        "--depreciation-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="D&A as a percentage of revenue; provide once or per forecast year",
+    )
+    valuation.add_argument(
+        "--capex-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Capex as a percentage of revenue; provide once or per forecast year",
+    )
+    valuation.add_argument(
+        "--operating-working-capital-to-revenue",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Operating working capital / revenue; provide once or per year",
+    )
+    valuation.add_argument(
+        "--historical-window",
+        type=int,
+        help="Annual periods used to infer omitted forecast assumptions",
+    )
+    valuation.add_argument(
+        "--wacc",
+        type=_percentage,
+        metavar="PERCENT",
+        help="WACC in percentage points; overrides the selected profile",
+    )
+    valuation.add_argument(
+        "--cash-flow-timing",
+        choices=("end_of_period", "mid_year"),
+        help="Explicit FCFF discount timing; overrides the selected profile",
+    )
+    valuation.add_argument(
+        "--terminal-method",
+        choices=("perpetuity_growth", "exit_multiple"),
+        help="Terminal-value method; overrides the selected profile",
+    )
+    valuation.add_argument(
+        "--terminal-growth",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Perpetual growth in percentage points",
+    )
+    valuation.add_argument(
+        "--exit-multiple",
+        type=_decimal_value,
+        metavar="MULTIPLE",
+        help="Terminal exit multiple",
+    )
+    valuation.add_argument(
+        "--exit-metric",
+        choices=("ebitda", "ebit", "fcff", "revenue"),
+        help="Terminal metric for an exit multiple",
+    )
+    valuation.add_argument(
+        "--net-debt",
+        type=_decimal_value,
+        metavar="AMOUNT",
+        help="Override normalized net debt in reporting currency",
+    )
+    valuation.add_argument(
+        "--gross-debt",
+        type=_decimal_value,
+        metavar="AMOUNT",
+        help="Manual gross debt; must be supplied with --cash",
+    )
+    valuation.add_argument(
+        "--cash",
+        type=_decimal_value,
+        metavar="AMOUNT",
+        help="Manual cash and equivalents; must be supplied with --gross-debt",
+    )
+    valuation.add_argument(
+        "--shares",
+        type=_decimal_value,
+        metavar="COUNT",
+        help="Override normalized diluted shares",
     )
     valuation_models.add_argument(
         "--classification-provider",
@@ -490,44 +625,7 @@ async def _run_forecast(args: argparse.Namespace) -> int:
                 "FCFF operating, tax, D&A, capex, and working-capital drivers"
             )
         configured = profile.forecast.fcff
-        parameters = FcffForecastParameters(
-            forecast_years=(
-                args.years if args.years is not None else configured.forecast_years
-            ),
-            revenue_growth=(
-                args.revenue_growth
-                if args.revenue_growth is not None
-                else configured.revenue_growth
-            ),
-            operating_margin=(
-                args.operating_margin
-                if args.operating_margin is not None
-                else configured.operating_margin
-            ),
-            tax_rate=(
-                args.tax_rate if args.tax_rate is not None else configured.tax_rate
-            ),
-            depreciation_to_revenue=(
-                args.depreciation_to_revenue
-                if args.depreciation_to_revenue is not None
-                else configured.depreciation_to_revenue
-            ),
-            capex_to_revenue=(
-                args.capex_to_revenue
-                if args.capex_to_revenue is not None
-                else configured.capex_to_revenue
-            ),
-            operating_working_capital_to_revenue=(
-                args.operating_working_capital_to_revenue
-                if args.operating_working_capital_to_revenue is not None
-                else configured.operating_working_capital_to_revenue
-            ),
-            historical_window=(
-                args.historical_window
-                if args.historical_window is not None
-                else configured.historical_window
-            ),
-        )
+        parameters = _fcff_parameters(args, configured)
         service = FcffForecastService()
     financials = await _retrieve_financials(
         args,
@@ -536,6 +634,119 @@ async def _run_forecast(args: argparse.Namespace) -> int:
     )
     forecast = service.forecast(financials, parameters)
     print(ForecastConsolePresenter().render(forecast))
+    return 0
+
+
+async def _run_valuation(args: argparse.Namespace) -> int:
+    profile = ValuationProfileLoader.load(args.profile)
+    forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
+    terminal_configuration = profile.valuation.terminal_value
+    terminal_method = (
+        TerminalValueMethod(args.terminal_method)
+        if args.terminal_method is not None
+        else terminal_configuration.method
+    )
+    cash_flow_timing = (
+        CashFlowTiming(args.cash_flow_timing)
+        if args.cash_flow_timing is not None
+        else profile.valuation.cash_flow_timing
+    )
+    forecast_service = FcffForecastService()
+    bridge_resolver = FcffDcfCapitalBridgeResolver()
+    required_concepts = (
+        forecast_service.required_concepts()
+        | bridge_resolver.required_concepts()
+        | {FinancialConcept.INTEREST_EXPENSE}
+    )
+    financials = await _retrieve_financials(
+        args,
+        Granularity.ANNUAL,
+        required_concepts,
+    )
+    forecast = forecast_service.forecast(financials, forecast_parameters)
+    bridge_configuration = profile.valuation.capital_bridge
+    has_cli_debt_bridge = any(
+        value is not None for value in (args.net_debt, args.gross_debt, args.cash)
+    )
+    capital_bridge = bridge_resolver.resolve(
+        financials,
+        fiscal_year=forecast.base_fiscal_year,
+        period_end=forecast.base_period_end,
+        unit=forecast.unit,
+        net_debt=(
+            args.net_debt if has_cli_debt_bridge else bridge_configuration.net_debt
+        ),
+        gross_debt=(
+            args.gross_debt if has_cli_debt_bridge else bridge_configuration.gross_debt
+        ),
+        cash_and_equivalents=(
+            args.cash
+            if has_cli_debt_bridge
+            else bridge_configuration.cash_and_equivalents
+        ),
+        diluted_shares=(
+            args.shares
+            if args.shares is not None
+            else bridge_configuration.diluted_shares
+        ),
+    )
+    discount_configuration = profile.valuation.discount_rates
+    needs_automatic_wacc = (
+        args.wacc is None
+        and discount_configuration.wacc is None
+        and not discount_configuration.can_calculate_wacc
+    )
+    needs_automatic_terminal = (
+        terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+        and args.terminal_growth is None
+        and terminal_configuration.perpetual_growth_rate is None
+    )
+    automatic_inputs = await _retrieve_automatic_assumption_inputs(
+        args,
+        financials,
+        forecast.unit,
+        needs_wacc=needs_automatic_wacc,
+        needs_terminal=needs_automatic_terminal,
+    )
+    resolved = ValuationAssumptionResolver().resolve(
+        financials=financials,
+        capital_bridge=capital_bridge,
+        discount_configuration=discount_configuration,
+        terminal_configuration=terminal_configuration,
+        terminal_is_perpetuity=(
+            terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+        ),
+        valuation_date=datetime.date.today(),
+        wacc_override=args.wacc,
+        terminal_growth_override=args.terminal_growth,
+        **automatic_inputs,
+    )
+    parameters = FcffDcfParameters(
+        wacc=resolved.wacc,
+        wacc_source=resolved.wacc_source,
+        cash_flow_timing=cash_flow_timing,
+        terminal_method=terminal_method,
+        perpetual_growth_rate=resolved.perpetual_growth_rate,
+        perpetual_growth_source=resolved.perpetual_growth_source,
+        exit_multiple=(
+            (
+                args.exit_multiple
+                if args.exit_multiple is not None
+                else terminal_configuration.exit_multiple
+            )
+            if terminal_method == TerminalValueMethod.EXIT_MULTIPLE
+            else None
+        ),
+        exit_metric=(
+            TerminalMetric(args.exit_metric)
+            if args.exit_metric is not None
+            else terminal_configuration.exit_metric
+        ),
+    )
+    result = FcffDcfService().value(
+        forecast, parameters, capital_bridge, resolved.assumption_set
+    )
+    print(FcffDcfConsolePresenter().render(result))
     return 0
 
 
@@ -817,6 +1028,259 @@ def _granularity(period: str) -> Optional[Granularity]:
     return None if period == "all" else Granularity(period)
 
 
+def _fcff_parameters(args: argparse.Namespace, configured) -> FcffForecastParameters:
+    return FcffForecastParameters(
+        forecast_years=(
+            args.years if args.years is not None else configured.forecast_years
+        ),
+        revenue_growth=(
+            args.revenue_growth
+            if args.revenue_growth is not None
+            else configured.revenue_growth
+        ),
+        operating_margin=(
+            args.operating_margin
+            if args.operating_margin is not None
+            else configured.operating_margin
+        ),
+        tax_rate=(args.tax_rate if args.tax_rate is not None else configured.tax_rate),
+        depreciation_to_revenue=(
+            args.depreciation_to_revenue
+            if args.depreciation_to_revenue is not None
+            else configured.depreciation_to_revenue
+        ),
+        capex_to_revenue=(
+            args.capex_to_revenue
+            if args.capex_to_revenue is not None
+            else configured.capex_to_revenue
+        ),
+        operating_working_capital_to_revenue=(
+            args.operating_working_capital_to_revenue
+            if args.operating_working_capital_to_revenue is not None
+            else configured.operating_working_capital_to_revenue
+        ),
+        historical_window=(
+            args.historical_window
+            if args.historical_window is not None
+            else configured.historical_window
+        ),
+    )
+
+
+async def _retrieve_automatic_assumption_inputs(
+    args: argparse.Namespace,
+    financials: NormalizedCompanyFinancials,
+    currency: str,
+    *,
+    needs_wacc: bool,
+    needs_terminal: bool,
+) -> dict:
+    inputs = {
+        "classification": None,
+        "market_data": None,
+        "risk_free_series": None,
+        "inflation_series": None,
+        "country_snapshot": None,
+        "industry_snapshot": None,
+    }
+    if not (needs_wacc or needs_terminal):
+        return inputs
+
+    cache = FileSystemCache(Path(args.cache_dir))
+    use_cache = not args.refresh
+    symbol = financials.ticker or args.ticker
+    if needs_wacc:
+        if not symbol:
+            raise ValueError(
+                "Automatic WACC requires a ticker to retrieve Yahoo classification "
+                "and market capitalization; provide --ticker or explicit WACC inputs"
+            )
+        try:
+            async with YahooFinanceClient(cache) as yahoo:
+                source, history = await asyncio.gather(
+                    yahoo.get_company_financials(
+                        symbol, use_cache=use_cache, make_cache=True
+                    ),
+                    yahoo.get_price_history(
+                        symbol,
+                        period="1mo",
+                        use_cache=use_cache,
+                        make_cache=True,
+                    ),
+                )
+            inputs["classification"] = (
+                CompanyClassificationNormalizer().normalize_yahoo(source)
+            )
+            inputs["market_data"] = YahooMarketNormalizer().normalize(history)
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(
+                "Automatic WACC could not retrieve Yahoo classification/price data; "
+                "set WACC or the missing CAPM/capital-weight inputs in the profile. "
+                f"Cause: {exc}"
+            ) from exc
+
+        try:
+            async with DamodaranClient(cache) as damodaran:
+                country_snapshot, industry_snapshot = await asyncio.gather(
+                    damodaran.get_country_risk_premiums(
+                        use_cache=use_cache, make_cache=True
+                    ),
+                    damodaran.get_industry_betas(use_cache=use_cache, make_cache=True),
+                )
+            inputs["country_snapshot"] = country_snapshot
+            inputs["industry_snapshot"] = industry_snapshot
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(
+                "Automatic WACC could not retrieve the versioned Damodaran country "
+                "and industry references; set beta, ERP, country premium, and tax "
+                f"inputs in the profile. Cause: {exc}"
+            ) from exc
+
+    normalized_currency = currency.strip().upper()
+    try:
+        if normalized_currency == "EUR":
+            start = datetime.date.today() - datetime.timedelta(days=365 * 6)
+            async with EcbClient(cache) as ecb:
+                risk_free_task = ecb.get_series(
+                    "YC",
+                    "B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y",
+                    kind=ReferenceSeriesKind.GOVERNMENT_YIELD,
+                    unit=ReferenceValueUnit.PERCENTAGE_POINTS,
+                    start_period=datetime.date.today() - datetime.timedelta(days=45),
+                    end_period=datetime.date.today(),
+                    use_cache=use_cache,
+                    make_cache=True,
+                )
+                if needs_terminal:
+                    risk_free, inflation = await asyncio.gather(
+                        risk_free_task,
+                        ecb.get_series(
+                            "HICP",
+                            "M.U2.N.000000.4D0.ANR",
+                            kind=ReferenceSeriesKind.INFLATION_RATE,
+                            unit=ReferenceValueUnit.PERCENT_CHANGE,
+                            start_period=start,
+                            end_period=datetime.date.today(),
+                            use_cache=use_cache,
+                            make_cache=True,
+                        ),
+                    )
+                    inputs["inflation_series"] = inflation
+                else:
+                    risk_free = await risk_free_task
+            inputs["risk_free_series"] = risk_free
+        elif normalized_currency == "USD":
+            async with TreasuryClient(cache) as treasury:
+                inputs["risk_free_series"] = await treasury.get_par_yield(
+                    120,
+                    use_cache=use_cache,
+                    make_cache=True,
+                )
+            if needs_terminal and FRED_API_KEY:
+                async with FredClient(cache, FRED_API_KEY) as fred:
+                    inputs["inflation_series"] = await fred.get_series(
+                        "FPCPITOTLZGUSA",
+                        kind=ReferenceSeriesKind.INFLATION_RATE,
+                        unit=ReferenceValueUnit.PERCENT_CHANGE,
+                        observation_start=datetime.date.today()
+                        - datetime.timedelta(days=365 * 15),
+                        observation_end=datetime.date.today(),
+                        country="US",
+                        use_cache=use_cache,
+                        make_cache=True,
+                    )
+        else:
+            raise ValueError(
+                f"automatic macro assumptions currently support EUR and USD, not "
+                f"{normalized_currency}; set risk_free_rate/WACC and terminal growth "
+                "in the profile"
+            )
+    except RuntimeError as exc:
+        raise ValueError(
+            "Automatic valuation assumptions could not retrieve the sovereign-yield "
+            "or inflation series; provide risk_free_rate/WACC and terminal growth in "
+            f"the profile. Cause: {exc}"
+        ) from exc
+    return inputs
+
+
+def _resolve_wacc(override: Optional[Decimal], configuration) -> tuple[Decimal, str]:
+    if override is not None:
+        return override, "explicit CLI override"
+    if configuration.wacc is not None:
+        return configuration.wacc, "explicit valuation profile"
+
+    beta = configuration.levered_beta
+    if beta is None and configuration.unlevered_beta is not None:
+        required = {
+            "market_value_debt": configuration.market_value_debt,
+            "market_value_equity": configuration.market_value_equity,
+            "normalized_tax_rate": configuration.normalized_tax_rate,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(
+                "Levering the profile beta requires: " + ", ".join(missing)
+            )
+        assert configuration.market_value_debt is not None
+        assert configuration.market_value_equity is not None
+        assert configuration.normalized_tax_rate is not None
+        beta = DiscountRateService.lever_beta(
+            configuration.unlevered_beta,
+            configuration.market_value_debt,
+            configuration.market_value_equity,
+            configuration.normalized_tax_rate,
+        )
+
+    cost_of_equity = configuration.cost_of_equity
+    if cost_of_equity is None:
+        capm_inputs = {
+            "risk_free_rate": configuration.risk_free_rate,
+            "levered_beta": beta,
+            "equity_risk_premium": configuration.equity_risk_premium,
+        }
+        missing = [name for name, value in capm_inputs.items() if value is None]
+        if missing:
+            raise ValueError(
+                "FCFF DCF requires WACC. Provide --wacc, set valuation.discount_rates.wacc, "
+                "or complete the profile CAPM/WACC inputs. Missing: "
+                + ", ".join(missing)
+            )
+        assert configuration.risk_free_rate is not None
+        assert beta is not None
+        assert configuration.equity_risk_premium is not None
+        cost_of_equity = DiscountRateService.cost_of_equity(
+            configuration.risk_free_rate,
+            beta,
+            configuration.equity_risk_premium,
+            configuration.country_risk_premium or Decimal(0),
+        ).cost_of_equity
+
+    wacc_inputs = {
+        "pretax_cost_of_debt": configuration.pretax_cost_of_debt,
+        "normalized_tax_rate": configuration.normalized_tax_rate,
+        "market_value_equity": configuration.market_value_equity,
+        "market_value_debt": configuration.market_value_debt,
+    }
+    missing = [name for name, value in wacc_inputs.items() if value is None]
+    if missing:
+        raise ValueError(
+            "FCFF DCF WACC calculation is missing profile inputs: " + ", ".join(missing)
+        )
+    assert configuration.pretax_cost_of_debt is not None
+    assert configuration.normalized_tax_rate is not None
+    assert configuration.market_value_equity is not None
+    assert configuration.market_value_debt is not None
+    result = DiscountRateService.wacc(
+        cost_of_equity,
+        configuration.pretax_cost_of_debt,
+        configuration.normalized_tax_rate,
+        configuration.market_value_equity,
+        configuration.market_value_debt,
+    )
+    return result.wacc, "derived from valuation profile CAPM and capital weights"
+
+
 def _validate_limit(limit: int) -> None:
     if limit < 1:
         raise ValueError("--limit must be at least 1")
@@ -839,9 +1303,22 @@ def _parse_mappings(values: Optional[list[str]], option: str) -> dict[str, str]:
 
 def _percentage(value: str) -> Decimal:
     try:
-        return Decimal(value)
+        converted = Decimal(value)
     except InvalidOperation as exc:
         raise argparse.ArgumentTypeError(f"invalid percentage: {value!r}") from exc
+    if not converted.is_finite():
+        raise argparse.ArgumentTypeError(f"invalid percentage: {value!r}")
+    return converted
+
+
+def _decimal_value(value: str) -> Decimal:
+    try:
+        converted = Decimal(value)
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}") from exc
+    if not converted.is_finite():
+        raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}")
+    return converted
 
 
 def _parse_provider_symbols(values: Optional[list[str]]) -> dict[ProviderName, str]:
@@ -870,6 +1347,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_metrics(args))
         if args.command == "forecast":
             return asyncio.run(_run_forecast(args))
+        if args.command == "valuation":
+            return asyncio.run(_run_valuation(args))
         if args.command == "valuation-models":
             return asyncio.run(_run_valuation_models(args))
         if args.command == "classification":

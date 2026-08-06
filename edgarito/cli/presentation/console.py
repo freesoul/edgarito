@@ -24,6 +24,7 @@ from edgarito.services.metrics.models import (
 )
 from edgarito.services.valuation import (
     ComparableMultiplesReport,
+    FcffDcfResult,
     ModelRole,
     ModelSuitability,
     MultipleStatus,
@@ -569,6 +570,114 @@ class ForecastConsolePresenter:
             )
         )
         return values
+
+
+class FcffDcfConsolePresenter:
+    def render(self, result: FcffDcfResult) -> str:
+        identifier = result.ticker or result.company_id
+        values = [
+            result.enterprise_value,
+            result.equity_value,
+            result.capital_bridge.net_debt,
+            result.terminal_value.terminal_value,
+            *(
+                item.amount
+                for item in result.explicit_forecast_present_value.cash_flows
+            ),
+        ]
+        scale, suffix = self._scale_values(values)
+        share_scale, share_suffix = self._scale_values(
+            [result.capital_bridge.diluted_shares]
+        )
+        amount_unit = f"{result.unit} {suffix}".rstrip()
+        timing = result.parameters.cash_flow_timing.value.replace("_", " ")
+        terminal_method = result.parameters.terminal_method.value.replace("_", " ")
+        lines = [
+            f"{identifier} - {result.company_name}",
+            f"Provider: {result.provider.upper()} | Valuation date: "
+            f"{result.valuation_date.isoformat()}",
+            f"Model: FCFF DCF | Timing: {timing}",
+            f"WACC: {result.parameters.wacc:,.2f}% ({result.parameters.wacc_source})",
+            f"Terminal method: {terminal_method}",
+        ]
+        if result.parameters.perpetual_growth_rate is not None:
+            source = result.parameters.perpetual_growth_source or "explicit"
+            lines.append(
+                "Terminal growth: "
+                f"{result.parameters.perpetual_growth_rate:,.2f}% ({source})"
+            )
+        if result.assumptions is not None:
+            lines.extend(["", "Resolved assumptions:"])
+            for assumption in result.assumptions.assumptions:
+                provider = (
+                    assumption.provenance.provider or assumption.provenance.origin.value
+                )
+                lines.append(
+                    f"  {assumption.kind.value}: {assumption.value:,.3f} [{provider}]"
+                )
+        lines.extend(
+            [
+                "",
+                f"{'Cash flow':<26}{'Period':>10}{'FCFF':>18}{'Factor':>12}{'PV':>18}",
+                "-" * 84,
+            ]
+        )
+        for item in result.explicit_forecast_present_value.cash_flows:
+            lines.append(
+                f"{(item.label or 'FCFF'):<26}{item.period:>10,.1f}"
+                f"{item.amount / scale:>18,.1f}{item.discount_factor:>12,.4f}"
+                f"{item.present_value / scale:>18,.1f}"
+            )
+        terminal = result.terminal_present_value
+        lines.append(
+            f"{'Terminal value':<26}{terminal.period:>10,.1f}"
+            f"{terminal.amount / scale:>18,.1f}{terminal.discount_factor:>12,.4f}"
+            f"{terminal.present_value / scale:>18,.1f}"
+        )
+        lines.extend(
+            [
+                "",
+                f"Explicit FCFF PV ({amount_unit}): "
+                f"{result.explicit_forecast_present_value.total_present_value / scale:,.1f}",
+                f"Terminal value PV ({amount_unit}): "
+                f"{result.terminal_present_value.present_value / scale:,.1f}",
+                f"Enterprise value ({amount_unit}): "
+                f"{result.enterprise_value / scale:,.1f}",
+                f"Less net debt ({amount_unit}): "
+                f"{result.capital_bridge.net_debt / scale:,.1f}",
+                f"Equity value ({amount_unit}): {result.equity_value / scale:,.1f}",
+                f"Diluted shares ({share_suffix or 'units'}): "
+                f"{result.capital_bridge.diluted_shares / share_scale:,.1f}",
+                f"Value per share ({result.unit}): {result.value_per_share:,.2f}",
+            ]
+        )
+        if result.terminal_value_percentage is not None:
+            lines.append(
+                "Terminal PV / enterprise value: "
+                f"{result.terminal_value_percentage:,.1f}%"
+            )
+        lines.extend(
+            [
+                "",
+                f"Net debt source: {result.capital_bridge.net_debt_source}",
+                f"Shares source: {result.capital_bridge.shares_source}",
+            ]
+        )
+        if result.warnings:
+            lines.extend(["", "WARNINGS"])
+            lines.extend(f"- {warning}" for warning in result.warnings)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _scale_values(values: list[Decimal]) -> tuple[Decimal, str]:
+        largest = max((abs(value) for value in values), default=Decimal(0))
+        if largest >= Decimal("1000000000"):
+            return Decimal("1000000000"), "B"
+        if largest >= Decimal("1000000"):
+            return Decimal("1000000"), "M"
+        if largest >= Decimal("1000"):
+            return Decimal("1000"), "K"
+        return Decimal(1), ""
 
 
 class ValuationSelectionConsolePresenter:

@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edgarito.schemas.normalization.classification import Sector
+from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
 
 
 def _decimal_close(left: Decimal, right: Decimal) -> bool:
@@ -579,4 +580,186 @@ class TerminalValueResult(BaseModel):
             expected = self.terminal_metric * self.exit_multiple
         if not _decimal_close(self.terminal_value, expected):
             raise ValueError("terminal_value does not match its method inputs")
+        return self
+
+
+class CashFlowTiming(str, Enum):
+    END_OF_PERIOD = "end_of_period"
+    MID_YEAR = "mid_year"
+
+
+class TerminalMetric(str, Enum):
+    EBITDA = "ebitda"
+    EBIT = "ebit"
+    FCFF = "fcff"
+    REVENUE = "revenue"
+
+
+class FcffDcfCapitalBridge(BaseModel):
+    """Normalized enterprise-to-equity inputs with explicit source labels."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fiscal_year: int
+    period_end: datetime.date
+    unit: str
+    net_debt: Decimal
+    diluted_shares: Decimal = Field(gt=0)
+    net_debt_source: str
+    shares_source: str
+    gross_debt: Optional[Decimal] = None
+    cash_and_equivalents: Optional[Decimal] = None
+
+    @field_validator("net_debt", "diluted_shares", "gross_debt", "cash_and_equivalents")
+    @classmethod
+    def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("Capital-bridge values must be finite")
+        return value
+
+    @field_validator("unit", "net_debt_source", "shares_source")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Capital-bridge text fields cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_debt_bridge(self) -> "FcffDcfCapitalBridge":
+        components = (self.gross_debt, self.cash_and_equivalents)
+        if (components[0] is None) != (components[1] is None):
+            raise ValueError("Gross debt and cash must be provided together")
+        if self.gross_debt is not None and self.cash_and_equivalents is not None:
+            if self.gross_debt < 0 or self.cash_and_equivalents < 0:
+                raise ValueError("Gross debt and cash cannot be negative")
+            expected = self.gross_debt - self.cash_and_equivalents
+            if not _decimal_close(self.net_debt, expected):
+                raise ValueError("Net debt does not match gross debt minus cash")
+        return self
+
+
+class FcffDcfParameters(BaseModel):
+    """FCFF DCF assumptions; rates use percentage points."""
+
+    model_config = ConfigDict(frozen=True)
+
+    wacc: Decimal
+    wacc_source: str = "explicit"
+    cash_flow_timing: CashFlowTiming = CashFlowTiming.END_OF_PERIOD
+    terminal_method: TerminalValueMethod = TerminalValueMethod.PERPETUITY_GROWTH
+    perpetual_growth_rate: Optional[Decimal] = None
+    perpetual_growth_source: Optional[str] = None
+    exit_multiple: Optional[Decimal] = None
+    exit_metric: TerminalMetric = TerminalMetric.EBITDA
+
+    @field_validator("wacc", "perpetual_growth_rate", "exit_multiple")
+    @classmethod
+    def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("FCFF DCF assumptions must be finite")
+        return value
+
+    @field_validator("wacc_source", "perpetual_growth_source")
+    @classmethod
+    def normalize_source(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Assumption sources cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_terminal_assumptions(self) -> "FcffDcfParameters":
+        if self.wacc <= Decimal("-100"):
+            raise ValueError("WACC must be greater than -100%")
+        if self.terminal_method == TerminalValueMethod.PERPETUITY_GROWTH:
+            if self.perpetual_growth_rate is None:
+                raise ValueError("Perpetuity growth requires perpetual_growth_rate")
+            if self.exit_multiple is not None:
+                raise ValueError("Perpetuity growth cannot include exit_multiple")
+            if self.wacc <= self.perpetual_growth_rate:
+                raise ValueError("WACC must exceed perpetual growth")
+        else:
+            if self.exit_multiple is None:
+                raise ValueError("Exit-multiple valuation requires exit_multiple")
+            if self.exit_multiple < 0:
+                raise ValueError("exit_multiple cannot be negative")
+            if self.perpetual_growth_rate is not None:
+                raise ValueError("Exit multiple cannot include perpetual growth")
+        return self
+
+
+class FcffDcfResult(BaseModel):
+    """Auditable enterprise-to-equity FCFF DCF result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    company_id: str
+    company_name: str
+    ticker: Optional[str] = None
+    valuation_date: datetime.date
+    unit: str
+    parameters: FcffDcfParameters
+    assumptions: Optional[ValuationAssumptionSet] = None
+    capital_bridge: FcffDcfCapitalBridge
+    explicit_forecast_present_value: PresentValueResult
+    terminal_value: TerminalValueResult
+    terminal_present_value: DiscountedCashFlow
+    enterprise_value: Decimal
+    equity_value: Decimal
+    value_per_share: Decimal
+    terminal_value_percentage: Optional[Decimal] = None
+    warnings: tuple[str, ...] = ()
+
+    @field_validator(
+        "enterprise_value",
+        "equity_value",
+        "value_per_share",
+        "terminal_value_percentage",
+    )
+    @classmethod
+    def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("FCFF DCF result values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_value_bridge(self) -> "FcffDcfResult":
+        if self.capital_bridge.unit != self.unit:
+            raise ValueError("Capital bridge and DCF must use one currency")
+        expected_enterprise = (
+            self.explicit_forecast_present_value.total_present_value
+            + self.terminal_present_value.present_value
+        )
+        if not _decimal_close(self.enterprise_value, expected_enterprise):
+            raise ValueError("Enterprise value does not match discounted cash flows")
+        expected_equity = self.enterprise_value - self.capital_bridge.net_debt
+        if not _decimal_close(self.equity_value, expected_equity):
+            raise ValueError(
+                "Equity value does not match enterprise value minus net debt"
+            )
+        expected_per_share = self.equity_value / self.capital_bridge.diluted_shares
+        if not _decimal_close(self.value_per_share, expected_per_share):
+            raise ValueError(
+                "Per-share value does not match equity value divided by shares"
+            )
+        expected_percentage = (
+            self.terminal_present_value.present_value
+            / self.enterprise_value
+            * Decimal(100)
+            if self.enterprise_value != 0
+            else None
+        )
+        if self.terminal_value_percentage is None:
+            if expected_percentage is not None:
+                raise ValueError("terminal_value_percentage is required")
+        elif expected_percentage is None or not _decimal_close(
+            self.terminal_value_percentage, expected_percentage
+        ):
+            raise ValueError(
+                "terminal_value_percentage does not match enterprise value"
+            )
         return self

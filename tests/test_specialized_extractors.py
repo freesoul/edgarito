@@ -167,9 +167,7 @@ def test_cli_extracts_cached_sec_specialized_inputs(tmp_path, capsys):
     ticker_path.parent.mkdir(parents=True)
     facts_path.parent.mkdir(parents=True)
     ticker_path.write_text(
-        json.dumps(
-            {"0": {"cik_str": 34088, "ticker": "XOM", "title": "Exxon Mobil"}}
-        ),
+        json.dumps({"0": {"cik_str": 34088, "ticker": "XOM", "title": "Exxon Mobil"}}),
         encoding="utf-8",
     )
     facts_path.write_text(

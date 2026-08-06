@@ -13,9 +13,11 @@ from edgarito.services.forecasting.models import (
 )
 from edgarito.services.valuation.models import (
     BusinessArchetype,
+    CashFlowTiming,
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    TerminalMetric,
     TerminalValueMethod,
     ValuationInput,
 )
@@ -26,11 +28,6 @@ DEFAULT_VALUATION_PROFILE_PATH = Path("configs/valuation/default.json")
 class ForecastMethod(str, Enum):
     FCFF = "fcff"
     SIMPLIFIED = "simplified"
-
-
-class CashFlowTiming(str, Enum):
-    END_OF_PERIOD = "end_of_period"
-    MID_YEAR = "mid_year"
 
 
 class _ProfileModel(BaseModel):
@@ -52,7 +49,7 @@ class DiscountRateConfiguration(_ProfileModel):
     unlevered_beta: Optional[Decimal] = None
     levered_beta: Optional[Decimal] = None
     equity_risk_premium: Optional[Decimal] = None
-    country_risk_premium: Decimal = Decimal(0)
+    country_risk_premium: Optional[Decimal] = None
     cost_of_equity: Optional[Decimal] = None
     pretax_cost_of_debt: Optional[Decimal] = None
     normalized_tax_rate: Optional[Decimal] = None
@@ -114,6 +111,7 @@ class TerminalValueConfiguration(_ProfileModel):
     method: TerminalValueMethod = TerminalValueMethod.PERPETUITY_GROWTH
     perpetual_growth_rate: Optional[Decimal] = None
     exit_multiple: Optional[Decimal] = None
+    exit_metric: TerminalMetric = TerminalMetric.EBITDA
 
     @field_validator("perpetual_growth_rate", "exit_multiple")
     @classmethod
@@ -134,6 +132,39 @@ class TerminalValueConfiguration(_ProfileModel):
         return self
 
 
+class CapitalBridgeConfiguration(_ProfileModel):
+    net_debt: Optional[Decimal] = None
+    gross_debt: Optional[Decimal] = None
+    cash_and_equivalents: Optional[Decimal] = None
+    diluted_shares: Optional[Decimal] = None
+
+    @field_validator("net_debt", "gross_debt", "cash_and_equivalents", "diluted_shares")
+    @classmethod
+    def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("Capital-bridge profile values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_bridge(self) -> "CapitalBridgeConfiguration":
+        if self.diluted_shares is not None and self.diluted_shares <= 0:
+            raise ValueError("diluted_shares must be positive")
+        components = (self.gross_debt, self.cash_and_equivalents)
+        if (components[0] is None) != (components[1] is None):
+            raise ValueError("gross_debt and cash_and_equivalents must be set together")
+        if self.gross_debt is not None and self.cash_and_equivalents is not None:
+            if self.gross_debt < 0 or self.cash_and_equivalents < 0:
+                raise ValueError(
+                    "gross_debt and cash_and_equivalents cannot be negative"
+                )
+            derived_net_debt = self.gross_debt - self.cash_and_equivalents
+            if self.net_debt is not None and self.net_debt != derived_net_debt:
+                raise ValueError(
+                    "net_debt must equal gross_debt - cash_and_equivalents"
+                )
+        return self
+
+
 class ValuationCalculationConfiguration(_ProfileModel):
     cash_flow_timing: CashFlowTiming = CashFlowTiming.END_OF_PERIOD
     discount_rates: DiscountRateConfiguration = Field(
@@ -141,6 +172,9 @@ class ValuationCalculationConfiguration(_ProfileModel):
     )
     terminal_value: TerminalValueConfiguration = Field(
         default_factory=TerminalValueConfiguration
+    )
+    capital_bridge: CapitalBridgeConfiguration = Field(
+        default_factory=CapitalBridgeConfiguration
     )
 
 
@@ -264,6 +298,7 @@ class ValuationProfileLoader:
 
 __all__ = [
     "CashFlowTiming",
+    "CapitalBridgeConfiguration",
     "ComparableSelectionConfiguration",
     "DEFAULT_VALUATION_PROFILE_PATH",
     "DiscountRateConfiguration",

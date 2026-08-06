@@ -25,6 +25,7 @@ from edgarito.services.metrics.calculator import (
 
 PERCENT = Decimal(100)
 
+
 @dataclass(frozen=True)
 class _HistoricalDrivers:
     fiscal_year: int
@@ -242,10 +243,13 @@ class FcffForecastService:
 
         periods = []
         for fiscal_year, values in sorted(by_year.items()):
-            if not (
-                cls._CORE_REQUIRED_CONCEPTS
-                | OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
-            ) <= values.keys():
+            if (
+                not (
+                    cls._CORE_REQUIRED_CONCEPTS
+                    | OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
+                )
+                <= values.keys()
+            ):
                 continue
             operating_working_capital = operating_working_capital_value(values)
             if operating_working_capital is None:

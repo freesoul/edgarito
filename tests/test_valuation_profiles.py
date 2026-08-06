@@ -24,6 +24,8 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
     assert profile.forecast.fcff.historical_window == 3
     assert profile.valuation.cash_flow_timing == CashFlowTiming.END_OF_PERIOD
     assert profile.valuation.discount_rates.risk_free_rate is None
+    assert profile.valuation.discount_rates.wacc is None
+    assert profile.valuation.terminal_value.perpetual_growth_rate is None
     assert profile.comparables.max_peers == 8
     assert profile.specialized_inputs.history == 5
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
@@ -120,6 +122,28 @@ def test_configured_rates_are_exposed_as_ready_selector_inputs():
             ValuationInput.TERMINAL_GROWTH,
         }
     )
+
+
+def test_profile_accepts_a_manual_gross_debt_and_cash_bridge():
+    profile = ForecastValuationProfile.model_validate(
+        {
+            "valuation": {
+                "capital_bridge": {
+                    "gross_debt": "100",
+                    "cash_and_equivalents": "25",
+                    "diluted_shares": "10",
+                }
+            }
+        }
+    )
+
+    bridge = profile.valuation.capital_bridge
+    assert bridge.gross_debt == Decimal("100")
+    assert bridge.cash_and_equivalents == Decimal("25")
+    with pytest.raises(ValueError, match="must be set together"):
+        ForecastValuationProfile.model_validate(
+            {"valuation": {"capital_bridge": {"gross_debt": "100"}}}
+        )
 
 
 def test_profile_cli_options_are_unset_until_profile_resolution():

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "default",
-  "description": "Conservative provider-independent defaults for forecasting and valuation workflows.",
+  "description": "Provider-backed defaults for forecasting and valuation workflows; null valuation assumptions are resolved automatically.",
   "forecast": {
     "default_method": "fcff",
     "fcff": {
@@ -28,7 +28,7 @@
       "unlevered_beta": null,
       "levered_beta": null,
       "equity_risk_premium": null,
-      "country_risk_premium": "0",
+      "country_risk_premium": null,
       "cost_of_equity": null,
       "pretax_cost_of_debt": null,
       "normalized_tax_rate": null,
@@ -39,7 +39,14 @@
     "terminal_value": {
       "method": "perpetuity_growth",
       "perpetual_growth_rate": null,
-      "exit_multiple": null
+      "exit_multiple": null,
+      "exit_metric": "ebitda"
+    },
+    "capital_bridge": {
+      "net_debt": null,
+      "gross_debt": null,
+      "cash_and_equivalents": null,
+      "diluted_shares": null
     }
   },
   "model_selection": {

@@ -24,8 +24,7 @@ OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS = frozenset(
     }
 )
 OPERATING_WORKING_CAPITAL_ASSET_CONCEPTS = (
-    OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
-    | {FinancialConcept.INVENTORY}
+    OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS | {FinancialConcept.INVENTORY}
 )
 OPERATING_WORKING_CAPITAL_DETAIL_LIABILITY_CONCEPTS = frozenset(
     {
@@ -469,9 +468,7 @@ class FinancialMetricsService:
             )
 
         previous_operating_working_capital = (
-            operating_working_capital_value(previous)
-            if previous is not None
-            else None
+            operating_working_capital_value(previous) if previous is not None else None
         )
         change_in_operating_working_capital = self._combine_amounts(
             (
