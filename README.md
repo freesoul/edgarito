@@ -460,6 +460,48 @@ pipeline, and SOTP denominators remain part of the later specialized extractors.
 Programmatically, use `PeerUniverseSelector`, `LtmMultiplesService`, and
 `ComparableMultiplesService` from `edgarito.services.valuation`.
 
+## Extract specialized valuation inputs
+
+SEC Company Facts can supply part of the data needed by specialized valuation
+profiles. The `specialized-inputs` command extracts supported standard facts,
+retains accession and source-concept provenance, derives only clearly labeled
+proxies, and reports what is still missing:
+
+```bash
+uv run edgarito specialized-inputs --ticker PLD --type reit
+uv run edgarito specialized-inputs --ticker XOM --type resource
+uv run edgarito specialized-inputs --ticker MRNA --type biotech
+uv run edgarito specialized-inputs --ticker JNJ --type sotp
+```
+
+Use `--history` to select the number of latest annual or interim period ends. The extractors
+currently provide:
+
+- REIT/property: net income, reported D&A, property-sale gains, impairment, and
+  a traceable FFO proxy. It is not mislabeled as NAREIT FFO or AFFO; recurring
+  capex, straight-line rent, leasing costs, and company-specific adjustments
+  remain required.
+- Resources: exploration expense, capitalized exploratory well costs, additions,
+  depreciation/depletion/amortization, asset-retirement obligations when
+  standardized, and corporate capex.
+  Reserve quantities, production profiles, commodity scenarios, asset costs,
+  and closure timing remain required for NAV.
+- Biotech: reported R&D, acquired in-process R&D when standardized, and cash.
+  Named programs, indications, phases, probabilities, launch assumptions, peak
+  sales, exclusivity, and program costs remain required for pipeline rNPV.
+- SOTP: standardized reportable-segment counts and consolidated segment totals
+  when available. Named dimensional segment revenue, profit, assets, capex,
+  eliminations, and segment assumptions remain required.
+
+These limitations are structural: SEC Company Facts generally omits the custom
+taxonomy and dimensional members contained in filing tables and narrative. Each
+report therefore returns `partial` or `blocked` readiness until those inputs are
+supplied by a future filing-table extractor or an explicit supplemental dataset.
+
+Programmatic entry points are `ReitInputExtractor`, `ResourceInputExtractor`,
+`BiotechInputExtractor`, `SotpInputExtractor`, and
+`SpecializedValuationExtractor`.
+
 ## Market data and valuation assumptions
 
 Observed market data and selected valuation assumptions use separate schemas.

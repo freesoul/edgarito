@@ -29,9 +29,17 @@ from edgarito.services.valuation.multiples import (
 from edgarito.services.valuation.peers import PeerUniverseSelector
 from edgarito.services.valuation.profile import ValuationProfileBuilder
 from edgarito.services.valuation.selector import ValuationModelSelector
+from edgarito.services.valuation.specialized import (
+    BiotechInputExtractor,
+    ReitInputExtractor,
+    ResourceInputExtractor,
+    SotpInputExtractor,
+    SpecializedValuationExtractor,
+)
 
 __all__ = [
     "BusinessArchetype",
+    "BiotechInputExtractor",
     "CompanyTradingMultiples",
     "ComparableMultiplesReport",
     "ComparableMultiplesService",
@@ -50,6 +58,10 @@ __all__ = [
     "PeerUniverse",
     "PeerUniverseSelector",
     "RelativeValuationBasis",
+    "ReitInputExtractor",
+    "ResourceInputExtractor",
+    "SotpInputExtractor",
+    "SpecializedValuationExtractor",
     "ValuationInput",
     "ValuationModel",
     "ValuationModelSelector",

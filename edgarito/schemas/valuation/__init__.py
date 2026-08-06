@@ -15,6 +15,14 @@ from edgarito.schemas.valuation.reference import (
     ReferenceDatasetMetadata,
     ReferenceDatasetRelease,
 )
+from edgarito.schemas.valuation.specialized import (
+    ExtractedFieldOrigin,
+    ExtractedValuationField,
+    ExtractionPeriodKind,
+    ExtractionReadiness,
+    SpecializedInputType,
+    SpecializedValuationExtraction,
+)
 
 __all__ = [
     "AssumptionOrigin",
@@ -22,10 +30,16 @@ __all__ = [
     "AssumptionUnit",
     "CountryRiskPremium",
     "CountryRiskPremiumSnapshot",
+    "ExtractedFieldOrigin",
+    "ExtractedValuationField",
+    "ExtractionPeriodKind",
+    "ExtractionReadiness",
     "IndustryBeta",
     "IndustryBetaSnapshot",
     "ReferenceDatasetMetadata",
     "ReferenceDatasetRelease",
+    "SpecializedInputType",
+    "SpecializedValuationExtraction",
     "ValuationAssumption",
     "ValuationAssumptionKind",
     "ValuationAssumptionSet",

@@ -14,6 +14,7 @@ from edgarito.cli.presentation.console import (
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
     MetricsConsolePresenter,
+    SpecializedExtractionConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
 from edgarito.enums.granularity import Granularity
@@ -24,6 +25,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     NormalizedCompanyFinancials,
 )
+from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.forecasting import (
     FcffForecastParameters,
@@ -37,6 +39,7 @@ from edgarito.services.normalization.classification import (
 )
 from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
+from edgarito.services.providers.edgar import EdgarClient
 from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
@@ -51,6 +54,7 @@ from edgarito.services.valuation import (
     LtmMultiplesService,
     PeerSelectionParameters,
     PeerUniverseSelector,
+    SpecializedValuationExtractor,
     ValuationInput,
     ValuationModelSelector,
     ValuationProfileBuilder,
@@ -91,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
     comparables = subparsers.add_parser(
         "comparables",
         help="Select peers and compute keyless Yahoo-backed LTM multiples",
+    )
+    specialized_inputs = subparsers.add_parser(
+        "specialized-inputs",
+        help="Extract REIT, resource, biotech, or SOTP valuation inputs",
     )
 
     for command_parser in (financials, metrics):
@@ -276,6 +284,31 @@ def build_parser() -> argparse.ArgumentParser:
     comparables.add_argument("--refresh", action="store_true")
     comparables.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
     comparables.add_argument("--verbose", action="store_true")
+    specialized_identifier = specialized_inputs.add_mutually_exclusive_group(
+        required=True
+    )
+    specialized_identifier.add_argument("--ticker", help="US-listed SEC ticker")
+    specialized_identifier.add_argument("--cik", type=int, help="SEC Central Index Key")
+    specialized_inputs.add_argument(
+        "--type",
+        required=True,
+        choices=[item.value for item in SpecializedInputType],
+        help="Specialized valuation input profile",
+    )
+    specialized_inputs.add_argument(
+        "--history",
+        type=int,
+        default=5,
+        help="Number of latest reporting period ends to retain (default: 5)",
+    )
+    specialized_inputs.add_argument("--refresh", action="store_true")
+    specialized_inputs.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
+    specialized_inputs.add_argument(
+        "--user-agent",
+        default=EDGARITO_USER_AGENT,
+        help="SEC user agent in 'Name (email@example.com)' form",
+    )
+    specialized_inputs.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -556,6 +589,36 @@ async def _run_comparables(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_specialized_inputs(args: argparse.Namespace) -> int:
+    if args.history < 1:
+        raise ValueError("--history must be at least 1")
+    if not args.user_agent:
+        raise ValueError("SEC retrieval requires EDGARITO_USER_AGENT / user_agent")
+    async with EdgarClient(
+        FileSystemCache(Path(args.cache_dir)), args.user_agent
+    ) as client:
+        cik = args.cik
+        if cik is None:
+            cik = await client.get_cik(
+                args.ticker,
+                use_cache=not args.refresh,
+                make_cache=True,
+            )
+        facts = await client.get_company_facts(
+            cik,
+            use_cache=not args.refresh,
+            make_cache=True,
+        )
+    extraction = SpecializedValuationExtractor().extract(
+        facts,
+        SpecializedInputType(args.type),
+        ticker=args.ticker,
+        historical_periods=args.history,
+    )
+    print(SpecializedExtractionConsolePresenter().render(extraction))
+    return 0
+
+
 async def _retrieve_yahoo_comparable_source(
     client: YahooFinanceClient,
     symbol: str,
@@ -702,6 +765,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_classification(args))
         if args.command == "comparables":
             return asyncio.run(_run_comparables(args))
+        if args.command == "specialized-inputs":
+            return asyncio.run(_run_specialized_inputs(args))
     except (ValueError, RuntimeError, FileNotFoundError, ValidationError) as exc:
         parser.error(str(exc))
     return 1
