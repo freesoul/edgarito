@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -157,6 +158,10 @@ class ValuationProfile(BaseModel):
     ticker: Optional[str] = None
     sector: Optional[Sector] = None
     industry: Optional[str] = None
+    country: Optional[str] = None
+    exchange: Optional[str] = None
+    reporting_currency: Optional[str] = None
+    latest_revenue: Optional[Decimal] = None
 
     business_archetype: BusinessArchetype
     lifecycle: CompanyLifecycle
@@ -196,3 +201,98 @@ class ValuationSelection(BaseModel):
             (model for model in self.models if model.role == ModelRole.PRIMARY),
             None,
         )
+
+
+class PeerSelectionParameters(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    max_peers: int = Field(default=8, ge=1, le=50)
+    preferred_minimum: int = Field(default=5, ge=1, le=50)
+    minimum_score: int = Field(default=50, ge=0, le=100)
+    require_same_sector: bool = True
+
+
+class PeerCandidateAssessment(BaseModel):
+    ticker: str
+    company_id: str
+    company_name: str
+    score: int = Field(ge=0, le=100)
+    selected: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+
+
+class PeerUniverse(BaseModel):
+    target_ticker: str
+    target_company_id: str
+    parameters: PeerSelectionParameters
+    candidates: list[PeerCandidateAssessment] = Field(default_factory=list)
+    selected_tickers: tuple[str, ...] = ()
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MultipleStatus(str, Enum):
+    COMPUTED = "computed"
+    UNAVAILABLE = "unavailable"
+    NOT_MEANINGFUL = "not_meaningful"
+
+
+class TradingMultiple(BaseModel):
+    basis: RelativeValuationBasis
+    status: MultipleStatus
+    value: Optional[Decimal] = None
+    unit: str = "multiple"
+    numerator: Optional[Decimal] = None
+    denominator: Optional[Decimal] = None
+    reason: Optional[str] = None
+
+
+class LtmFundamentals(BaseModel):
+    period_start: datetime.date
+    period_end: datetime.date
+    currency: str
+    revenue: Optional[Decimal] = None
+    operating_income: Optional[Decimal] = None
+    depreciation_and_amortization: Optional[Decimal] = None
+    ebitda: Optional[Decimal] = None
+    net_income: Optional[Decimal] = None
+    free_cash_flow: Optional[Decimal] = None
+    dividends_paid: Optional[Decimal] = None
+    book_equity: Optional[Decimal] = None
+    tangible_book_equity: Optional[Decimal] = None
+    cash_and_equivalents: Optional[Decimal] = None
+    gross_debt: Optional[Decimal] = None
+    shares: Optional[Decimal] = None
+    share_basis: Optional[str] = None
+
+
+class CompanyTradingMultiples(BaseModel):
+    provider: str
+    market_provider: str
+    company_id: str
+    company_name: str
+    ticker: str
+    price_date: datetime.date
+    price: Decimal
+    currency: str
+    market_capitalization: Optional[Decimal] = None
+    enterprise_value: Optional[Decimal] = None
+    fundamentals: LtmFundamentals
+    multiples: list[TradingMultiple] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PeerMultipleSummary(BaseModel):
+    basis: RelativeValuationBasis
+    median: Decimal
+    minimum: Decimal
+    maximum: Decimal
+    sample_size: int = Field(ge=1)
+
+
+class ComparableMultiplesReport(BaseModel):
+    universe: PeerUniverse
+    target: CompanyTradingMultiples
+    peers: list[CompanyTradingMultiples] = Field(default_factory=list)
+    summaries: list[PeerMultipleSummary] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

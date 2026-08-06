@@ -87,6 +87,9 @@ class _FakeTicker:
             "longName": "SAP SE",
             "financialCurrency": "EUR",
             "fullExchangeName": "XETRA",
+            "sector": "Technology",
+            "industry": "Software Infrastructure",
+            "country": "Germany",
         }
 
     def history(self, **kwargs):
@@ -130,6 +133,8 @@ def test_yahoo_financial_client_caches_serializable_statement_snapshots(tmp_path
     assert first == second
     assert first.company_name == "SAP SE"
     assert first.currency == "EUR"
+    assert first.sector == "Technology"
+    assert first.industry == "Software Infrastructure"
     assert first.annual_income_statements[0].values["TotalRevenue"] == Decimal("1000.0")
     assert len(factory.instances) == 1
     assert (tmp_path / "providers/yahoo/SAP.DE/financials.json").is_file()

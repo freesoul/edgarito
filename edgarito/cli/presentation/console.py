@@ -22,8 +22,10 @@ from edgarito.services.metrics.models import (
     MetricObservation,
 )
 from edgarito.services.valuation import (
+    ComparableMultiplesReport,
     ModelRole,
     ModelSuitability,
+    MultipleStatus,
     ValuationSelection,
 )
 
@@ -654,3 +656,81 @@ class ValuationSelectionConsolePresenter:
             "wacc": "WACC",
         }
         return " ".join(acronyms.get(part, part.title()) for part in value.split("_"))
+
+
+class ComparableMultiplesConsolePresenter:
+    def render(self, report: ComparableMultiplesReport) -> str:
+        target = report.target
+        selected = set(report.universe.selected_tickers)
+        lines = [
+            f"{target.ticker} - {target.company_name}",
+            f"LTM period: {target.fundamentals.period_start.isoformat()} to "
+            f"{target.fundamentals.period_end.isoformat()} | Price: "
+            f"{target.price:,.2f} {target.currency} on {target.price_date.isoformat()}",
+            f"Selected peers ({len(selected)}): "
+            f"{', '.join(report.universe.selected_tickers) or '-'}",
+            "",
+            "PEER SELECTION",
+            f"{'Ticker':<12} {'Score':>7}  Decision / evidence",
+            "-" * 78,
+        ]
+        for candidate in report.universe.candidates:
+            decision = "selected" if candidate.selected else "excluded"
+            detail = candidate.exclusions or candidate.reasons
+            lines.append(
+                f"{candidate.ticker:<12} {candidate.score:>6}/100  "
+                f"{decision}: {'; '.join(detail) or '-'}"
+            )
+
+        target_multiples = {item.basis: item for item in target.multiples}
+        summaries = {item.basis: item for item in report.summaries}
+        bases = list(dict.fromkeys([*target_multiples, *summaries]))
+        lines.extend(
+            [
+                "",
+                "LTM MULTIPLES",
+                f"{'Basis':<28} {'Target':>12} {'Peer median':>14} "
+                f"{'Peer range':>21} {'N':>4}",
+                "-" * 83,
+            ]
+        )
+        for basis in bases:
+            target_multiple = target_multiples.get(basis)
+            summary = summaries.get(basis)
+            target_value = (
+                self._format_multiple(target_multiple.value, target_multiple.unit)
+                if target_multiple
+                and target_multiple.status == MultipleStatus.COMPUTED
+                and target_multiple.value is not None
+                else "-"
+            )
+            median_value = (
+                self._format_multiple(summary.median, target_multiple.unit)
+                if summary and target_multiple
+                else "-"
+            )
+            peer_range = (
+                f"{self._format_multiple(summary.minimum, target_multiple.unit)}–"
+                f"{self._format_multiple(summary.maximum, target_multiple.unit)}"
+                if summary and target_multiple
+                else "-"
+            )
+            lines.append(
+                f"{ValuationSelectionConsolePresenter._label(basis.value):<28} "
+                f"{target_value:>12} {median_value:>14} {peer_range:>21} "
+                f"{summary.sample_size if summary else 0:>4}"
+            )
+
+        warnings = [
+            *target.warnings,
+            *(warning for peer in report.peers for warning in peer.warnings),
+            *report.warnings,
+        ]
+        if warnings:
+            lines.extend(["", "WARNINGS"])
+            lines.extend(f"- {warning}" for warning in dict.fromkeys(warnings))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_multiple(value: Decimal, unit: str) -> str:
+        return f"{value:,.2f}%" if unit == "percent" else f"{value:,.2f}x"

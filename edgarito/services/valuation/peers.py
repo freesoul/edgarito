@@ -1,0 +1,206 @@
+import re
+from decimal import Decimal
+
+from edgarito.services.valuation.models import (
+    BusinessArchetype,
+    PeerCandidateAssessment,
+    PeerSelectionParameters,
+    PeerUniverse,
+    ValuationProfile,
+)
+
+
+class PeerUniverseSelector:
+    """Rank an explicit candidate universe by economic comparability."""
+
+    _SPECIALIZED_ARCHETYPES = {
+        BusinessArchetype.FINANCIAL_INTERMEDIARY,
+        BusinessArchetype.ASSET_MANAGER,
+        BusinessArchetype.REIT_PROPERTY,
+        BusinessArchetype.RESOURCE_PRODUCER,
+        BusinessArchetype.PROJECT_PIPELINE,
+        BusinessArchetype.HOLDING_COMPANY,
+        BusinessArchetype.CONGLOMERATE,
+    }
+
+    def select(
+        self,
+        target: ValuationProfile,
+        candidates: list[ValuationProfile],
+        parameters: PeerSelectionParameters | None = None,
+    ) -> PeerUniverse:
+        parameters = parameters or PeerSelectionParameters()
+        if not target.ticker:
+            raise ValueError("Peer selection requires a target ticker")
+
+        assessments = [
+            self._assess(target, candidate, parameters) for candidate in candidates
+        ]
+        assessments.sort(key=lambda item: (-item.score, item.ticker))
+        eligible = [
+            item
+            for item in assessments
+            if not item.exclusions and item.score >= parameters.minimum_score
+        ]
+        selected_tickers = tuple(
+            item.ticker for item in eligible[: parameters.max_peers]
+        )
+        selected = set(selected_tickers)
+        assessments = [
+            item.model_copy(update={"selected": item.ticker in selected})
+            for item in assessments
+        ]
+
+        warnings = []
+        if len(selected_tickers) < parameters.preferred_minimum:
+            warnings.append(
+                f"Only {len(selected_tickers)} peers met the selection criteria; "
+                f"{parameters.preferred_minimum} are preferred"
+            )
+        if not candidates:
+            warnings.append(
+                "No candidate universe was supplied; peer discovery is a separate "
+                "provider concern"
+            )
+        return PeerUniverse(
+            target_ticker=target.ticker,
+            target_company_id=target.company_id,
+            parameters=parameters,
+            candidates=assessments,
+            selected_tickers=selected_tickers,
+            warnings=warnings,
+        )
+
+    def _assess(
+        self,
+        target: ValuationProfile,
+        candidate: ValuationProfile,
+        parameters: PeerSelectionParameters,
+    ) -> PeerCandidateAssessment:
+        ticker = candidate.ticker or candidate.company_id
+        exclusions = []
+        reasons = []
+        if self._same_company(target, candidate):
+            exclusions.append("Candidate is the target company")
+        if (
+            parameters.require_same_sector
+            and target.sector is not None
+            and candidate.sector is not None
+            and candidate.sector != target.sector
+        ):
+            exclusions.append("Sector differs from the target")
+        if (
+            target.business_archetype in self._SPECIALIZED_ARCHETYPES
+            and candidate.business_archetype != target.business_archetype
+        ):
+            exclusions.append("Specialized business economics differ from the target")
+
+        score = 0
+        if target.sector is not None and candidate.sector == target.sector:
+            score += 20
+            reasons.append("Same sector")
+
+        industry_score = self._industry_score(target.industry, candidate.industry)
+        score += industry_score
+        if industry_score == 30:
+            reasons.append("Same normalized industry")
+        elif industry_score:
+            reasons.append("Industry descriptions substantially overlap")
+
+        if candidate.business_archetype == target.business_archetype:
+            score += 20
+            reasons.append("Same business archetype")
+        if candidate.lifecycle == target.lifecycle:
+            score += 10
+            reasons.append("Same lifecycle")
+        if candidate.cyclicality == target.cyclicality:
+            score += 8
+            reasons.append("Same cyclicality")
+        if target.country and candidate.country == target.country:
+            score += 5
+            reasons.append("Same country")
+        if target.exchange and candidate.exchange == target.exchange:
+            score += 2
+            reasons.append("Same exchange")
+
+        comparable_currency = (
+            not target.reporting_currency
+            or not candidate.reporting_currency
+            or target.reporting_currency == candidate.reporting_currency
+        )
+        size_score = (
+            self._size_score(target.latest_revenue, candidate.latest_revenue)
+            if comparable_currency
+            else 0
+        )
+        score += size_score
+        if size_score:
+            reasons.append("Revenue scale is comparable")
+        if (
+            target.reporting_currency
+            and candidate.reporting_currency
+            and target.reporting_currency != candidate.reporting_currency
+        ):
+            reasons.append("Different reporting currency; multiples need FX alignment")
+
+        return PeerCandidateAssessment(
+            ticker=ticker,
+            company_id=candidate.company_id,
+            company_name=candidate.company_name,
+            score=max(0, min(100, score)),
+            reasons=reasons,
+            exclusions=exclusions,
+        )
+
+    @staticmethod
+    def _same_company(target: ValuationProfile, candidate: ValuationProfile) -> bool:
+        if target.company_id.isdigit() and candidate.company_id.isdigit():
+            return int(target.company_id) == int(candidate.company_id)
+        same_ticker = bool(
+            target.ticker
+            and candidate.ticker
+            and target.ticker.casefold() == candidate.ticker.casefold()
+        )
+        same_name = re.sub(r"[^a-z0-9]", "", target.company_name.casefold()) == re.sub(
+            r"[^a-z0-9]", "", candidate.company_name.casefold()
+        )
+        return same_ticker or same_name
+
+    @classmethod
+    def _industry_score(cls, target: str | None, candidate: str | None) -> int:
+        target_tokens = cls._tokens(target)
+        candidate_tokens = cls._tokens(candidate)
+        if not target_tokens or not candidate_tokens:
+            return 0
+        if target_tokens == candidate_tokens:
+            return 30
+        overlap = len(target_tokens & candidate_tokens) / len(
+            target_tokens | candidate_tokens
+        )
+        return min(20, int(Decimal(str(overlap)) * 20))
+
+    @staticmethod
+    def _tokens(value: str | None) -> set[str]:
+        if not value:
+            return set()
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", value.casefold())
+            if token not in {"and", "the", "services", "other"}
+        }
+
+    @staticmethod
+    def _size_score(target: Decimal | None, candidate: Decimal | None) -> int:
+        if target is None or candidate is None or target <= 0 or candidate <= 0:
+            return 0
+        ratio = max(target, candidate) / min(target, candidate)
+        if ratio <= Decimal("1.5"):
+            return 15
+        if ratio <= Decimal(3):
+            return 10
+        if ratio <= Decimal(10):
+            return 5
+        return 0
+
+
+__all__ = ["PeerUniverseSelector"]

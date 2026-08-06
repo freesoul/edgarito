@@ -23,6 +23,9 @@ class YahooCompanyFinancials(BaseModel):
     company_name: str
     currency: str
     exchange: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    country: Optional[str] = None
     annual_income_statements: tuple[YahooFinancialReport, ...] = ()
     quarterly_income_statements: tuple[YahooFinancialReport, ...] = ()
     annual_balance_sheets: tuple[YahooFinancialReport, ...] = ()

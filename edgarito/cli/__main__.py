@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import datetime
 import logging
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 
 from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
+    ComparableMultiplesConsolePresenter,
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
     MetricsConsolePresenter,
@@ -30,6 +32,12 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastService,
 )
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
+from edgarito.services.normalization.classification import (
+    CompanyClassificationNormalizer,
+)
+from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
+from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
+from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
 )
@@ -37,8 +45,12 @@ from edgarito.services.reconciliation.financials import FinancialDataService
 from edgarito.services.valuation import (
     BusinessArchetype,
     CompanyLifecycle,
+    ComparableMultiplesService,
     Cyclicality,
     EconomicTrait,
+    LtmMultiplesService,
+    PeerSelectionParameters,
+    PeerUniverseSelector,
     ValuationInput,
     ValuationModelSelector,
     ValuationProfileBuilder,
@@ -75,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     classification = subparsers.add_parser(
         "classification", help="Retrieve normalized company sector and industry"
+    )
+    comparables = subparsers.add_parser(
+        "comparables",
+        help="Select peers and compute keyless Yahoo-backed LTM multiples",
     )
 
     for command_parser in (financials, metrics):
@@ -224,6 +240,42 @@ def build_parser() -> argparse.ArgumentParser:
     classification.add_argument("--crosscheck", action="store_true")
     classification.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
     classification.add_argument("--verbose", action="store_true")
+    comparables.add_argument("--ticker", required=True, help="Target Yahoo symbol")
+    comparables.add_argument(
+        "--peer",
+        action="append",
+        required=True,
+        help="Candidate Yahoo symbol; repeat to supply the candidate universe",
+    )
+    comparables.add_argument(
+        "--max-peers", type=int, default=8, help="Maximum selected peers (default: 8)"
+    )
+    comparables.add_argument(
+        "--preferred-minimum",
+        type=int,
+        default=5,
+        help="Preferred minimum selected peers (default: 5)",
+    )
+    comparables.add_argument(
+        "--minimum-score",
+        type=int,
+        default=50,
+        help="Minimum comparability score from 0 to 100 (default: 50)",
+    )
+    comparables.add_argument(
+        "--allow-cross-sector",
+        action="store_true",
+        help="Do not hard-exclude candidates from a different sector",
+    )
+    comparables.add_argument(
+        "--as-of",
+        type=datetime.date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="Use the latest price on or before this date",
+    )
+    comparables.add_argument("--refresh", action="store_true")
+    comparables.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
+    comparables.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -426,6 +478,108 @@ async def _run_classification(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_comparables(args: argparse.Namespace) -> int:
+    target_symbol = args.ticker.strip().upper()
+    peer_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in args.peer))
+    parameters = PeerSelectionParameters(
+        max_peers=args.max_peers,
+        preferred_minimum=args.preferred_minimum,
+        minimum_score=args.minimum_score,
+        require_same_sector=not args.allow_cross_sector,
+    )
+    symbols = [target_symbol, *peer_symbols]
+    cache = FileSystemCache(Path(args.cache_dir))
+    async with YahooFinanceClient(cache) as client:
+        results = await asyncio.gather(
+            *(
+                _retrieve_yahoo_comparable_source(
+                    client,
+                    symbol,
+                    args.as_of,
+                    use_cache=not args.refresh,
+                )
+                for symbol in symbols
+            ),
+            return_exceptions=True,
+        )
+
+    if isinstance(results[0], BaseException):
+        raise RuntimeError(f"Target retrieval failed for {target_symbol}: {results[0]}")
+
+    profile_builder = ValuationProfileBuilder()
+    classification_normalizer = CompanyClassificationNormalizer()
+    financials_normalizer = YahooFinancialsNormalizer()
+    market_normalizer = YahooMarketNormalizer()
+    multiples_service = LtmMultiplesService()
+    bundles = {}
+    retrieval_warnings = []
+    for symbol, result in zip(symbols, results, strict=True):
+        if isinstance(result, BaseException):
+            retrieval_warnings.append(f"{symbol} retrieval failed: {result}")
+            continue
+        source, history = result
+        financials = financials_normalizer.normalize(source)
+        classification = classification_normalizer.normalize_yahoo(source)
+        profile = profile_builder.build(financials, classification)
+        market_data = market_normalizer.normalize(history)
+        try:
+            multiples = multiples_service.compute(financials, market_data, args.as_of)
+        except ValueError as exc:
+            multiples = None
+            retrieval_warnings.append(f"{symbol} multiples unavailable: {exc}")
+        bundles[symbol] = (profile, multiples)
+
+    target_profile, target_multiples = bundles[target_symbol]
+    if target_multiples is None:
+        raise ValueError(f"LTM multiples could not be computed for {target_symbol}")
+    candidate_profiles = [
+        bundles[symbol][0] for symbol in peer_symbols if symbol in bundles
+    ]
+    universe = PeerUniverseSelector().select(
+        target_profile, candidate_profiles, parameters
+    )
+    peer_multiples = [
+        bundles[symbol][1]
+        for symbol in peer_symbols
+        if symbol in bundles and bundles[symbol][1] is not None
+    ]
+    report = ComparableMultiplesService().build(
+        universe,
+        target_multiples,
+        peer_multiples,
+    )
+    if retrieval_warnings:
+        report = report.model_copy(
+            update={"warnings": [*report.warnings, *retrieval_warnings]}
+        )
+    print(ComparableMultiplesConsolePresenter().render(report))
+    return 0
+
+
+async def _retrieve_yahoo_comparable_source(
+    client: YahooFinanceClient,
+    symbol: str,
+    as_of: Optional[datetime.date],
+    *,
+    use_cache: bool,
+):
+    history_arguments = {"period": "1mo"}
+    if as_of is not None:
+        history_arguments = {
+            "start": as_of - datetime.timedelta(days=14),
+            "end": as_of + datetime.timedelta(days=1),
+        }
+    return await asyncio.gather(
+        client.get_company_financials(symbol, use_cache=use_cache, make_cache=True),
+        client.get_price_history(
+            symbol,
+            **history_arguments,
+            use_cache=use_cache,
+            make_cache=True,
+        ),
+    )
+
+
 async def _retrieve_classification(
     args: argparse.Namespace,
     *,
@@ -546,6 +700,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_valuation_models(args))
         if args.command == "classification":
             return asyncio.run(_run_classification(args))
+        if args.command == "comparables":
+            return asyncio.run(_run_comparables(args))
     except (ValueError, RuntimeError, FileNotFoundError, ValidationError) as exc:
         parser.error(str(exc))
     return 1

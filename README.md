@@ -413,6 +413,53 @@ are deliberately not marked as FCFF. `valuation-models` assesses readiness but
 does not execute the forecast; enterprise DCF becomes ready only when the
 driver-based FCFF result and the remaining valuation inputs are supplied.
 
+## Select peers and compute LTM multiples
+
+`comparables` ranks an explicit candidate universe and computes target and peer
+multiples from Yahoo's keyless company metadata, quarterly statements, and
+latest close:
+
+```bash
+uv run edgarito comparables --ticker GOOG \
+  --peer META \
+  --peer NFLX \
+  --peer MSFT \
+  --peer AMZN \
+  --peer AAPL
+```
+
+Candidate selection follows company economics rather than sector alone. The
+score considers normalized industry, sector, business archetype, lifecycle,
+cyclicality, country, exchange, and revenue scale. Cross-sector candidates are
+excluded by default; use `--allow-cross-sector` when a business-model peer sits
+in another official sector. `--minimum-score`, `--max-peers`, and
+`--preferred-minimum` control selection. Fewer than five selected peers is
+reported as a limitation, not silently accepted as a strong sample.
+
+The supplied symbols are the candidate universe, not guaranteed peers. Broad
+market discovery remains separate because the configured providers do not
+currently offer a reliable free full-market screener.
+
+LTM denominators require four consecutive fiscal quarters. The calculation
+uses:
+
+```text
+market capitalization = latest close × latest reported shares
+enterprise value       = market capitalization + reported debt - cash
+LTM EBITDA              = LTM operating income + LTM D&A
+LTM FCF                 = LTM operating cash flow - LTM capex
+```
+
+The report includes P/E, P/B, P/tangible book, EV/revenue, EV/EBIT,
+EV/EBITDA, EV/FCF, and dividend yield, plus peer medians, ranges, and sample
+sizes. Negative denominators are marked not meaningful; missing inputs remain
+unavailable. Market and reporting currencies must match unless an FX alignment
+is supplied in a future valuation layer. REIT AFFO, resource NAV, biotech
+pipeline, and SOTP denominators remain part of the later specialized extractors.
+
+Programmatically, use `PeerUniverseSelector`, `LtmMultiplesService`, and
+`ComparableMultiplesService` from `edgarito.services.valuation`.
+
 ## Market data and valuation assumptions
 
 Observed market data and selected valuation assumptions use separate schemas.

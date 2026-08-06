@@ -7,6 +7,7 @@ from edgarito.schemas.normalization.classification import (
 )
 from edgarito.schemas.providers.alphavantage.fundamentals import CompanyOverview
 from edgarito.schemas.providers.fmp.fundamentals import CompanyProfile
+from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 
 SECTOR_ALIASES = {
     "communication services": Sector.COMMUNICATION_SERVICES,
@@ -57,6 +58,20 @@ class CompanyClassificationNormalizer:
             industry=profile.industry,
             country=profile.country,
             exchange=profile.exchange,
+        )
+
+    def normalize_yahoo(
+        self, financials: YahooCompanyFinancials
+    ) -> NormalizedCompanyClassification:
+        return self._normalize(
+            provider="yahoo",
+            symbol=financials.symbol,
+            company_name=financials.company_name,
+            cik=None,
+            sector=financials.sector,
+            industry=financials.industry,
+            country=financials.country,
+            exchange=financials.exchange,
         )
 
     def _normalize(

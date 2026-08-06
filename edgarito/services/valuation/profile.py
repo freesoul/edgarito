@@ -107,6 +107,8 @@ class ValuationProfileBuilder:
         earnings = self._concept_values(annual, FinancialConcept.NET_INCOME)
         equities = self._concept_values(annual, FinancialConcept.STOCKHOLDERS_EQUITY)
         latest_equity = equities[-1].value if equities else None
+        revenues = self._concept_values(annual, FinancialConcept.REVENUE)
+        latest_revenue = revenues[-1] if revenues else None
 
         inferred_lifecycle = self._lifecycle(
             archetype,
@@ -162,6 +164,10 @@ class ValuationProfileBuilder:
             ticker=financials.ticker,
             sector=sector,
             industry=industry,
+            country=classification.country if classification else None,
+            exchange=classification.exchange if classification else None,
+            reporting_currency=latest_revenue.unit if latest_revenue else None,
+            latest_revenue=latest_revenue.value if latest_revenue else None,
             business_archetype=archetype,
             lifecycle=lifecycle,
             cyclicality=cyclicality,
