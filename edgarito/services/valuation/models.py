@@ -3,9 +3,14 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edgarito.schemas.normalization.classification import Sector
+
+
+def _decimal_close(left: Decimal, right: Decimal) -> bool:
+    scale = max(abs(left), abs(right), Decimal(1))
+    return abs(left - right) <= scale * Decimal("1e-24")
 
 
 class ValuationModel(str, Enum):
@@ -296,3 +301,282 @@ class ComparableMultiplesReport(BaseModel):
     peers: list[CompanyTradingMultiples] = Field(default_factory=list)
     summaries: list[PeerMultipleSummary] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class CostOfEquityMethod(str, Enum):
+    CAPM = "capm"
+
+
+class CostOfEquityResult(BaseModel):
+    """Auditable CAPM result; rates use percentage points."""
+
+    model_config = ConfigDict(frozen=True)
+
+    method: CostOfEquityMethod = CostOfEquityMethod.CAPM
+    risk_free_rate: Decimal
+    levered_beta: Decimal
+    equity_risk_premium: Decimal
+    country_risk_premium: Decimal = Decimal(0)
+    cost_of_equity: Decimal
+    formula: str = "risk-free rate + beta × equity risk premium + country risk premium"
+
+    @field_validator(
+        "risk_free_rate",
+        "levered_beta",
+        "equity_risk_premium",
+        "country_risk_premium",
+        "cost_of_equity",
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Cost-of-equity values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_calculation(self) -> "CostOfEquityResult":
+        expected = (
+            self.risk_free_rate
+            + self.levered_beta * self.equity_risk_premium
+            + self.country_risk_premium
+        )
+        if not _decimal_close(self.cost_of_equity, expected):
+            raise ValueError("cost_of_equity does not match its CAPM components")
+        return self
+
+
+class WaccResult(BaseModel):
+    """Market-value weighted cost of capital; rates use percentage points."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_of_equity: Decimal
+    pretax_cost_of_debt: Decimal
+    normalized_tax_rate: Decimal
+    after_tax_cost_of_debt: Decimal
+    market_value_equity: Decimal
+    market_value_debt: Decimal
+    equity_weight: Decimal
+    debt_weight: Decimal
+    wacc: Decimal
+    formula: str = (
+        "equity weight × cost of equity + debt weight × after-tax cost of debt"
+    )
+
+    @field_validator(
+        "cost_of_equity",
+        "pretax_cost_of_debt",
+        "normalized_tax_rate",
+        "after_tax_cost_of_debt",
+        "market_value_equity",
+        "market_value_debt",
+        "equity_weight",
+        "debt_weight",
+        "wacc",
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("WACC values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_calculation(self) -> "WaccResult":
+        if self.market_value_equity < 0 or self.market_value_debt < 0:
+            raise ValueError("Market values cannot be negative")
+        if self.market_value_equity + self.market_value_debt <= 0:
+            raise ValueError("WACC requires positive total capital")
+        if not Decimal(0) <= self.normalized_tax_rate <= Decimal(100):
+            raise ValueError("Tax rate must be between 0% and 100%")
+        if self.equity_weight < 0 or self.debt_weight < 0:
+            raise ValueError("Capital weights cannot be negative")
+        if self.equity_weight + self.debt_weight != Decimal(1):
+            raise ValueError("Capital weights must sum to one")
+        expected_after_tax_debt = self.pretax_cost_of_debt * (
+            Decimal(1) - self.normalized_tax_rate / Decimal(100)
+        )
+        if not _decimal_close(self.after_tax_cost_of_debt, expected_after_tax_debt):
+            raise ValueError("after_tax_cost_of_debt does not match its inputs")
+        expected_wacc = (
+            self.equity_weight * self.cost_of_equity
+            + self.debt_weight * self.after_tax_cost_of_debt
+        )
+        if not _decimal_close(self.wacc, expected_wacc):
+            raise ValueError("wacc does not match its capital components")
+        return self
+
+
+class CashFlow(BaseModel):
+    """A cash flow occurring at a fractional number of periods from valuation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    amount: Decimal
+    period: Decimal = Field(ge=0)
+    label: Optional[str] = None
+
+    @field_validator("amount", "period")
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Cash-flow values must be finite")
+        return value
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Cash-flow labels cannot be blank")
+        return normalized
+
+
+class DiscountedCashFlow(BaseModel):
+    """One discounted cash flow with its complete calculation bridge."""
+
+    model_config = ConfigDict(frozen=True)
+
+    amount: Decimal
+    period: Decimal = Field(ge=0)
+    discount_rate: Decimal
+    discount_factor: Decimal = Field(gt=0)
+    present_value: Decimal
+    label: Optional[str] = None
+
+    @field_validator(
+        "amount", "period", "discount_rate", "discount_factor", "present_value"
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Discounted cash-flow values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_present_value(self) -> "DiscountedCashFlow":
+        if self.discount_rate <= Decimal("-100"):
+            raise ValueError("Discount rate must be greater than -100%")
+        if not _decimal_close(self.present_value, self.amount * self.discount_factor):
+            raise ValueError("Present value does not match amount × discount factor")
+        return self
+
+
+class PresentValueResult(BaseModel):
+    """A collection of consistently discounted cash flows."""
+
+    model_config = ConfigDict(frozen=True)
+
+    discount_rate: Decimal
+    unit: str
+    cash_flows: tuple[DiscountedCashFlow, ...]
+    total_present_value: Decimal
+
+    @field_validator("discount_rate", "total_present_value")
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Present-value values must be finite")
+        return value
+
+    @field_validator("unit")
+    @classmethod
+    def normalize_unit(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Present-value unit cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_cash_flows(self) -> "PresentValueResult":
+        if not self.cash_flows:
+            raise ValueError("At least one cash flow is required")
+        if any(item.discount_rate != self.discount_rate for item in self.cash_flows):
+            raise ValueError("All cash flows must use the result discount rate")
+        expected = sum((item.present_value for item in self.cash_flows), Decimal(0))
+        if not _decimal_close(self.total_present_value, expected):
+            raise ValueError("total_present_value does not match its cash flows")
+        return self
+
+
+class TerminalValueMethod(str, Enum):
+    PERPETUITY_GROWTH = "perpetuity_growth"
+    EXIT_MULTIPLE = "exit_multiple"
+
+
+class TerminalValueResult(BaseModel):
+    """Undiscounted terminal value at the end of an explicit forecast period."""
+
+    model_config = ConfigDict(frozen=True)
+
+    method: TerminalValueMethod
+    terminal_value: Decimal
+    final_cash_flow: Optional[Decimal] = None
+    discount_rate: Optional[Decimal] = None
+    perpetual_growth_rate: Optional[Decimal] = None
+    terminal_metric: Optional[Decimal] = None
+    exit_multiple: Optional[Decimal] = None
+    formula: str
+
+    @field_validator(
+        "terminal_value",
+        "final_cash_flow",
+        "discount_rate",
+        "perpetual_growth_rate",
+        "terminal_metric",
+        "exit_multiple",
+    )
+    @classmethod
+    def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and not value.is_finite():
+            raise ValueError("Terminal-value inputs must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_method_inputs(self) -> "TerminalValueResult":
+        if self.terminal_value < 0:
+            raise ValueError("Terminal value cannot be negative")
+        if self.method == TerminalValueMethod.PERPETUITY_GROWTH:
+            if None in (
+                self.final_cash_flow,
+                self.discount_rate,
+                self.perpetual_growth_rate,
+            ):
+                raise ValueError(
+                    "Perpetuity growth requires cash flow, rate, and growth"
+                )
+            if self.terminal_metric is not None or self.exit_multiple is not None:
+                raise ValueError(
+                    "Perpetuity growth cannot include exit-multiple inputs"
+                )
+            assert self.final_cash_flow is not None
+            assert self.discount_rate is not None
+            assert self.perpetual_growth_rate is not None
+            if self.final_cash_flow < 0:
+                raise ValueError("Final cash flow cannot be negative")
+            if self.discount_rate <= self.perpetual_growth_rate:
+                raise ValueError("Discount rate must exceed perpetual growth")
+            expected = (
+                self.final_cash_flow
+                * (Decimal(1) + self.perpetual_growth_rate / Decimal(100))
+                / ((self.discount_rate - self.perpetual_growth_rate) / Decimal(100))
+            )
+        else:
+            if self.terminal_metric is None or self.exit_multiple is None:
+                raise ValueError("Exit multiple requires a metric and multiple")
+            if any(
+                value is not None
+                for value in (
+                    self.final_cash_flow,
+                    self.discount_rate,
+                    self.perpetual_growth_rate,
+                )
+            ):
+                raise ValueError("Exit multiple cannot include perpetuity inputs")
+            if self.terminal_metric < 0 or self.exit_multiple < 0:
+                raise ValueError("Exit-multiple inputs cannot be negative")
+            expected = self.terminal_metric * self.exit_multiple
+        if not _decimal_close(self.terminal_value, expected):
+            raise ValueError("terminal_value does not match its method inputs")
+        return self

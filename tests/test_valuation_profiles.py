@@ -1,0 +1,216 @@
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from edgarito.cli.__main__ import build_parser, main
+from edgarito.config import ForecastMethod, ValuationProfileLoader
+from edgarito.config.valuation import CashFlowTiming, ForecastValuationProfile
+from edgarito.services.valuation import ValuationInput
+
+ROOT = Path(__file__).parents[1]
+AAPL_FIXTURE = ROOT / "tests" / "fixtures" / "aapl_facts.json"
+
+
+def test_default_profile_is_loaded_from_the_root_configs_directory():
+    path = ValuationProfileLoader.default_path()
+    profile = ValuationProfileLoader.load()
+
+    assert path == ROOT / "configs" / "valuation" / "default.json"
+    assert profile.name == "default"
+    assert profile.forecast.default_method == ForecastMethod.FCFF
+    assert profile.forecast.fcff.forecast_years == 5
+    assert profile.forecast.fcff.historical_window == 3
+    assert profile.valuation.cash_flow_timing == CashFlowTiming.END_OF_PERIOD
+    assert profile.valuation.discount_rates.risk_free_rate is None
+    assert profile.comparables.max_peers == 8
+    assert profile.specialized_inputs.history == 5
+    assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
+        profile
+    )
+
+
+def test_custom_profile_can_partially_override_defaults(tmp_path):
+    path = tmp_path / "growth.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "growth",
+                "forecast": {
+                    "default_method": "simplified",
+                    "simplified": {
+                        "forecast_years": 2,
+                        "historical_window": 1,
+                        "revenue_growth": ["12", "8"],
+                        "free_cash_flow_margin": "20",
+                    },
+                },
+                "valuation": {
+                    "cash_flow_timing": "mid_year",
+                    "discount_rates": {
+                        "risk_free_rate": "4.2",
+                        "equity_risk_premium": "4.5",
+                    },
+                    "terminal_value": {"perpetual_growth_rate": "2"},
+                },
+                "comparables": {"max_peers": 6, "preferred_minimum": 4},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile = ValuationProfileLoader.load(path)
+
+    assert profile.forecast.default_method == ForecastMethod.SIMPLIFIED
+    assert profile.forecast.simplified.revenue_growth == (
+        Decimal("12"),
+        Decimal("8"),
+    )
+    assert profile.forecast.simplified.free_cash_flow_margin == (Decimal("20"),)
+    assert profile.forecast.fcff.forecast_years == 5
+    assert profile.valuation.cash_flow_timing == CashFlowTiming.MID_YEAR
+    assert profile.valuation.discount_rates.risk_free_rate == Decimal("4.2")
+    assert profile.valuation.terminal_value.perpetual_growth_rate == Decimal("2")
+    assert profile.comparables.minimum_score == 50
+
+
+def test_profile_validation_rejects_unknown_or_invalid_parameters(tmp_path):
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(
+        json.dumps({"forecast": {"fcff": {"revenue_groth": "10"}}}),
+        encoding="utf-8",
+    )
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(
+        json.dumps({"comparables": {"max_peers": 3, "preferred_minimum": 5}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="revenue_groth"):
+        ValuationProfileLoader.load(unknown)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        ValuationProfileLoader.load(invalid)
+    with pytest.raises(FileNotFoundError, match="not found"):
+        ValuationProfileLoader.load(tmp_path / "missing.json")
+
+
+def test_configured_rates_are_exposed_as_ready_selector_inputs():
+    profile = ForecastValuationProfile.model_validate(
+        {
+            "valuation": {
+                "discount_rates": {
+                    "risk_free_rate": "4",
+                    "levered_beta": "1.1",
+                    "equity_risk_premium": "5",
+                    "pretax_cost_of_debt": "5",
+                    "normalized_tax_rate": "25",
+                    "market_value_equity": "800",
+                    "market_value_debt": "200",
+                },
+                "terminal_value": {"perpetual_growth_rate": "2"},
+            }
+        }
+    )
+
+    assert profile.configured_valuation_inputs == frozenset(
+        {
+            ValuationInput.COST_OF_EQUITY,
+            ValuationInput.WACC,
+            ValuationInput.TERMINAL_GROWTH,
+        }
+    )
+
+
+def test_profile_cli_options_are_unset_until_profile_resolution():
+    parser = build_parser()
+    forecast = parser.parse_args(["forecast", "--ticker", "AAPL"])
+    comparables = parser.parse_args(
+        ["comparables", "--ticker", "AAPL", "--peer", "MSFT"]
+    )
+
+    assert forecast.profile is None
+    assert forecast.forecast_method is None
+    assert forecast.years is None
+    assert forecast.historical_window is None
+    assert comparables.profile is None
+    assert comparables.max_peers is None
+    assert comparables.require_same_sector is None
+
+
+def test_cli_uses_profile_forecast_parameters_then_applies_cli_overrides(
+    tmp_path, capsys
+):
+    _cache_aapl(tmp_path)
+    profile_path = tmp_path / "fcff.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "name": "two-year-fcff",
+                "forecast": {
+                    "fcff": {
+                        "forecast_years": 2,
+                        "historical_window": 2,
+                        "revenue_growth": "5",
+                        "operating_margin": "25",
+                        "tax_rate": "21",
+                        "depreciation_to_revenue": "4",
+                        "capex_to_revenue": "3",
+                        "operating_working_capital_to_revenue": "10",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "forecast",
+        "--ticker",
+        "AAPL",
+        "--profile",
+        str(profile_path),
+        "--cache-dir",
+        str(tmp_path),
+        "--user-agent",
+        "Edgarito Tests (tests@example.com)",
+    ]
+
+    assert main(common) == 0
+    profile_output = capsys.readouterr().out
+    assert "FY2026E" in profile_output
+    assert "FY2027E" in profile_output
+    assert "Revenue Growth: explicit" in profile_output
+
+    assert main([*common, "--years", "1", "--revenue-growth", "7"]) == 0
+    override_output = capsys.readouterr().out
+    assert "FY2026E" in override_output
+    assert "FY2027E" not in override_output
+    assert "7.0%" in override_output
+
+
+def _cache_aapl(cache_dir: Path) -> None:
+    ticker_path = (
+        cache_dir
+        / "providers"
+        / "edgar"
+        / "www.sec.gov"
+        / "files"
+        / "company_tickers.json"
+    )
+    facts_path = (
+        cache_dir
+        / "providers"
+        / "edgar"
+        / "data.sec.gov"
+        / "api"
+        / "xbrl"
+        / "companyfacts"
+        / "CIK0000320193.json"
+    )
+    ticker_path.parent.mkdir(parents=True)
+    facts_path.parent.mkdir(parents=True)
+    ticker_path.write_text(
+        json.dumps({"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}),
+        encoding="utf-8",
+    )
+    facts_path.write_text(AAPL_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")

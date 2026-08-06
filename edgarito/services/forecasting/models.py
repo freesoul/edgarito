@@ -21,7 +21,7 @@ class SimplifiedFcfForecastParameters(BaseModel):
     contain exactly one value per year.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     forecast_years: int = Field(default=5, ge=1, le=30)
     revenue_growth: Optional[tuple[Decimal, ...]] = None
@@ -130,7 +130,7 @@ class FcffForecastParameters(BaseModel):
     inferred from complete annual historical periods.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     forecast_years: int = Field(default=5, ge=1, le=30)
     revenue_growth: Optional[tuple[Decimal, ...]] = None

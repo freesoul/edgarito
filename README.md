@@ -245,6 +245,55 @@ company_metrics = FinancialMetricsService().calculate(
 
 Each metric observation retains its formula and required input concepts for traceability.
 
+## Configure forecast and valuation profiles
+
+The default profile is the versioned JSON file at
+`configs/valuation/default.json`. It centralizes parameters for FCFF and
+simplified forecasts, discount rates, present-value timing, terminal value,
+model-selection overrides, comparable selection, and specialized input history.
+Company- and date-specific market assumptions are `null` by default rather than
+silently embedding stale rates.
+
+All profile-enabled commands use the root default automatically. Supply another
+profile with `--profile`; explicitly supplied CLI options take precedence over
+the selected profile:
+
+```bash
+uv run edgarito forecast --ticker AAPL --profile configs/valuation/growth.json
+uv run edgarito valuation-models --ticker JPM --profile configs/valuation/bank.json
+uv run edgarito comparables --ticker AAPL --peer MSFT \
+  --profile configs/valuation/growth.json
+uv run edgarito specialized-inputs --ticker PLD --type reit \
+  --profile configs/valuation/reit.json
+```
+
+Custom files may contain only the sections they change. Omitted values inherit
+the validated schema defaults. Decimal parameters should be written as JSON
+strings to preserve their exact value:
+
+```json
+{
+  "schema_version": 1,
+  "name": "growth",
+  "forecast": {
+    "fcff": {
+      "forecast_years": 7,
+      "revenue_growth": ["12", "10", "8", "7", "6", "5", "4"],
+      "operating_margin": "25"
+    }
+  },
+  "valuation": {
+    "cash_flow_timing": "mid_year",
+    "terminal_value": {"perpetual_growth_rate": "2"}
+  },
+  "comparables": {"max_peers": 10, "minimum_score": 60}
+}
+```
+
+Unknown fields and invalid ranges fail before provider retrieval. Configured cost
+of equity, WACC, and terminal-growth inputs are also reflected in
+`valuation-models` data readiness.
+
 ## Forecast free cash flow to the firm
 
 The `forecast` command now defaults to a driver-based FCFF forecast. Omitted
@@ -331,6 +380,56 @@ forecast = FcffForecastService().forecast(financials, parameters)
 Use `SimplifiedFcfForecastParameters` and `SimplifiedFcfForecastService` for the
 retained scenario model. Neither method discounts cash flows or calculates a
 terminal value; that remains the responsibility of the later valuation layer.
+
+## Calculate discount rates and present values
+
+The shared valuation foundation calculates levered beta, CAPM cost of equity,
+after-tax cost of debt, market-value WACC, present values, and terminal values.
+Rates use percentage points consistently: `8` means 8%. Capital weights in the
+result are decimal proportions, so `0.8` means 80%.
+
+```python
+from edgarito.services.valuation import (
+    CashFlow,
+    DiscountRateService,
+    PresentValueService,
+    TerminalValueService,
+)
+
+
+cost_of_equity = DiscountRateService.cost_of_equity(
+    risk_free_rate="4",
+    levered_beta="1.1",
+    equity_risk_premium="5",
+    country_risk_premium="0.5",
+)
+wacc = DiscountRateService.wacc(
+    cost_of_equity=cost_of_equity.cost_of_equity,
+    pretax_cost_of_debt="5",
+    normalized_tax_rate="25",
+    market_value_equity="800",
+    market_value_debt="200",
+)
+terminal = TerminalValueService.perpetuity_growth(
+    final_cash_flow="100",
+    discount_rate=wacc.wacc,
+    perpetual_growth_rate="2",
+)
+present_values = PresentValueService.discount(
+    (
+        CashFlow(amount="80", period=1, label="Year 1 FCFF"),
+        CashFlow(amount=terminal.terminal_value, period=5, label="Terminal value"),
+    ),
+    discount_rate=wacc.wacc,
+    unit="USD",
+)
+```
+
+Periods may be fractional, such as `0.5` for a mid-year convention. Perpetuity
+growth uses the final explicit-period cash flow and grows it once before applying
+the Gordon formula. Terminal values are returned at the end of the explicit
+forecast and must be discounted using their stated period. Exit-multiple terminal
+values are also supported through `TerminalValueService.exit_multiple`.
 
 ## Select suitable valuation models
 

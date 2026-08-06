@@ -36,6 +36,9 @@ edgarito = "edgarito.cli.__main__:main"
 include = ["edgarito", "edgarito.*"]
 exclude = ["venv_windows", "venv", "cache"]
 
+[tool.setuptools.data-files]
+"configs/valuation" = ["configs/valuation/default.json"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "name": "default",
+  "description": "Conservative provider-independent defaults for forecasting and valuation workflows.",
+  "forecast": {
+    "default_method": "fcff",
+    "fcff": {
+      "forecast_years": 5,
+      "historical_window": 3,
+      "revenue_growth": null,
+      "operating_margin": null,
+      "tax_rate": null,
+      "depreciation_to_revenue": null,
+      "capex_to_revenue": null,
+      "operating_working_capital_to_revenue": null
+    },
+    "simplified": {
+      "forecast_years": 5,
+      "historical_window": 3,
+      "revenue_growth": null,
+      "free_cash_flow_margin": null
+    }
+  },
+  "valuation": {
+    "cash_flow_timing": "end_of_period",
+    "discount_rates": {
+      "risk_free_rate": null,
+      "unlevered_beta": null,
+      "levered_beta": null,
+      "equity_risk_premium": null,
+      "country_risk_premium": "0",
+      "cost_of_equity": null,
+      "pretax_cost_of_debt": null,
+      "normalized_tax_rate": null,
+      "market_value_equity": null,
+      "market_value_debt": null,
+      "wacc": null
+    },
+    "terminal_value": {
+      "method": "perpetuity_growth",
+      "perpetual_growth_rate": null,
+      "exit_multiple": null
+    }
+  },
+  "model_selection": {
+    "business_archetype": null,
+    "lifecycle": null,
+    "cyclicality": null,
+    "economic_traits": [],
+    "available_inputs": [],
+    "peer_count": null
+  },
+  "comparables": {
+    "max_peers": 8,
+    "preferred_minimum": 5,
+    "minimum_score": 50,
+    "require_same_sector": true
+  },
+  "specialized_inputs": {
+    "history": 5
+  }
+}

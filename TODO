@@ -1,15 +1,17 @@
 
 
 - **Add valuation methods**
-   6. Replace the current forecast with the driver-based FCFF forecast.
-   7. Build peer-universe selection and LTM multiple computation.
-   8. Add specialized REIT/resource/biotech/SOTP extractors later.
+      FCFF DCF.
+      Comparable implied valuation.
+      Equity DCF/DDM.
+      Residual Income.
+      NAV/SOTP framework with specialized REIT, resource, biotech, and segment adapters.
 
 - **Add deterministic red-flag detection**
 - **Create the full report pipeline**
 - **Add exports**
-   - CSV/Excel can arrive earlier for raw financials and metrics
-   - PDF should wait until the report structure stabilizes
+      - Excel(s) with raw, metrics, forecasts...
+      - PDF report
 - **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs
 - Add a portfolio feature, that will do actions/report for the whole portfolio.
 - Autochoose provider when multiple : keep the one with most recent data, or with more results.

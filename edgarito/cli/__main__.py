@@ -17,6 +17,7 @@ from edgarito.cli.presentation.console import (
     SpecializedExtractionConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
+from edgarito.config.valuation import ForecastMethod, ValuationProfileLoader
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
@@ -105,6 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
         _add_retrieval_arguments(command_parser)
     _add_retrieval_arguments(forecast, include_period=False)
     _add_retrieval_arguments(valuation_models, include_period=False)
+    for command_parser in (
+        forecast,
+        valuation_models,
+        comparables,
+        specialized_inputs,
+    ):
+        _add_valuation_profile_argument(command_parser)
 
     financials.add_argument(
         "--concept",
@@ -122,14 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--forecast-method",
         "--method",
         choices=("fcff", "simplified"),
-        default="fcff",
-        help="Forecast method (default: fcff)",
+        help="Forecast method; overrides the selected profile",
     )
     forecast.add_argument(
         "--years",
         type=int,
-        default=5,
-        help="Number of annual forecast periods (default: 5)",
+        help="Number of annual forecast periods; overrides the selected profile",
     )
     forecast.add_argument(
         "--revenue-growth",
@@ -192,8 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     forecast.add_argument(
         "--historical-window",
         type=int,
-        default=3,
-        help="Annual periods used to infer omitted assumptions (default: 3)",
+        help="Annual periods used to infer omitted assumptions; overrides the profile",
     )
     valuation_models.add_argument(
         "--classification-provider",
@@ -255,26 +260,31 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Candidate Yahoo symbol; repeat to supply the candidate universe",
     )
-    comparables.add_argument(
-        "--max-peers", type=int, default=8, help="Maximum selected peers (default: 8)"
-    )
+    comparables.add_argument("--max-peers", type=int, help="Maximum selected peers")
     comparables.add_argument(
         "--preferred-minimum",
         type=int,
-        default=5,
-        help="Preferred minimum selected peers (default: 5)",
+        help="Preferred minimum selected peers",
     )
     comparables.add_argument(
         "--minimum-score",
         type=int,
-        default=50,
-        help="Minimum comparability score from 0 to 100 (default: 50)",
+        help="Minimum comparability score from 0 to 100",
     )
-    comparables.add_argument(
+    sector_requirement = comparables.add_mutually_exclusive_group()
+    sector_requirement.add_argument(
         "--allow-cross-sector",
-        action="store_true",
+        dest="require_same_sector",
+        action="store_false",
         help="Do not hard-exclude candidates from a different sector",
     )
+    sector_requirement.add_argument(
+        "--require-same-sector",
+        dest="require_same_sector",
+        action="store_true",
+        help="Hard-exclude candidates from a different sector",
+    )
+    comparables.set_defaults(require_same_sector=None)
     comparables.add_argument(
         "--as-of",
         type=datetime.date.fromisoformat,
@@ -298,8 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     specialized_inputs.add_argument(
         "--history",
         type=int,
-        default=5,
-        help="Number of latest reporting period ends to retain (default: 5)",
+        help="Number of latest reporting period ends; overrides the profile",
     )
     specialized_inputs.add_argument("--refresh", action="store_true")
     specialized_inputs.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
@@ -363,6 +372,20 @@ def _add_retrieval_arguments(
     command_parser.add_argument("--verbose", action="store_true")
 
 
+def _add_valuation_profile_argument(
+    command_parser: argparse.ArgumentParser,
+) -> None:
+    command_parser.add_argument(
+        "--profile",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Forecast/valuation JSON profile; defaults to "
+            "configs/valuation/default.json"
+        ),
+    )
+
+
 def _add_identifier_arguments(command_parser: argparse.ArgumentParser) -> None:
     identifier = command_parser.add_mutually_exclusive_group(required=True)
     identifier.add_argument("--ticker", help="Stock ticker, for example AAPL")
@@ -420,6 +443,12 @@ async def _run_metrics(args: argparse.Namespace) -> int:
 
 
 async def _run_forecast(args: argparse.Namespace) -> int:
+    profile = ValuationProfileLoader.load(args.profile)
+    forecast_method = (
+        ForecastMethod(args.forecast_method)
+        if args.forecast_method is not None
+        else profile.forecast.default_method
+    )
     fcff_driver_arguments = (
         args.operating_margin,
         args.tax_rate,
@@ -427,16 +456,31 @@ async def _run_forecast(args: argparse.Namespace) -> int:
         args.capex_to_revenue,
         args.operating_working_capital_to_revenue,
     )
-    if args.forecast_method == "simplified":
+    if forecast_method == ForecastMethod.SIMPLIFIED:
         if any(value is not None for value in fcff_driver_arguments):
             raise ValueError(
                 "FCFF driver options cannot be used with --forecast-method simplified"
             )
+        configured = profile.forecast.simplified
         parameters = SimplifiedFcfForecastParameters(
-            forecast_years=args.years,
-            revenue_growth=args.revenue_growth,
-            free_cash_flow_margin=args.fcf_margin,
-            historical_window=args.historical_window,
+            forecast_years=(
+                args.years if args.years is not None else configured.forecast_years
+            ),
+            revenue_growth=(
+                args.revenue_growth
+                if args.revenue_growth is not None
+                else configured.revenue_growth
+            ),
+            free_cash_flow_margin=(
+                args.fcf_margin
+                if args.fcf_margin is not None
+                else configured.free_cash_flow_margin
+            ),
+            historical_window=(
+                args.historical_window
+                if args.historical_window is not None
+                else configured.historical_window
+            ),
         )
         service = SimplifiedFcfForecastService()
     else:
@@ -445,17 +489,44 @@ async def _run_forecast(args: argparse.Namespace) -> int:
                 "--fcf-margin requires --forecast-method simplified; use the "
                 "FCFF operating, tax, D&A, capex, and working-capital drivers"
             )
+        configured = profile.forecast.fcff
         parameters = FcffForecastParameters(
-            forecast_years=args.years,
-            revenue_growth=args.revenue_growth,
-            operating_margin=args.operating_margin,
-            tax_rate=args.tax_rate,
-            depreciation_to_revenue=args.depreciation_to_revenue,
-            capex_to_revenue=args.capex_to_revenue,
+            forecast_years=(
+                args.years if args.years is not None else configured.forecast_years
+            ),
+            revenue_growth=(
+                args.revenue_growth
+                if args.revenue_growth is not None
+                else configured.revenue_growth
+            ),
+            operating_margin=(
+                args.operating_margin
+                if args.operating_margin is not None
+                else configured.operating_margin
+            ),
+            tax_rate=(
+                args.tax_rate if args.tax_rate is not None else configured.tax_rate
+            ),
+            depreciation_to_revenue=(
+                args.depreciation_to_revenue
+                if args.depreciation_to_revenue is not None
+                else configured.depreciation_to_revenue
+            ),
+            capex_to_revenue=(
+                args.capex_to_revenue
+                if args.capex_to_revenue is not None
+                else configured.capex_to_revenue
+            ),
             operating_working_capital_to_revenue=(
                 args.operating_working_capital_to_revenue
+                if args.operating_working_capital_to_revenue is not None
+                else configured.operating_working_capital_to_revenue
             ),
-            historical_window=args.historical_window,
+            historical_window=(
+                args.historical_window
+                if args.historical_window is not None
+                else configured.historical_window
+            ),
         )
         service = FcffForecastService()
     financials = await _retrieve_financials(
@@ -469,6 +540,8 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 
 
 async def _run_valuation_models(args: argparse.Namespace) -> int:
+    valuation_profile = ValuationProfileLoader.load(args.profile)
+    configuration = valuation_profile.model_selection
     financials = await _retrieve_financials(
         args,
         Granularity.ANNUAL,
@@ -485,15 +558,36 @@ async def _run_valuation_models(args: argparse.Namespace) -> int:
     )
     overrides = ValuationProfileOverrides(
         business_archetype=(
-            BusinessArchetype(args.business_type) if args.business_type else None
+            BusinessArchetype(args.business_type)
+            if args.business_type
+            else configuration.business_archetype
         ),
-        lifecycle=CompanyLifecycle(args.lifecycle) if args.lifecycle else None,
-        cyclicality=Cyclicality(args.cyclicality) if args.cyclicality else None,
-        economic_traits={EconomicTrait(value) for value in args.trait or []},
-        available_inputs={
-            ValuationInput(value) for value in args.available_input or []
-        },
-        peer_count=args.peer_count,
+        lifecycle=(
+            CompanyLifecycle(args.lifecycle)
+            if args.lifecycle
+            else configuration.lifecycle
+        ),
+        cyclicality=(
+            Cyclicality(args.cyclicality)
+            if args.cyclicality
+            else configuration.cyclicality
+        ),
+        economic_traits=(
+            {EconomicTrait(value) for value in args.trait}
+            if args.trait is not None
+            else set(configuration.economic_traits)
+        ),
+        available_inputs=(
+            {
+                *valuation_profile.configured_valuation_inputs,
+                *(ValuationInput(value) for value in args.available_input),
+            }
+            if args.available_input is not None
+            else set(valuation_profile.configured_valuation_inputs)
+        ),
+        peer_count=(
+            args.peer_count if args.peer_count is not None else configuration.peer_count
+        ),
     )
     profile = ValuationProfileBuilder().build(financials, classification, overrides)
     selection = ValuationModelSelector().select(profile)
@@ -512,13 +606,28 @@ async def _run_classification(args: argparse.Namespace) -> int:
 
 
 async def _run_comparables(args: argparse.Namespace) -> int:
+    configuration = ValuationProfileLoader.load(args.profile).comparables
     target_symbol = args.ticker.strip().upper()
     peer_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in args.peer))
     parameters = PeerSelectionParameters(
-        max_peers=args.max_peers,
-        preferred_minimum=args.preferred_minimum,
-        minimum_score=args.minimum_score,
-        require_same_sector=not args.allow_cross_sector,
+        max_peers=(
+            args.max_peers if args.max_peers is not None else configuration.max_peers
+        ),
+        preferred_minimum=(
+            args.preferred_minimum
+            if args.preferred_minimum is not None
+            else configuration.preferred_minimum
+        ),
+        minimum_score=(
+            args.minimum_score
+            if args.minimum_score is not None
+            else configuration.minimum_score
+        ),
+        require_same_sector=(
+            args.require_same_sector
+            if args.require_same_sector is not None
+            else configuration.require_same_sector
+        ),
     )
     symbols = [target_symbol, *peer_symbols]
     cache = FileSystemCache(Path(args.cache_dir))
@@ -590,7 +699,9 @@ async def _run_comparables(args: argparse.Namespace) -> int:
 
 
 async def _run_specialized_inputs(args: argparse.Namespace) -> int:
-    if args.history < 1:
+    configuration = ValuationProfileLoader.load(args.profile).specialized_inputs
+    history = args.history if args.history is not None else configuration.history
+    if history < 1:
         raise ValueError("--history must be at least 1")
     if not args.user_agent:
         raise ValueError("SEC retrieval requires EDGARITO_USER_AGENT / user_agent")
@@ -613,7 +724,7 @@ async def _run_specialized_inputs(args: argparse.Namespace) -> int:
         facts,
         SpecializedInputType(args.type),
         ticker=args.ticker,
-        historical_periods=args.history,
+        historical_periods=history,
     )
     print(SpecializedExtractionConsolePresenter().render(extraction))
     return 0
