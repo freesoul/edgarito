@@ -1,8 +1,10 @@
 import datetime
 from decimal import Decimal
+from statistics import median
 
 import pytest
 
+from edgarito.config.valuation import MultipleResolutionConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.identifiers import SecurityIdentifiers
@@ -13,12 +15,24 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.forecasting import (
+    FcffForecast,
+    FcffForecastObservation,
+    FcffForecastParameters,
+)
 from edgarito.services.valuation import (
     BusinessArchetype,
     CompanyLifecycle,
+    ComparableImpliedValuationService,
     ComparableMultiplesService,
     Cyclicality,
+    FcffDcfCapitalBridge,
+    FcffDcfParameters,
+    FcffDcfService,
+    HistoricalMultipleObservation,
+    HistoricalMultipleSummary,
     LtmMultiplesService,
+    MultipleResolver,
     MultipleStatus,
     PeerSelectionParameters,
     PeerUniverseSelector,
@@ -193,9 +207,9 @@ def test_computes_ltm_fundamentals_enterprise_value_and_multiples():
     assert result.fundamentals.ebitda == Decimal("100")
     assert result.fundamentals.free_cash_flow == Decimal("48")
     assert result.market_capitalization == Decimal("500")
-    assert result.enterprise_value == Decimal("525")
+    assert result.enterprise_value == Decimal("520")
     assert multiples[RelativeValuationBasis.PE].value == Decimal("500") / Decimal("48")
-    assert multiples[RelativeValuationBasis.EV_TO_EBITDA].value == Decimal("5.25")
+    assert multiples[RelativeValuationBasis.EV_TO_EBITDA].value == Decimal("5.2")
     assert multiples[RelativeValuationBasis.DIVIDEND_YIELD].value == Decimal("0.8")
 
 
@@ -236,6 +250,35 @@ def test_ltm_requires_four_consecutive_revenue_quarters():
 
     with pytest.raises(ValueError, match="four consecutive"):
         LtmMultiplesService().compute(financials, _market_data())
+
+
+def test_latest_annual_fallback_is_explicit_when_quarters_are_unavailable():
+    annual_observations = [
+        item.model_copy(
+            update={
+                "granularity": Granularity.ANNUAL,
+                "fiscal_period": FiscalPeriod.FY,
+                "period_start": (
+                    None
+                    if item.concept.statement.value == "balance_sheet"
+                    else datetime.date(2025, 4, 1)
+                ),
+            }
+        )
+        for item in _financials().observations
+        if item.fiscal_period == FiscalPeriod.Q1
+    ]
+    financials = _financials().model_copy(update={"observations": annual_observations})
+
+    result = LtmMultiplesService().compute(financials, _market_data())
+    multiple = next(
+        item
+        for item in result.multiples
+        if item.basis == RelativeValuationBasis.EV_TO_EBITDA
+    )
+
+    assert multiple.status == MultipleStatus.COMPUTED
+    assert any("latest annual" in warning for warning in result.warnings)
 
 
 def test_comparable_report_aggregates_only_selected_peer_values():
@@ -287,3 +330,163 @@ def test_comparable_report_aggregates_only_selected_peer_values():
     assert pe.minimum == Decimal("8")
     assert pe.maximum == Decimal("12")
     assert pe.sample_size == 2
+
+
+def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
+    target_profile = _profile("TARGET")
+    peer_profiles = [_profile("PEER1"), _profile("PEER2")]
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    peers = [
+        target.model_copy(
+            update={
+                "ticker": f"PEER{index}",
+                "multiples": [
+                    item.model_copy(update={"value": value})
+                    if item.basis == RelativeValuationBasis.EV_TO_EBITDA
+                    else item
+                    for item in target.multiples
+                ],
+            }
+        )
+        for index, value in enumerate((Decimal("8"), Decimal("12")), start=1)
+    ]
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        peer_profiles,
+        PeerSelectionParameters(
+            max_peers=2,
+            preferred_minimum=2,
+            minimum_score=0,
+        ),
+    )
+    report = ComparableMultiplesService().build(universe, target, peers)
+    forecast = _relative_forecast()
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal("20"),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    intrinsic = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+    history = HistoricalMultipleSummary(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        observations=tuple(
+            HistoricalMultipleObservation(
+                observed_on=datetime.date(2022 + index, 12, 31), value=value
+            )
+            for index, value in enumerate(
+                (Decimal("11"), Decimal("12"), Decimal("13"), Decimal("14"))
+            )
+        ),
+        median=Decimal("12.5"),
+        volatility=Decimal("0.1"),
+    )
+    peer_histories = tuple(
+        HistoricalMultipleSummary(
+            basis=RelativeValuationBasis.EV_TO_EBITDA,
+            observations=tuple(
+                HistoricalMultipleObservation(
+                    observed_on=datetime.date(2022 + index, 12, 31), value=value
+                )
+                for index, value in enumerate(values)
+            ),
+            median=median(values),
+        )
+        for values in (
+            (Decimal("8"), Decimal("8.5"), Decimal("9"), Decimal("9.5")),
+            (Decimal("9"), Decimal("9"), Decimal("9.5"), Decimal("10")),
+        )
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+    implied = ComparableImpliedValuationService().value(
+        target_forecast=forecast,
+        capital_bridge=bridge,
+        projected_shares=bridge.diluted_shares,
+        resolved_multiple=resolved,
+        valuation_date=datetime.date(2025, 12, 31),
+        horizon_years=Decimal(1),
+        discount_rate=Decimal("10"),
+        current_price=Decimal("18"),
+        analyst_target_price=Decimal("20"),
+        intrinsic_value_per_share=intrinsic.value_per_share,
+    )
+
+    assert resolved.fundamental_anchor == (
+        intrinsic.terminal_value.terminal_value / Decimal("125")
+    )
+    assert resolved.peer_anchor == Decimal("10")
+    assert resolved.historical_anchor == Decimal("12.5")
+    assert resolved.lower_bound <= resolved.point_estimate <= resolved.upper_bound
+    assert resolved.persistence_factor < Decimal(1)
+    assert resolved.premium_history_sample_size == 4
+    assert resolved.premium_mean_reversion_beta is not None
+    assert implied.point_case.implied_enterprise_value == (
+        implied.forecast_metric * resolved.point_estimate
+    )
+    assert implied.point_case.present_value_per_share < (
+        implied.point_case.implied_value_per_share
+    )
+    assert implied.analyst_target_implied_multiple == Decimal("1.76")
+    assert implied.current_price_implied_multiple == Decimal("1.6")
+
+
+def _relative_forecast() -> FcffForecast:
+    observation = FcffForecastObservation(
+        forecast_year=1,
+        fiscal_year=2026,
+        period_end=datetime.date(2026, 12, 31),
+        revenue_growth=Decimal("5"),
+        revenue=Decimal("1000"),
+        operating_margin=Decimal("10"),
+        operating_income=Decimal("100"),
+        tax_rate=Decimal("20"),
+        nopat=Decimal("80"),
+        depreciation_to_revenue=Decimal("2.5"),
+        depreciation_and_amortization=Decimal("25"),
+        capex_to_revenue=Decimal("3"),
+        capital_expenditures=Decimal("30"),
+        operating_working_capital_to_revenue=Decimal("10"),
+        operating_working_capital=Decimal("100"),
+        change_in_operating_working_capital=Decimal("5"),
+        fcff=Decimal("70"),
+        unit="USD",
+    )
+    return FcffForecast(
+        provider="test",
+        company_id="TARGET",
+        company_name="Target Inc.",
+        ticker="TARGET",
+        base_fiscal_year=2025,
+        base_period_end=datetime.date(2025, 12, 31),
+        base_revenue=Decimal("950"),
+        base_operating_income=Decimal("95"),
+        base_tax_rate=Decimal("20"),
+        base_nopat=Decimal("76"),
+        base_depreciation_and_amortization=Decimal("24"),
+        base_capital_expenditures=Decimal("29"),
+        base_operating_working_capital=Decimal("95"),
+        base_fcff=Decimal("66"),
+        unit="USD",
+        parameters=FcffForecastParameters(forecast_years=1),
+        historical_fiscal_years=(2024, 2025),
+        assumption_sources={},
+        observations=[observation],
+    )

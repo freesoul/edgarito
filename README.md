@@ -255,10 +255,10 @@ The default WACC and perpetual growth are `null`: for `valuation`, that means
 "resolve from provider and company data." A CLI or profile value always takes
 precedence over an automatically resolved value.
 
-Profile-enabled forecast and valuation commands first look for a bundled
-lowercase ticker profile (for example, `msft.json`) and otherwise use the root
-default. Supply another profile with `--profile`; explicitly supplied CLI
-options take precedence over the selected profile:
+Profile-enabled commands use the root default unless `--profile` is supplied.
+Company profiles are explicit scenarios and are never silently selected from a
+ticker. Explicitly supplied CLI options take precedence over the selected
+profile:
 
 ```bash
 uv run edgarito forecast --ticker AAPL --profile configs/valuation/growth.json
@@ -279,31 +279,66 @@ uv run edgarito valuation --ticker RACE --market eu \
   --profile configs/valuation/race.json
 ```
 
-The bundled Microsoft profile is selected automatically for `MSFT`. It models
-the current AI infrastructure build-out as a temporary reinvestment phase,
-rolls depreciation forward using a six-year asset life, and converges to a 40%
-terminal ROIC:
+The bundled Microsoft scenario models the current AI infrastructure build-out
+as a temporary reinvestment phase, rolls depreciation forward using a six-year
+asset life, and converges to a 40% terminal ROIC. Select it explicitly:
 
 ```bash
-uv run edgarito valuation --ticker MSFT
+uv run edgarito valuation --ticker MSFT \
+  --profile configs/valuation/msft.json
 ```
 
-That command retains a conventional perpetuity-growth terminal value. The same
-profile also stores an explicitly optimistic 22.5x EBITDA terminal scenario,
-with revenue still fading toward a 2.9% stable-growth anchor:
+Ferrari's profile no longer stores a 22.5x answer. It retains a conventional
+perpetuity-growth DCF and contains only policies for resolving an independent
+market-relative valuation. Supply a candidate universe and request both models:
 
 ```bash
 uv run edgarito valuation --ticker RACE --market eu \
+  --provider-symbol yahoo=RACE.MI \
   --profile configs/valuation/race.json \
-  --terminal-method exit_multiple
+  --model both \
+  --peer RMS.PA --peer CFR.SW --peer MONC.MI --peer P911.DE
 ```
 
-The premium scenario is intended as an analyst/market-pricing comparison, not a
-replacement for the intrinsic base case. The profile also uses Ferrari's
-published 2025 industrial debt and cash bridge, its 2026-2030 margin guidance,
-its cumulative capex target, and its announced EUR 3.5 billion 2026-2030
-repurchase plan. Buybacks are shown as cash spent and shares retired rather than
-being added to FCFF or treated as free per-share accretion.
+The output shows the intrinsic DCF and a separate forward target-price range.
+The multiple resolver combines a DCF-consistent fundamental anchor, the target's
+available point-in-time history, and the selected peer median. Any observed
+premium is retained only after multiplying historical stability by observable
+economic support and horizon decay. Thin history or too few peers lowers
+confidence and produces warnings instead of fabricated precision. Use
+`--model comparables` to print only the relative result. Add, for example,
+`--analyst-target-price 400` to show the forward multiple implied by an external
+price target rather than treating that target as a model input.
+
+Relative valuation configuration stores policies rather than a selected
+multiple:
+
+```json
+{
+  "relative_valuation": {
+    "enabled": true,
+    "basis": "ev_to_ebitda",
+    "horizon_years": "1",
+    "multiple_resolution": {
+      "method": "blended",
+      "use_target_history": true,
+      "use_peer_median": true,
+      "use_fundamental_anchor": true,
+      "forecast_premium_mean_reversion": true,
+      "minimum_peer_sample": 4,
+      "annual_premium_decay": "0.10",
+      "insufficient_history_persistence": "0.50",
+      "persistence_range_width": "0.15",
+      "winsorize_percentiles": ["10", "90"]
+    }
+  }
+}
+```
+
+The Ferrari profile also uses its published industrial debt and cash bridge,
+margin guidance, capex target, and announced repurchase plan. Buybacks are shown
+as cash spent and shares retired rather than being added to FCFF or treated as
+free per-share accretion.
 
 Custom files may contain only the sections they change. Omitted values inherit
 the validated schema defaults. Decimal parameters should be written as JSON

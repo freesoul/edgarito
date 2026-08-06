@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from edgarito.services.valuation.models import (
     BusinessArchetype,
+    CompanyTradingMultiples,
     PeerCandidateAssessment,
     PeerSelectionParameters,
     PeerUniverse,
@@ -28,13 +29,23 @@ class PeerUniverseSelector:
         target: ValuationProfile,
         candidates: list[ValuationProfile],
         parameters: PeerSelectionParameters | None = None,
+        target_multiples: CompanyTradingMultiples | None = None,
+        candidate_multiples: dict[str, CompanyTradingMultiples] | None = None,
     ) -> PeerUniverse:
         parameters = parameters or PeerSelectionParameters()
         if not target.ticker:
             raise ValueError("Peer selection requires a target ticker")
 
+        candidate_multiples = candidate_multiples or {}
         assessments = [
-            self._assess(target, candidate, parameters) for candidate in candidates
+            self._assess(
+                target,
+                candidate,
+                parameters,
+                target_multiples,
+                candidate_multiples.get(candidate.ticker or candidate.company_id),
+            )
+            for candidate in candidates
         ]
         assessments.sort(key=lambda item: (-item.score, item.ticker))
         eligible = [
@@ -76,6 +87,8 @@ class PeerUniverseSelector:
         target: ValuationProfile,
         candidate: ValuationProfile,
         parameters: PeerSelectionParameters,
+        target_multiples: CompanyTradingMultiples | None = None,
+        candidate_multiples: CompanyTradingMultiples | None = None,
     ) -> PeerCandidateAssessment:
         ticker = candidate.ticker or candidate.company_id
         exclusions = []
@@ -116,6 +129,13 @@ class PeerUniverseSelector:
         if candidate.cyclicality == target.cyclicality:
             score += 8
             reasons.append("Same cyclicality")
+        shared_traits = target.economic_traits & candidate.economic_traits
+        if shared_traits:
+            score += min(5, len(shared_traits) * 2)
+            reasons.append(
+                "Shared explicit economic traits: "
+                + ", ".join(sorted(item.value for item in shared_traits))
+            )
         if target.country and candidate.country == target.country:
             score += 5
             reasons.append("Same country")
@@ -143,6 +163,19 @@ class PeerUniverseSelector:
         ):
             reasons.append("Different reporting currency; multiples need FX alignment")
 
+        economic_score = self._economic_similarity(
+            target,
+            candidate,
+            target_multiples,
+            candidate_multiples,
+        )
+        if economic_score is not None:
+            score = round(score * 0.75 + economic_score * 0.25)
+            reasons.append(
+                "Observable margin, cash-conversion, leverage, and capital-"
+                f"intensity similarity: {economic_score}/100"
+            )
+
         return PeerCandidateAssessment(
             ticker=ticker,
             company_id=candidate.company_id,
@@ -151,6 +184,61 @@ class PeerUniverseSelector:
             reasons=reasons,
             exclusions=exclusions,
         )
+
+    @staticmethod
+    def _economic_similarity(
+        target_profile, candidate_profile, target, candidate
+    ) -> int | None:
+        if target is None or candidate is None:
+            return None
+        left = target.fundamentals
+        right = candidate.fundamentals
+
+        def ratio(numerator, denominator):
+            if numerator is None or denominator is None or denominator <= 0:
+                return None
+            return numerator / denominator
+
+        pairs = [
+            (ratio(left.ebitda, left.revenue), ratio(right.ebitda, right.revenue)),
+            (
+                ratio(left.free_cash_flow, left.revenue),
+                ratio(right.free_cash_flow, right.revenue),
+            ),
+            (
+                ratio(left.gross_debt, left.ebitda),
+                ratio(right.gross_debt, right.ebitda),
+            ),
+            (
+                ratio(left.capital_expenditures, left.revenue),
+                ratio(right.capital_expenditures, right.revenue),
+            ),
+        ]
+        if (
+            target_profile.revenue_growth_rates
+            and candidate_profile.revenue_growth_rates
+        ):
+            pairs.append(
+                (
+                    target_profile.revenue_growth_rates[-1] / Decimal(100),
+                    candidate_profile.revenue_growth_rates[-1] / Decimal(100),
+                )
+            )
+        similarities = []
+        for target_value, candidate_value in pairs:
+            if target_value is None or candidate_value is None:
+                continue
+            scale = max(abs(target_value), abs(candidate_value), Decimal("0.01"))
+            similarities.append(
+                max(
+                    Decimal(0),
+                    Decimal(1) - abs(target_value - candidate_value) / scale,
+                )
+            )
+        if not similarities:
+            return None
+        average = sum(similarities, Decimal(0)) / Decimal(len(similarities))
+        return round(float(average * Decimal(100)))
 
     @staticmethod
     def _same_company(target: ValuationProfile, candidate: ValuationProfile) -> bool:

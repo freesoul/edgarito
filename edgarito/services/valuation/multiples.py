@@ -58,9 +58,22 @@ class LtmMultiplesService:
         market_data: SecurityMarketData,
         as_of: datetime.date | None = None,
     ) -> CompanyTradingMultiples:
+        try:
+            return self._compute_quarterly(financials, market_data, as_of)
+        except ValueError as exc:
+            if "four consecutive quarterly revenue periods" not in str(exc):
+                raise
+            return self._compute_latest_annual(financials, market_data, as_of)
+
+    def _compute_quarterly(
+        self,
+        financials: NormalizedCompanyFinancials,
+        market_data: SecurityMarketData,
+        as_of: datetime.date | None = None,
+    ) -> CompanyTradingMultiples:
         ticker = financials.ticker or financials.company_id
         price = self._latest_price(market_data, as_of)
-        by_period = self._quarterly_by_period(financials)
+        by_period = self._quarterly_by_period(financials, as_of)
         period_keys = self._latest_ltm_keys(by_period)
         first_revenue = by_period[period_keys[0]][FinancialConcept.REVENUE]
         predecessor = next(
@@ -135,6 +148,7 @@ class LtmMultiplesService:
             ebitda=ebitda,
             net_income=flows[FinancialConcept.NET_INCOME],
             free_cash_flow=free_cash_flow,
+            capital_expenditures=flows[FinancialConcept.CAPITAL_EXPENDITURES],
             dividends_paid=flows[FinancialConcept.DIVIDENDS_PAID],
             book_equity=equity,
             tangible_book_equity=tangible_book,
@@ -162,15 +176,140 @@ class LtmMultiplesService:
             warnings=warnings,
         )
 
+    def _compute_latest_annual(
+        self,
+        financials: NormalizedCompanyFinancials,
+        market_data: SecurityMarketData,
+        as_of: datetime.date | None,
+    ) -> CompanyTradingMultiples:
+        price = self._latest_price(market_data, as_of)
+        annual = [
+            item
+            for item in financials.observations
+            if item.granularity == Granularity.ANNUAL
+            and item.fiscal_period == FiscalPeriod.FY
+            and (as_of is None or item.period_end <= as_of)
+        ]
+        revenue_periods = [
+            item for item in annual if item.concept == FinancialConcept.REVENUE
+        ]
+        if not revenue_periods:
+            raise ValueError(
+                "LTM multiples require four consecutive quarterly revenue periods; "
+                "latest-annual fallback is also unavailable"
+            )
+        revenue = max(revenue_periods, key=lambda item: item.period_end)
+        prior_revenue = next(
+            (
+                item
+                for item in revenue_periods
+                if item.fiscal_year == revenue.fiscal_year - 1
+                and item.unit == revenue.unit
+            ),
+            None,
+        )
+        revenue_growth = (
+            (revenue.value / prior_revenue.value - Decimal(1)) * Decimal(100)
+            if prior_revenue is not None and prior_revenue.value > 0
+            else None
+        )
+        same_period = [
+            item
+            for item in annual
+            if item.fiscal_year == revenue.fiscal_year
+            and item.period_end == revenue.period_end
+        ]
+        by_concept = {}
+        for item in same_period:
+            by_concept.setdefault(item.concept, item)
+        currency = revenue.unit
+
+        def value(concept):
+            item = by_concept.get(concept)
+            return (
+                item.value
+                if item is not None and item.unit in {currency, "shares"}
+                else None
+            )
+
+        operating_income = value(FinancialConcept.OPERATING_INCOME)
+        depreciation = value(FinancialConcept.DEPRECIATION_AND_AMORTIZATION)
+        ebitda = self._sum_optional(operating_income, depreciation)
+        free_cash_flow = self._subtract_optional(
+            value(FinancialConcept.OPERATING_CASH_FLOW),
+            value(FinancialConcept.CAPITAL_EXPENDITURES),
+        )
+        balances = {concept: value(concept) for concept in self._BALANCE_CONCEPTS}
+        gross_debt = self._gross_debt(balances)
+        shares, share_basis = self._shares(balances)
+        market_cap = price.close * shares if shares is not None else None
+        comparable_market_cap = market_cap if market_data.currency == currency else None
+        cash = balances[FinancialConcept.CASH_AND_EQUIVALENTS]
+        enterprise_value = self._enterprise_value(
+            comparable_market_cap, gross_debt, cash
+        )
+        warnings = [
+            "Four consecutive quarters were unavailable; multiples use the latest "
+            f"annual FY{revenue.fiscal_year} fundamentals"
+        ]
+        if market_data.currency != currency:
+            warnings.append(
+                f"Market currency {market_data.currency} differs from reporting "
+                f"currency {currency}; FX alignment is required"
+            )
+        if shares is None:
+            warnings.append("No current or diluted share count is available")
+        if enterprise_value is None:
+            warnings.append("Enterprise value requires market cap, debt, and cash")
+        fundamentals = LtmFundamentals(
+            period_start=revenue.period_start or revenue.period_end,
+            period_end=revenue.period_end,
+            currency=currency,
+            revenue=revenue.value,
+            revenue_growth=revenue_growth,
+            operating_income=operating_income,
+            depreciation_and_amortization=depreciation,
+            ebitda=ebitda,
+            net_income=value(FinancialConcept.NET_INCOME),
+            free_cash_flow=free_cash_flow,
+            capital_expenditures=value(FinancialConcept.CAPITAL_EXPENDITURES),
+            dividends_paid=value(FinancialConcept.DIVIDENDS_PAID),
+            book_equity=balances[FinancialConcept.STOCKHOLDERS_EQUITY],
+            tangible_book_equity=self._tangible_book_equity(balances),
+            cash_and_equivalents=cash,
+            gross_debt=gross_debt,
+            shares=shares,
+            share_basis=share_basis,
+        )
+        return CompanyTradingMultiples(
+            provider=financials.provider,
+            market_provider=market_data.provider,
+            company_id=financials.company_id,
+            company_name=financials.company_name,
+            ticker=financials.ticker or financials.company_id,
+            price_date=price.observed_on,
+            price=price.close,
+            currency=market_data.currency,
+            market_capitalization=market_cap,
+            enterprise_value=enterprise_value,
+            fundamentals=fundamentals,
+            multiples=self._multiples(
+                comparable_market_cap, enterprise_value, fundamentals
+            ),
+            warnings=warnings,
+        )
+
     @staticmethod
     def _quarterly_by_period(
         financials: NormalizedCompanyFinancials,
+        as_of: datetime.date | None = None,
     ) -> dict[PeriodKey, dict[FinancialConcept, FinancialObservation]]:
         by_period: dict[PeriodKey, dict[FinancialConcept, FinancialObservation]] = {}
         for observation in financials.observations:
             if (
                 observation.granularity != Granularity.QUARTERLY
                 or observation.fiscal_period == FiscalPeriod.FY
+                or (as_of is not None and observation.period_end > as_of)
             ):
                 continue
             by_period.setdefault(observation.period_key, {}).setdefault(
@@ -258,12 +397,9 @@ class LtmMultiplesService:
         noncurrent = balances[FinancialConcept.LONG_TERM_DEBT_NONCURRENT]
         if all(value is None for value in (short_term, current_long_term, noncurrent)):
             return None
+        current = short_term if short_term is not None else current_long_term
         return sum(
-            (
-                value
-                for value in (short_term, current_long_term, noncurrent)
-                if value is not None
-            ),
+            (value for value in (current, noncurrent) if value is not None),
             Decimal(0),
         )
 

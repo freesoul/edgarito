@@ -35,6 +35,8 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
     assert profile.model_selection.sector is None
     assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
+    assert not profile.relative_valuation.enabled
+    assert profile.relative_valuation.multiple_resolution.use_fundamental_anchor
     assert profile.specialized_inputs.history == 5
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
         profile
@@ -57,7 +59,9 @@ def test_race_profile_overrides_provider_classification_with_luxury_economics():
     assert profile.forecast.fcff.capex_to_revenue == (Decimal("10.8"),)
     assert profile.valuation.discount_rates.country_risk_premium == Decimal("0.71")
     assert profile.valuation.capital_bridge.net_debt == Decimal("32000000")
-    assert profile.valuation.terminal_value.exit_multiple == Decimal("22.5")
+    assert profile.valuation.terminal_value.exit_multiple is None
+    assert profile.relative_valuation.enabled
+    assert profile.relative_valuation.basis.value == "ev_to_ebitda"
     assert profile.valuation.multistage.stable_growth_rate == Decimal("2.9")
     assert profile.valuation.share_repurchases.annual_cash_amounts == (
         Decimal("700000000"),
@@ -69,19 +73,19 @@ def test_race_profile_overrides_provider_classification_with_luxury_economics():
     assert profile.valuation.share_repurchases.initial_purchase_price is None
 
 
-def test_ticker_profile_is_auto_selected_but_explicit_profile_wins():
-    automatic = ValuationProfileLoader.load_for_ticker("MSFT")
-    explicit = ValuationProfileLoader.load_for_ticker(
-        "MSFT", ROOT / "configs" / "valuation" / "default.json"
+def test_company_profiles_are_explicit_scenarios_not_automatically_selected():
+    default = ValuationProfileLoader.load()
+    microsoft = ValuationProfileLoader.load(
+        ROOT / "configs" / "valuation" / "msft.json"
     )
 
-    assert automatic.name == "msft"
+    assert default.name == "default"
+    assert microsoft.name == "msft"
     assert (
-        automatic.valuation.multistage.terminal_return_on_invested_capital
+        microsoft.valuation.multistage.terminal_return_on_invested_capital
         == Decimal("40")
     )
-    assert automatic.valuation.multistage.depreciable_asset_life_years == 6
-    assert explicit.name == "default"
+    assert microsoft.valuation.multistage.depreciable_asset_life_years == 6
 
 
 def test_custom_profile_can_partially_override_defaults(tmp_path):

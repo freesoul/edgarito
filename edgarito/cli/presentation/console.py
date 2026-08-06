@@ -23,6 +23,7 @@ from edgarito.services.metrics.models import (
     MetricObservation,
 )
 from edgarito.services.valuation import (
+    ComparableImpliedValuation,
     ComparableMultiplesReport,
     FcffDcfResult,
     ModelRole,
@@ -954,6 +955,134 @@ class ComparableMultiplesConsolePresenter:
     @staticmethod
     def _format_multiple(value: Decimal, unit: str) -> str:
         return f"{value:,.2f}%" if unit == "percent" else f"{value:,.2f}x"
+
+
+class ComparableImpliedValuationConsolePresenter:
+    def render(self, result: ComparableImpliedValuation) -> str:
+        multiple = result.resolved_multiple
+
+        def anchor(value):
+            return f"{value:,.2f}x" if value is not None else "unavailable"
+
+        lines = [
+            "MARKET-RELATIVE IMPLIED VALUATION",
+            f"{result.ticker or result.company_id} - {result.company_name}",
+            f"Valuation date: {result.valuation_date.isoformat()} | Target date: "
+            f"{result.target_date.isoformat()} ({result.horizon_years:,.2f} years)",
+            f"Basis: {ValuationSelectionConsolePresenter._label(result.basis.value)} | "
+            f"Metric: {result.forecast_metric_label}",
+            "",
+            "MULTIPLE RESOLUTION",
+            f"Fundamental anchor:             {anchor(multiple.fundamental_anchor)}",
+            f"Peer median anchor:             {anchor(multiple.peer_anchor)}",
+            f"Target historical median:       {anchor(multiple.historical_anchor)}",
+            "Target historical IQR:          "
+            + (
+                f"{multiple.historical_percentile_25:,.2f}x-"
+                f"{multiple.historical_percentile_75:,.2f}x"
+                if multiple.historical_percentile_25 is not None
+                and multiple.historical_percentile_75 is not None
+                else "unavailable"
+            ),
+            f"Historical observations:         {multiple.historical_sample_size}",
+            "Historical multiple volatility: "
+            + (
+                f"{multiple.historical_volatility:,.1%}"
+                if multiple.historical_volatility is not None
+                else "unavailable"
+            ),
+            "Historical multiple trend:      "
+            + (
+                f"{multiple.historical_trend:+,.1%}"
+                if multiple.historical_trend is not None
+                else "unavailable"
+            ),
+            f"Current target multiple:        {anchor(multiple.current_target_anchor)}",
+            f"Observed market anchor:         {anchor(multiple.market_anchor)}",
+            "Median synchronized peer premium:"
+            + (
+                f" {multiple.historical_peer_premium:+,.1f}%"
+                if multiple.historical_peer_premium is not None
+                else " unavailable"
+            ),
+            f"Synchronized premium observations: "
+            f"{multiple.premium_history_sample_size}",
+            "Premium AR(1) persistence:       "
+            + (
+                f"{multiple.premium_mean_reversion_beta:,.1%}"
+                if multiple.premium_mean_reversion_beta is not None
+                else "unavailable"
+            ),
+            f"Historical persistence:         {multiple.historical_persistence:,.1%}",
+            f"Fundamental-support score:      {multiple.fundamental_support:,.1%}",
+            f"Horizon retention:              {multiple.horizon_retention:,.1%}",
+            f"Combined premium persistence:   {multiple.persistence_factor:,.1%}",
+            f"Resolved multiple:              {multiple.point_estimate:,.2f}x",
+            f"Reasonable range:                {multiple.lower_bound:,.2f}x-"
+            f"{multiple.upper_bound:,.2f}x",
+            f"Confidence: {multiple.confidence.value} | Peer sample: "
+            f"{multiple.sample_size}",
+            "",
+            f"{'Case':<12}{'Multiple':>12}{'Target-date price':>22}{'Present value':>20}",
+            "-" * 66,
+        ]
+        for case in (result.lower_case, result.point_case, result.upper_case):
+            lines.append(
+                f"{case.label:<12}{case.multiple:>11,.2f}x"
+                f"{case.implied_value_per_share:>18,.2f} {result.currency}"
+                f"{case.present_value_per_share:>16,.2f} {result.currency}"
+            )
+        if result.intrinsic_value_per_share is not None:
+            difference = (
+                result.point_case.present_value_per_share
+                - result.intrinsic_value_per_share
+            )
+            lines.extend(
+                [
+                    "",
+                    "MODEL COMPARISON",
+                    f"Intrinsic FCFF DCF:             "
+                    f"{result.intrinsic_value_per_share:,.2f} {result.currency}",
+                    f"Relative present-value estimate: "
+                    f"{result.point_case.present_value_per_share:,.2f} "
+                    f"{result.currency}",
+                    f"Market-premium difference:      {difference:+,.2f} "
+                    f"{result.currency}",
+                    "The DCF values forecast cash flows; the relative estimate "
+                    "also retains an evidence-constrained market premium.",
+                ]
+            )
+        if result.current_price is not None:
+            lines.extend(
+                [
+                    f"Current price:                   {result.current_price:,.2f} "
+                    f"{result.currency}",
+                    "Current-price implied forward multiple: "
+                    + (
+                        f"{result.current_price_implied_multiple:,.2f}x "
+                        f"{ValuationSelectionConsolePresenter._label(result.basis.value)}"
+                        if result.current_price_implied_multiple is not None
+                        else "unavailable"
+                    ),
+                ]
+            )
+        if (
+            result.analyst_target_price is not None
+            and result.analyst_target_implied_multiple is not None
+        ):
+            lines.extend(
+                [
+                    f"Analyst target price:            "
+                    f"{result.analyst_target_price:,.2f} {result.currency}",
+                    f"Analyst-target implied multiple: "
+                    f"{result.analyst_target_implied_multiple:,.2f}x "
+                    f"{ValuationSelectionConsolePresenter._label(result.basis.value)}",
+                ]
+            )
+        if result.warnings:
+            lines.extend(["", "WARNINGS"])
+            lines.extend(f"- {warning}" for warning in result.warnings)
+        return "\n".join(lines)
 
 
 class SpecializedExtractionConsolePresenter:

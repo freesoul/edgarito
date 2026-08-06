@@ -71,6 +71,7 @@ class EconomicTrait(str, Enum):
     BOOK_VALUE_UNRELIABLE = "book_value_unreliable"
     FINANCING_SUBSIDIARY = "financing_subsidiary"
     MULTI_SEGMENT = "multi_segment"
+    PRICING_POWER = "pricing_power"
 
 
 class ForecastProfile(str, Enum):
@@ -259,11 +260,13 @@ class LtmFundamentals(BaseModel):
     period_end: datetime.date
     currency: str
     revenue: Optional[Decimal] = None
+    revenue_growth: Optional[Decimal] = None
     operating_income: Optional[Decimal] = None
     depreciation_and_amortization: Optional[Decimal] = None
     ebitda: Optional[Decimal] = None
     net_income: Optional[Decimal] = None
     free_cash_flow: Optional[Decimal] = None
+    capital_expenditures: Optional[Decimal] = None
     dividends_paid: Optional[Decimal] = None
     book_equity: Optional[Decimal] = None
     tangible_book_equity: Optional[Decimal] = None
@@ -303,6 +306,108 @@ class ComparableMultiplesReport(BaseModel):
     peers: list[CompanyTradingMultiples] = Field(default_factory=list)
     summaries: list[PeerMultipleSummary] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class HistoricalMultipleObservation(BaseModel):
+    observed_on: datetime.date
+    value: Decimal = Field(gt=0)
+
+
+class HistoricalMultipleSummary(BaseModel):
+    basis: RelativeValuationBasis
+    observations: tuple[HistoricalMultipleObservation, ...] = ()
+    median: Optional[Decimal] = None
+    percentile_25: Optional[Decimal] = None
+    percentile_75: Optional[Decimal] = None
+    minimum: Optional[Decimal] = None
+    maximum: Optional[Decimal] = None
+    current: Optional[Decimal] = None
+    volatility: Optional[Decimal] = None
+    trend: Optional[Decimal] = None
+    warnings: tuple[str, ...] = ()
+
+
+class MultipleConfidence(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ResolvedMultiple(BaseModel):
+    """Auditable market multiple with separate fundamental and premium legs."""
+
+    basis: RelativeValuationBasis
+    point_estimate: Decimal = Field(gt=0)
+    lower_bound: Decimal = Field(gt=0)
+    upper_bound: Decimal = Field(gt=0)
+    fundamental_anchor: Decimal = Field(gt=0)
+    peer_anchor: Optional[Decimal] = None
+    historical_anchor: Optional[Decimal] = None
+    historical_percentile_25: Optional[Decimal] = None
+    historical_percentile_75: Optional[Decimal] = None
+    historical_volatility: Optional[Decimal] = None
+    historical_trend: Optional[Decimal] = None
+    historical_sample_size: int = Field(default=0, ge=0)
+    current_target_anchor: Optional[Decimal] = None
+    market_anchor: Optional[Decimal] = None
+    observed_premium: Optional[Decimal] = None
+    historical_peer_premium: Optional[Decimal] = None
+    premium_history_sample_size: int = Field(default=0, ge=0)
+    premium_mean_reversion_beta: Optional[Decimal] = Field(
+        default=None, ge=0, le=1
+    )
+    historical_persistence: Decimal = Field(ge=0, le=1)
+    fundamental_support: Decimal = Field(ge=0, le=1)
+    horizon_retention: Decimal = Field(ge=0, le=1)
+    persistence_factor: Decimal = Field(ge=0, le=1)
+    sample_size: int = Field(ge=0)
+    confidence: MultipleConfidence
+    methodology: str
+    warnings: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ResolvedMultiple":
+        if not self.lower_bound <= self.point_estimate <= self.upper_bound:
+            raise ValueError(
+                "Resolved multiple point estimate must be inside its range"
+            )
+        return self
+
+
+class ComparableImpliedValuationCase(BaseModel):
+    label: str
+    multiple: Decimal = Field(gt=0)
+    implied_enterprise_value: Decimal
+    implied_equity_value: Decimal
+    implied_value_per_share: Decimal
+    present_value_per_share: Decimal
+
+
+class ComparableImpliedValuation(BaseModel):
+    provider: str
+    company_id: str
+    company_name: str
+    ticker: Optional[str] = None
+    valuation_date: datetime.date
+    target_date: datetime.date
+    horizon_years: Decimal = Field(gt=0)
+    currency: str
+    basis: RelativeValuationBasis
+    forecast_metric: Decimal
+    forecast_metric_label: str
+    projected_net_debt: Decimal
+    projected_diluted_shares: Decimal = Field(gt=0)
+    discount_rate: Decimal
+    resolved_multiple: ResolvedMultiple
+    lower_case: ComparableImpliedValuationCase
+    point_case: ComparableImpliedValuationCase
+    upper_case: ComparableImpliedValuationCase
+    current_price: Optional[Decimal] = None
+    current_price_implied_multiple: Optional[Decimal] = None
+    analyst_target_price: Optional[Decimal] = None
+    analyst_target_implied_multiple: Optional[Decimal] = None
+    intrinsic_value_per_share: Optional[Decimal] = None
+    warnings: tuple[str, ...] = ()
 
 
 class CostOfEquityMethod(str, Enum):

@@ -4,8 +4,8 @@
 check why RACE differs from analyst forecasts
 uv run edgarito valuation   --ticker RACE   --market eu   --profile configs/valuation/race.json
 
-and whether this is reasonable and why
-uv run edgarito valuation   --ticker RACE   --market eu   --profile configs/valuation/race.json   --terminal-method exit_multiple
+compare intrinsic and market-relative values without mixing the models
+uv run edgarito valuation --ticker RACE --market eu --provider-symbol yahoo=RACE.MI --profile configs/valuation/race.json --model both --peer RMS.PA --peer CFR.SW --peer MONC.MI --peer P911.DE
 
 
 and whether the fixes applied for this to pass are reasonable
@@ -20,7 +20,6 @@ edgarito: error: FCFF DCF requires complete debt and cash inputs for FY2026; pro
 
 
 - **Add valuation methods**
-      Comparable implied valuation.
       Equity DCF/DDM.
       Residual Income.
       NAV/SOTP framework with specialized REIT, resource, biotech, and segment adapters.

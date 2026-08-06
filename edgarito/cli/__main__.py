@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
+    ComparableImpliedValuationConsolePresenter,
     ComparableMultiplesConsolePresenter,
     FcffDcfConsolePresenter,
     FinancialsConsolePresenter,
@@ -58,6 +59,7 @@ from edgarito.services.valuation import (
     BusinessArchetype,
     CashFlowTiming,
     CompanyLifecycle,
+    ComparableImpliedValuationService,
     ComparableMultiplesService,
     Cyclicality,
     DiscountRateService,
@@ -66,9 +68,12 @@ from edgarito.services.valuation import (
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
     FcffDcfService,
+    HistoricalMultiplesService,
     LtmMultiplesService,
+    MultipleResolver,
     PeerSelectionParameters,
     PeerUniverseSelector,
+    RelativeValuationBasis,
     ShareRepurchaseParameters,
     SpecializedValuationExtractor,
     TerminalMetric,
@@ -226,9 +231,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     valuation.add_argument(
         "--model",
-        choices=("fcff-dcf",),
-        default="fcff-dcf",
-        help="Valuation model (default: fcff-dcf)",
+        choices=("fcff-dcf", "comparables", "both"),
+        help=(
+            "Valuation output: intrinsic DCF, independent market-relative "
+            "valuation, or both; the profile policy may enable both"
+        ),
     )
     valuation.add_argument(
         "--years",
@@ -237,6 +244,28 @@ def build_parser() -> argparse.ArgumentParser:
             "Minimum annual projection horizon; adaptive valuation extends it "
             "when needed to reach the stable stage"
         ),
+    )
+    valuation.add_argument(
+        "--peer",
+        action="append",
+        help="Candidate Yahoo peer symbol for relative valuation; repeat per peer",
+    )
+    valuation.add_argument(
+        "--relative-basis",
+        choices=("ev_to_ebitda", "ev_to_ebit", "ev_to_revenue", "ev_to_fcf"),
+        help="Forward multiple basis; overrides the relative-valuation policy",
+    )
+    valuation.add_argument(
+        "--horizon-years",
+        type=_decimal_value,
+        metavar="YEARS",
+        help="Forward target-price horizon in years",
+    )
+    valuation.add_argument(
+        "--analyst-target-price",
+        type=_decimal_value,
+        metavar="PRICE",
+        help="Show the forward multiple implied by an external analyst target",
     )
     valuation.add_argument(
         "--projection-method",
@@ -632,7 +661,7 @@ async def _run_metrics(args: argparse.Namespace) -> int:
 
 
 async def _run_forecast(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
+    profile = ValuationProfileLoader.load(args.profile)
     forecast_method = (
         ForecastMethod(args.forecast_method)
         if args.forecast_method is not None
@@ -692,7 +721,15 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 
 
 async def _run_valuation(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
+    profile = ValuationProfileLoader.load(args.profile)
+    selected_model = args.model or (
+        "both" if profile.relative_valuation.enabled and args.peer else "fcff-dcf"
+    )
+    if selected_model in {"comparables", "both"} and not args.peer:
+        raise ValueError(
+            "Relative valuation requires an explicit candidate universe; repeat "
+            "--peer for each candidate"
+        )
     forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
     terminal_configuration = profile.valuation.terminal_value
     terminal_method = (
@@ -893,7 +930,87 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         valuation_date,
         share_repurchase_parameters,
     )
-    print(FcffDcfConsolePresenter().render(result, profile_name=profile.name))
+    if selected_model in {"fcff-dcf", "both"}:
+        print(FcffDcfConsolePresenter().render(result, profile_name=profile.name))
+    if selected_model in {"comparables", "both"}:
+        if terminal_method != TerminalValueMethod.PERPETUITY_GROWTH:
+            raise ValueError(
+                "Relative multiple resolution requires a perpetuity-growth DCF "
+                "for its independent fundamental anchor"
+            )
+        relative_configuration = profile.relative_valuation
+        basis = RelativeValuationBasis(
+            args.relative_basis or relative_configuration.basis
+        )
+        horizon_years = (
+            args.horizon_years
+            if args.horizon_years is not None
+            else relative_configuration.horizon_years
+        )
+        if horizon_years <= 0:
+            raise ValueError("--horizon-years must be positive")
+        provider_symbols = _parse_provider_symbols(args.provider_symbol)
+        target_symbol = (
+            provider_symbols.get(ProviderName.YAHOO, args.ticker).strip().upper()
+        )
+        peer_symbols = list(
+            dict.fromkeys(symbol.strip().upper() for symbol in args.peer)
+        )
+        (
+            report,
+            comparable_financials,
+            comparable_market,
+            comparable_peer_sources,
+        ) = await _build_comparable_report(
+            args,
+            profile,
+            target_symbol,
+            peer_symbols,
+            as_of=valuation_date,
+        )
+        target_history = HistoricalMultiplesService().compute(
+            comparable_financials,
+            comparable_market,
+            basis,
+        )
+        peer_histories = tuple(
+            HistoricalMultiplesService().compute(financials, market, basis)
+            for financials, market in comparable_peer_sources.values()
+        )
+        resolved_multiple = MultipleResolver().resolve(
+            basis=basis,
+            target=report.target,
+            target_history=target_history,
+            peer_histories=peer_histories,
+            peer_report=report,
+            target_forecast=forecast,
+            intrinsic_valuation=result,
+            horizon_years=horizon_years,
+            policy=relative_configuration.multiple_resolution,
+        )
+        if report.warnings:
+            resolved_multiple = resolved_multiple.model_copy(
+                update={
+                    "warnings": tuple(
+                        dict.fromkeys([*resolved_multiple.warnings, *report.warnings])
+                    )
+                }
+            )
+        relative_result = ComparableImpliedValuationService().value(
+            target_forecast=forecast,
+            capital_bridge=capital_bridge,
+            projected_shares=capital_bridge.diluted_shares,
+            resolved_multiple=resolved_multiple,
+            valuation_date=valuation_date,
+            horizon_years=horizon_years,
+            discount_rate=resolved.wacc,
+            current_price=report.target.price,
+            analyst_target_price=args.analyst_target_price,
+            intrinsic_value_per_share=result.value_per_share,
+        )
+        if selected_model == "both":
+            print("\n" + "=" * 84 + "\n")
+        print(ComparableImpliedValuationConsolePresenter().render(relative_result))
     return 0
 
 
@@ -967,27 +1084,48 @@ async def _run_classification(args: argparse.Namespace) -> int:
 
 async def _run_comparables(args: argparse.Namespace) -> int:
     valuation_profile = ValuationProfileLoader.load(args.profile)
-    configuration = valuation_profile.comparables
-    selection_configuration = valuation_profile.model_selection
     target_symbol = args.ticker.strip().upper()
     peer_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in args.peer))
+    report, _, _, _ = await _build_comparable_report(
+        args,
+        valuation_profile,
+        target_symbol,
+        peer_symbols,
+        as_of=args.as_of,
+    )
+    print(ComparableMultiplesConsolePresenter().render(report))
+    return 0
+
+
+async def _build_comparable_report(
+    args,
+    valuation_profile,
+    target_symbol,
+    peer_symbols,
+    *,
+    as_of=None,
+):
+    configuration = valuation_profile.comparables
+    selection_configuration = valuation_profile.model_selection
     parameters = PeerSelectionParameters(
         max_peers=(
-            args.max_peers if args.max_peers is not None else configuration.max_peers
+            getattr(args, "max_peers", None)
+            if getattr(args, "max_peers", None) is not None
+            else configuration.max_peers
         ),
         preferred_minimum=(
-            args.preferred_minimum
-            if args.preferred_minimum is not None
+            getattr(args, "preferred_minimum", None)
+            if getattr(args, "preferred_minimum", None) is not None
             else configuration.preferred_minimum
         ),
         minimum_score=(
-            args.minimum_score
-            if args.minimum_score is not None
+            getattr(args, "minimum_score", None)
+            if getattr(args, "minimum_score", None) is not None
             else configuration.minimum_score
         ),
         require_same_sector=(
-            args.require_same_sector
-            if args.require_same_sector is not None
+            getattr(args, "require_same_sector", None)
+            if getattr(args, "require_same_sector", None) is not None
             else configuration.require_same_sector
         ),
     )
@@ -999,8 +1137,9 @@ async def _run_comparables(args: argparse.Namespace) -> int:
                 _retrieve_yahoo_comparable_source(
                     client,
                     symbol,
-                    args.as_of,
+                    as_of,
                     use_cache=not args.refresh,
+                    history_period="5y",
                 )
                 for symbol in symbols
             ),
@@ -1016,6 +1155,8 @@ async def _run_comparables(args: argparse.Namespace) -> int:
     market_normalizer = YahooMarketNormalizer()
     multiples_service = LtmMultiplesService()
     bundles = {}
+    normalized_financials = {}
+    normalized_markets = {}
     retrieval_warnings = []
     for symbol, result in zip(symbols, results, strict=True):
         if isinstance(result, BaseException):
@@ -1037,12 +1178,28 @@ async def _run_comparables(args: argparse.Namespace) -> int:
             ),
         )
         market_data = market_normalizer.normalize(history)
+        if market_data.currency != source.currency:
+            try:
+                async with EcbClient(cache) as ecb:
+                    market_data = await EcbMarketDataCurrencyConverter(ecb).convert(
+                        market_data,
+                        source.currency,
+                        use_cache=not args.refresh,
+                        make_cache=True,
+                    )
+            except (RuntimeError, ValueError) as exc:
+                retrieval_warnings.append(
+                    f"{symbol} market currency could not be aligned to "
+                    f"{source.currency}: {exc}"
+                )
         try:
-            multiples = multiples_service.compute(financials, market_data, args.as_of)
+            multiples = multiples_service.compute(financials, market_data, as_of)
         except ValueError as exc:
             multiples = None
             retrieval_warnings.append(f"{symbol} multiples unavailable: {exc}")
         bundles[symbol] = (profile, multiples)
+        normalized_financials[symbol] = financials
+        normalized_markets[symbol] = market_data
 
     target_profile, target_multiples = bundles[target_symbol]
     if target_multiples is None:
@@ -1051,7 +1208,15 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         bundles[symbol][0] for symbol in peer_symbols if symbol in bundles
     ]
     universe = PeerUniverseSelector().select(
-        target_profile, candidate_profiles, parameters
+        target_profile,
+        candidate_profiles,
+        parameters,
+        target_multiples=target_multiples,
+        candidate_multiples={
+            symbol: bundles[symbol][1]
+            for symbol in peer_symbols
+            if symbol in bundles and bundles[symbol][1] is not None
+        },
     )
     peer_multiples = [
         bundles[symbol][1]
@@ -1067,8 +1232,16 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         report = report.model_copy(
             update={"warnings": [*report.warnings, *retrieval_warnings]}
         )
-    print(ComparableMultiplesConsolePresenter().render(report))
-    return 0
+    return (
+        report,
+        normalized_financials[target_symbol],
+        normalized_markets[target_symbol],
+        {
+            symbol: (normalized_financials[symbol], normalized_markets[symbol])
+            for symbol in universe.selected_tickers
+            if symbol in normalized_financials and symbol in normalized_markets
+        },
+    )
 
 
 async def _run_specialized_inputs(args: argparse.Namespace) -> int:
@@ -1109,9 +1282,10 @@ async def _retrieve_yahoo_comparable_source(
     as_of: Optional[datetime.date],
     *,
     use_cache: bool,
+    history_period: str = "1mo",
 ):
-    history_arguments = {"period": "1mo"}
-    if as_of is not None:
+    history_arguments = {"period": history_period}
+    if as_of is not None and history_period == "1mo":
         history_arguments = {
             "start": as_of - datetime.timedelta(days=14),
             "end": as_of + datetime.timedelta(days=1),

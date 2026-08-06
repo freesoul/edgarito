@@ -18,6 +18,7 @@ from edgarito.services.valuation.models import (
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    RelativeValuationBasis,
     TerminalMetric,
     TerminalValueMethod,
     ValuationInput,
@@ -328,6 +329,44 @@ class ComparableSelectionConfiguration(_ProfileModel):
         return self
 
 
+class MultipleResolutionConfiguration(_ProfileModel):
+    method: Literal["blended"] = "blended"
+    use_target_history: bool = True
+    use_peer_median: bool = True
+    use_fundamental_anchor: bool = True
+    forecast_premium_mean_reversion: bool = True
+    minimum_peer_sample: int = Field(default=4, ge=1, le=50)
+    annual_premium_decay: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
+    insufficient_history_persistence: Decimal = Field(
+        default=Decimal("0.50"), ge=0, le=1
+    )
+    persistence_range_width: Decimal = Field(default=Decimal("0.15"), ge=0, le=1)
+    winsorize_percentiles: tuple[Decimal, Decimal] = (
+        Decimal("10"),
+        Decimal("90"),
+    )
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> "MultipleResolutionConfiguration":
+        if not self.use_fundamental_anchor:
+            raise ValueError(
+                "Relative multiple resolution requires a fundamental anchor"
+            )
+        lower, upper = self.winsorize_percentiles
+        if not Decimal(0) <= lower < upper <= Decimal(100):
+            raise ValueError("winsorize_percentiles must be increasing within 0-100")
+        return self
+
+
+class RelativeValuationConfiguration(_ProfileModel):
+    enabled: bool = False
+    basis: RelativeValuationBasis = RelativeValuationBasis.EV_TO_EBITDA
+    horizon_years: Decimal = Field(default=Decimal(1), gt=0, le=10)
+    multiple_resolution: MultipleResolutionConfiguration = Field(
+        default_factory=MultipleResolutionConfiguration
+    )
+
+
 class SpecializedInputConfiguration(_ProfileModel):
     history: int = Field(default=5, ge=1, le=100)
 
@@ -347,6 +386,9 @@ class ForecastValuationProfile(_ProfileModel):
     )
     comparables: ComparableSelectionConfiguration = Field(
         default_factory=ComparableSelectionConfiguration
+    )
+    relative_valuation: RelativeValuationConfiguration = Field(
+        default_factory=RelativeValuationConfiguration
     )
     specialized_inputs: SpecializedInputConfiguration = Field(
         default_factory=SpecializedInputConfiguration
@@ -411,22 +453,6 @@ class ValuationProfileLoader:
             raise ValueError(f"Invalid valuation profile {source}: {exc}") from exc
 
     @staticmethod
-    def load_for_ticker(
-        ticker: str | None, path: str | Path | None = None
-    ) -> ForecastValuationProfile:
-        """Use an explicit profile, then a bundled ticker profile, then default."""
-        if path is not None or not ticker:
-            return ValuationProfileLoader.load(path)
-        profile_name = ticker.strip().casefold()
-        if profile_name:
-            candidate = ValuationProfileLoader.default_path().parent / (
-                f"{profile_name}.json"
-            )
-            if candidate.is_file():
-                return ValuationProfileLoader.load(candidate)
-        return ValuationProfileLoader.load()
-
-    @staticmethod
     def default_path() -> Path:
         source_checkout = Path(__file__).resolve().parents[2] / (
             DEFAULT_VALUATION_PROFILE_PATH
@@ -450,7 +476,9 @@ __all__ = [
     "ForecastMethod",
     "ForecastValuationProfile",
     "ModelSelectionConfiguration",
+    "MultipleResolutionConfiguration",
     "MultistageValuationConfiguration",
+    "RelativeValuationConfiguration",
     "SpecializedInputConfiguration",
     "TerminalValueConfiguration",
     "ValuationCalculationConfiguration",

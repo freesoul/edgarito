@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "race",
-  "description": "Ferrari profile with sourced operating guidance, industrial capital structure, a conventional perpetuity base case, and a stored 22.5x EBITDA luxury-premium terminal scenario.",
+  "description": "Ferrari profile with sourced operating guidance, industrial capital structure, a conventional perpetuity DCF, and policy-based relative valuation without a hardcoded terminal multiple.",
   "forecast": {
     "default_method": "fcff",
     "fcff": {
@@ -39,7 +39,7 @@
     "terminal_value": {
       "method": "perpetuity_growth",
       "perpetual_growth_rate": null,
-      "exit_multiple": "22.5",
+      "exit_multiple": null,
       "exit_metric": "ebitda"
     },
     "capital_bridge": {
@@ -83,7 +83,7 @@
     "business_archetype": null,
     "lifecycle": null,
     "cyclicality": null,
-    "economic_traits": [],
+    "economic_traits": ["pricing_power"],
     "available_inputs": [],
     "peer_count": null
   },
@@ -92,6 +92,23 @@
     "preferred_minimum": 5,
     "minimum_score": 50,
     "require_same_sector": true
+  },
+  "relative_valuation": {
+    "enabled": true,
+    "basis": "ev_to_ebitda",
+    "horizon_years": "1",
+    "multiple_resolution": {
+      "method": "blended",
+      "use_target_history": true,
+      "use_peer_median": true,
+      "use_fundamental_anchor": true,
+      "forecast_premium_mean_reversion": true,
+      "minimum_peer_sample": 4,
+      "annual_premium_decay": "0.10",
+      "insufficient_history_persistence": "0.50",
+      "persistence_range_width": "0.15",
+      "winsorize_percentiles": ["10", "90"]
+    }
   },
   "specialized_inputs": {
     "history": 5
