@@ -1,4 +1,4 @@
-from edgarito.cli import main
+from edgarito.cli.__main__ import main
 
 
 if __name__ == "__main__":

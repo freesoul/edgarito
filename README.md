@@ -2,37 +2,33 @@
 
 Edgarito retrieves SEC EDGAR Company Facts, stores the raw provider responses in a filesystem cache, normalizes selected US-GAAP concepts into provider-neutral observations, and displays historical financial statements in a CLI.
 
-## Install
+## Setup
 
 ```bash
-pip install -e .
+uv sync
 ```
 
-SEC requests require a descriptive user agent containing contact information:
+SEC requests require a descriptive user agent containing contact information. Add it to a `.env` file in the repository root:
 
 ```bash
-export EDGARITO_USER_AGENT="Your Name your-email@example.com"
+EDGARITO_USER_AGENT="Your Name your-email@example.com"
 ```
 
-PowerShell:
-
-```powershell
-$env:EDGARITO_USER_AGENT = "Your Name your-email@example.com"
-```
+The existing `.cli.env` format is also supported using its lowercase `user_agent` and `cache_path` keys. Shell environment variables and the `--user-agent` option are supported as well; the explicit command-line option takes precedence.
 
 ## Display financials
 
 ```bash
-edgarito financials --ticker AAPL
-edgarito financials --ticker AAPL --period quarterly --limit 8
-edgarito financials --cik 320193 --period all
-edgarito financials --ticker AAPL --concept revenue --concept net_income
+uv run edgarito financials --ticker AAPL
+uv run edgarito financials --ticker AAPL --period quarterly --limit 8
+uv run edgarito financials --cik 320193 --period all
+uv run edgarito financials --ticker AAPL --concept revenue --concept net_income
 ```
 
-The same command works without installing the console script:
+You can also run the Python module directly:
 
 ```bash
-python -m edgarito financials --ticker AAPL --user-agent "Your Name your-email@example.com"
+uv run python -m edgarito financials --ticker AAPL --user-agent "Your Name your-email@example.com"
 ```
 
 Provider responses are cached below `cache/providers/edgar/`. Use `--refresh` to bypass existing snapshots. Asterisks in quarterly output mark values derived from reported YTD or full-year facts.

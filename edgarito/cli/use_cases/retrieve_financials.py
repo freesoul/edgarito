@@ -1,5 +1,5 @@
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
-from edgarito.schemas.use_cases.retrieve_financials import RetrieveFinancialsRequest
+from edgarito.schemas.cli.use_cases.retrieve_financials import RetrieveFinancialsRequest
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 from edgarito.services.providers.edgar import EdgarClient
 
