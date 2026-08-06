@@ -1,8 +1,6 @@
 
 
 - **Add valuation methods**
-   3. Add separate market and assumption schemas.
-   4. Add Treasury/FRED/ECB and versioned Damodaran reference providers.
    5. Extend Alpha Vantage only for price history, latest close, dividends and splits.
    6. Replace the current forecast with the driver-based FCFF forecast.
    7. Build peer-universe selection and LTM multiple computation.

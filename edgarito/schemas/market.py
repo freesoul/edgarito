@@ -15,9 +15,12 @@ class MarketDataFrequency(str, Enum):
     SNAPSHOT = "snapshot"
     DAILY = "daily"
     WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
+    SEMIANNUAL = "semiannual"
     ANNUAL = "annual"
+    IRREGULAR = "irregular"
 
 
 class ReferenceSeriesKind(str, Enum):

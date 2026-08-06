@@ -409,6 +409,54 @@ date; reference-dataset assumptions additionally require a dataset name and
 version. This ensures that retrieving a rate does not silently turn it into a
 valuation input.
 
+### Reference providers
+
+The reference clients normalize their output directly into the schemas above:
+
+- `TreasuryClient` retrieves daily U.S. par yields from Treasury's free XML feed.
+- `FredClient` retrieves economic series and optional point-in-time vintages. The
+  API is free but requires `FRED_API_KEY` / `fred_api_key`.
+- `EcbClient` retrieves one series at a time from the free ECB SDMX API.
+- `DamodaranClient` retrieves typed country-risk and U.S. industry-beta tables.
+  Each release declares a version, publication date, source URL, and SHA-256. A
+  changed upstream file is rejected before it reaches the cache.
+
+```python
+import datetime
+import os
+
+from edgarito.schemas import ReferenceSeriesKind
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.providers import EcbClient, FredClient, TreasuryClient
+
+
+cache = FileSystemCache("cache")
+
+async with TreasuryClient(cache) as client:
+    treasury = await client.get_par_yield(120, year=2026)
+
+async with FredClient(cache, os.environ["FRED_API_KEY"]) as client:
+    fred = await client.get_series(
+        "DGS10",
+        kind=ReferenceSeriesKind.GOVERNMENT_YIELD,
+        vintage_date=datetime.date(2026, 8, 6),
+        currency="USD",
+        country="US",
+    )
+
+async with EcbClient(cache) as client:
+    ecb = await client.get_series(
+        "FM",
+        "D.U2.EUR.4F.KR.MRR_FR.LEV",
+        kind=ReferenceSeriesKind.POLICY_RATE,
+    )
+```
+
+The built-in Damodaran releases are `COUNTRY_RISK_PREMIUMS_2026` and
+`US_INDUSTRY_BETAS_2026`. Add a new `ReferenceDatasetRelease` with a verified
+checksum when the source publishes an update; do not relabel a mutable URL with
+an older version.
+
 ## Provider configuration
 
 The built-in provider routing is equivalent to:
