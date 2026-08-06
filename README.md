@@ -542,7 +542,49 @@ async def main():
 financials = asyncio.run(main())
 ```
 
-The provider caches each Alpha Vantage endpoint separately below `<cache_path>/providers/alphavantage/`.
+Retrieve the intentionally limited market-data scope separately:
+
+```python
+import asyncio
+import os
+
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.normalization import AlphaVantageMarketNormalizer
+from edgarito.services.providers import AlphaVantageClient
+
+
+async def market():
+    cache = FileSystemCache(os.getenv("cache_path", "cache"))
+    async with AlphaVantageClient(
+        cache, os.environ["alphavantage_api_key"]
+    ) as client:
+        daily = await client.get_daily_prices("AAPL")
+        dividends = await client.get_dividends("AAPL")
+        splits = await client.get_splits("AAPL")
+        latest_close = await client.get_latest_close("AAPL")
+
+    normalized = AlphaVantageMarketNormalizer().normalize(
+        symbol="AAPL",
+        currency="USD",
+        daily_prices=daily,
+        dividends=dividends,
+        splits=splits,
+    )
+    return normalized, latest_close
+
+
+market_data, latest_close = asyncio.run(market())
+```
+
+Daily prices are raw as-traded OHLCV values, so `adjusted_close` remains unset.
+The default `compact` request returns the latest 100 observations and works with
+free keys. `AlphaVantageOutputSize.FULL` is explicit because Alpha Vantage now
+requires a premium key for full daily history. The end-of-day global quote used
+by `get_latest_close` remains available to free keys; realtime entitlements are
+not requested.
+
+The provider caches each Alpha Vantage endpoint and output-size variant
+separately below `<cache_path>/providers/alphavantage/`.
 
 ## Financial Modeling Prep provider
 

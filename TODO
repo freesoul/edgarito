@@ -1,7 +1,6 @@
 
 
 - **Add valuation methods**
-   5. Extend Alpha Vantage only for price history, latest close, dividends and splits.
    6. Replace the current forecast with the driver-based FCFF forecast.
    7. Build peer-universe selection and LTM multiple computation.
    8. Add specialized REIT/resource/biotech/SOTP extractors later.

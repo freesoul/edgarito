@@ -10,8 +10,14 @@ from edgarito.services.providers.treasury import TreasuryClient
 __all__ = [
     "COUNTRY_RISK_PREMIUMS_2026",
     "US_INDUSTRY_BETAS_2026",
+    "AlphaVantageClient",
+    "AlphaVantageOutputSize",
     "DamodaranClient",
     "EcbClient",
     "FredClient",
     "TreasuryClient",
 ]
+from edgarito.services.providers.alphavantage import (
+    AlphaVantageClient,
+    AlphaVantageOutputSize,
+)

@@ -8,6 +8,17 @@ from edgarito.schemas.providers.alphavantage.fundamentals import (
     IncomeStatementReport,
     IncomeStatementResponse,
 )
+from edgarito.schemas.providers.alphavantage.market import (
+    DailyPrice,
+    DailyTimeSeriesMetadata,
+    DailyTimeSeriesResponse,
+    DividendEvent,
+    DividendResponse,
+    GlobalQuote,
+    GlobalQuoteResponse,
+    SplitEvent,
+    SplitResponse,
+)
 
 __all__ = [
     "AlphaVantageCompanyFinancials",
@@ -16,6 +27,15 @@ __all__ = [
     "CashFlowReport",
     "CashFlowResponse",
     "CompanyOverview",
+    "DailyPrice",
+    "DailyTimeSeriesMetadata",
+    "DailyTimeSeriesResponse",
+    "DividendEvent",
+    "DividendResponse",
+    "GlobalQuote",
+    "GlobalQuoteResponse",
     "IncomeStatementReport",
     "IncomeStatementResponse",
+    "SplitEvent",
+    "SplitResponse",
 ]
