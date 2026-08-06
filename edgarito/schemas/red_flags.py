@@ -25,6 +25,7 @@ class RedFlag:
     current_value: Optional[float] = None
     threshold: Optional[float] = None
     period: Optional[str] = None
+    score_impact: float = 0.0
     
     def __str__(self) -> str:
         result = f"{self.severity.value} [{self.category}] {self.title}"
@@ -53,6 +54,7 @@ class RedFlagReport:
     growth_flags: List[RedFlag] = field(default_factory=list)
     valuation_flags: List[RedFlag] = field(default_factory=list)
     market_data: Optional[MarketData] = None
+    quality_score: float = 100.0
     data_availability_warnings: List[str] = field(default_factory=list)  # Track missing/insufficient data
     
     @property
@@ -89,7 +91,8 @@ class RedFlagReport:
         
         result += f"{'='*100}\n\n"
         result += f"Summary: {self.total_flags} total flags "
-        result += f"({self.critical_flags} critical, {self.warning_flags} warnings, {self.info_flags} info)\n\n"
+        result += f"({self.critical_flags} critical, {self.warning_flags} warnings, {self.info_flags} info)\n"
+        result += f"Quality Score: {self.quality_score:.1f}/100\n\n"
         
         # Display data availability warnings prominently if present
         if self.data_availability_warnings:

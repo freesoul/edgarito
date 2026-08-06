@@ -19,6 +19,7 @@ from .red_flags.cash_flow_analyzer import CashFlowAnalyzer
 from .red_flags.profitability_analyzer import ProfitabilityAnalyzer
 from .red_flags.growth_analyzer import GrowthAnalyzer
 from .red_flags.valuation_analyzer import ValuationAnalyzer
+from .red_flags.earnings_quality_analyzer import EarningsQualityAnalyzer
 
 
 
@@ -173,6 +174,18 @@ class RedFlagsService:
             market_data=self.market_data
         )
         
+        earnings_quality_analyzer = EarningsQualityAnalyzer(
+            facts=self.facts,
+            balance_sheet=self.balance_sheet,
+            income_statement=self.income_statement,
+            cash_flow=self.cash_flow,
+            thresholds=self.thresholds,
+            sector=self.sector,
+            sector_profile=self.sector_profile,
+            market_cap=self.market_cap,
+            market_data=self.market_data
+        )
+        
         # Run all analyses with appropriate granularity
         report.balance_sheet_flags = balance_sheet_analyzer.analyze(Granularity.QUARTERLY)
         report.cash_flow_flags = cash_flow_analyzer.analyze(Granularity.QUARTERLY)
@@ -180,18 +193,27 @@ class RedFlagsService:
         report.growth_flags = growth_analyzer.analyze(Granularity.ANNUAL)  # Long-term trends
         report.valuation_flags = valuation_analyzer.analyze(Granularity.QUARTERLY)
         
+        # Earnings Quality (using Quarterly data for recent trends)
+        report.profitability_flags.extend(earnings_quality_analyzer.analyze(Granularity.QUARTERLY))
+        
         # Check for data availability issues
         report.data_availability_warnings = self._check_data_availability()
         
-        # Count flags by severity
+        # Calculate Quality Score
+        quality_score = 100.0
         for flag in report.all_flags:
             report.total_flags += 1
             if flag.severity == RedFlagSeverity.CRITICAL:
                 report.critical_flags += 1
+                quality_score -= 15
             elif flag.severity == RedFlagSeverity.WARNING:
                 report.warning_flags += 1
-            else:
+                quality_score -= 7
+            elif flag.severity == RedFlagSeverity.INFO:
                 report.info_flags += 1
+                quality_score -= 2
+        
+        report.quality_score = max(0.0, quality_score)
         
         return report
     
@@ -203,11 +225,11 @@ class RedFlagsService:
         """
         warnings = []
         
-        # Check for US-GAAP data (IFRS companies won't have us-gaap facts)
+        # Check for US-GAAP data
         if not self.facts.facts or not self.facts.facts.us_gaap:
             warnings.append(
                 "No US-GAAP accounting data available. "
-                "Company may use IFRS or other accounting standards not supported by this analyzer."
+                "Company may use accounting standards not supported by this analyzer."
             )
             return warnings  # No point checking further if no US-GAAP data
         

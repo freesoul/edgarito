@@ -142,83 +142,13 @@ class BalanceSheetReader(BaseStatementReader):
         """
         Total liabilities.
         
-        For IFRS companies that don't report "Liabilities" directly, 
-        computes as EquityAndLiabilities - Equity.
-        
         Args:
             granularity: ANNUAL or QUARTERLY
         
         Returns:
             Time series of total liabilities
         """
-        try:
-            return self._get_concept("Liabilities", granularity, convert_fy_to_q4=False)
-        except ValueError as e:
-            # If Liabilities not found, try computing from IFRS balance sheet equation
-            if "not found" in str(e):
-                try:
-                    # Check if we're dealing with IFRS company
-                    if not self._data.facts.us_gaap and self._data.facts.ifrs_full:
-                        # IFRS: Total Liabilities = EquityAndLiabilities - Equity
-                        # Access IFRS concepts directly
-                        facts_dict = self._data.facts.ifrs_full
-                        
-                        if "EquityAndLiabilities" in facts_dict and "Equity" in facts_dict:
-                            # Get the data using the IFRS concept names directly
-                            from edgarito.services.financial.ifrs_mapping import get_gaap_concept
-                            
-                            # Temporarily get equity using the mapped concept
-                            equity = self._get_concept("StockholdersEquity", granularity, convert_fy_to_q4=False)
-                            
-                            # For EquityAndLiabilities, we need to access it directly since it's an IFRS concept
-                            # Use the parent _get_concept but with the IFRS name
-                            from edgarito.enums.edgar.core_filing_type import CoreFilingType
-                            from edgarito.schemas.edgar_responses.company_facts import Measurement
-                            from edgarito.schemas.reader.measurements import UnivariateMeasurements
-                            
-                            # Get EquityAndLiabilities measurements
-                            filing_types = [CoreFilingType.FILING_10K, CoreFilingType.FILING_20F] if granularity == Granularity.ANNUAL else [CoreFilingType.FILING_10K, CoreFilingType.FILING_10Q, CoreFilingType.FILING_20F]
-                            
-                            eur_data = getattr(facts_dict["EquityAndLiabilities"].units, 'EUR', None)
-                            if eur_data:
-                                eal_measurements = [Measurement(**m) if isinstance(m, dict) else m for m in eur_data]
-                                filtered_eal = []
-                                for filing_type in filing_types:
-                                    filtered = self._filter_measurements(eal_measurements, filing_type)
-                                    filtered_eal.extend(filtered)
-                                
-                                eal_univariate = UnivariateMeasurements.from_measurements(
-                                    concept="EquityAndLiabilities",
-                                    granularity=granularity,
-                                    measurements=filtered_eal
-                                )
-                                eal_univariate.sort()
-                                self._deduplicate_periods(eal_univariate)
-                                
-                                # Compute liabilities
-                                liabilities_values = []
-                                liabilities_periods = []
-                                
-                                equity_dict = {p: v for v, p in equity}
-                                
-                                for value, period in eal_univariate:
-                                    if period in equity_dict:
-                                        liabilities_value = value - equity_dict[period]
-                                        liabilities_values.append(liabilities_value)
-                                        liabilities_periods.append(period)
-                                
-                                result = UnivariateMeasurements(
-                                    concept="Liabilities (computed)",
-                                    granularity=granularity,
-                                    values=liabilities_values,
-                                    periods=liabilities_periods
-                                )
-                                result.sort()
-                                return result
-                except Exception as inner_e:
-                    # If that also fails, re-raise the original error
-                    raise e
-            raise e
+        return self._get_concept("Liabilities", granularity, convert_fy_to_q4=False)
     
     def get_current_liabilities(self, granularity: Granularity) -> UnivariateMeasurements:
         """

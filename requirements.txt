@@ -5,3 +5,5 @@ pydantic_settings==2.7.1
 py-xbrl==2.2.14
 PyYAML==6.0.2
 yfinance==0.2.66
+pytest
+pytest-asyncio

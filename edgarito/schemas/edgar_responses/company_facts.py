@@ -65,7 +65,6 @@ class Fact(BaseModel):
 class Facts(BaseModel):
     dei: Dict[str, Fact]
     us_gaap: Optional[Dict[str, Fact]] = Field(None, alias="us-gaap")
-    ifrs_full: Optional[Dict[str, Fact]] = Field(None, alias="ifrs-full")
 
 
 class CompanyFacts(BaseModel):

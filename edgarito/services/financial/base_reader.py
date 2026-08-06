@@ -386,9 +386,9 @@ class BaseStatementReader:
             elif period.fp == FiscalPeriod.Q3:
                 q2_key = (year, FiscalPeriod.Q2)
                 if q2_key in period_map:
-                    # Get Q2 value from converted_values (might have been converted already)
+                    # Get Q2 value from period_map (original value)
                     q2_idx = period_map[q2_key][0]
-                    q2_ytd_or_individual = converted_values[q2_idx]
+                    q2_ytd_or_individual = period_map[q2_key][1]
                     q3_ytd = univariate.values[i]
                     
                     # If Q2 was also YTD (180 days), use it as Q2_ytd
