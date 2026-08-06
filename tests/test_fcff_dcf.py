@@ -56,6 +56,28 @@ def test_fcff_dcf_discounts_forecast_terminal_value_and_equity_bridge():
     assert FcffDcfResult.model_validate_json(result.model_dump_json()) == result
 
 
+def test_fcff_dcf_adds_non_operating_investments_to_equity_value():
+    plain = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    bridge = _capital_bridge().model_copy(
+        update={
+            "non_operating_assets": Decimal("75"),
+            "non_operating_assets_source": "marketable securities",
+        }
+    )
+    adjusted = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+
+    assert adjusted.equity_value - plain.equity_value == Decimal("75")
+    assert adjusted.value_per_share - plain.value_per_share == Decimal("7.5")
+
+
 def test_mid_year_timing_changes_explicit_cash_flows_but_not_terminal_timing():
     service = FcffDcfService()
     end_period = service.value(
@@ -245,6 +267,25 @@ def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
     assert result.shares_source == "weighted_average_diluted_shares"
 
 
+def test_capital_bridge_accepts_reported_debt_when_short_term_line_is_absent():
+    financials = _financials_with_bridge()
+    financials.observations = [
+        observation
+        for observation in financials.observations
+        if observation.concept != FinancialConcept.SHORT_TERM_DEBT
+    ]
+
+    result = FcffDcfCapitalBridgeResolver().resolve(
+        financials,
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+    )
+
+    assert result.gross_debt == Decimal("90")
+    assert result.net_debt == Decimal("65")
+
+
 def test_capital_bridge_missing_data_can_be_supplied_explicitly():
     financials = NormalizedCompanyFinancials(
         provider="test",
@@ -346,7 +387,8 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
     assert "WACC: 8.00% (explicit valuation profile)" in output
     assert "FY2026E FCFF" in output
     assert "FY2027E FCFF" in output
-    assert "Value per share (USD):" in output
+    assert "VALUATION CONCLUSION" in output
+    assert "Final value per share (USD):" in output
     assert "Net debt source: gross debt - cash and equivalents" in output
 
 

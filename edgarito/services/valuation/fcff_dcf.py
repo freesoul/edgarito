@@ -45,6 +45,8 @@ class FcffDcfCapitalBridgeResolver:
             FinancialConcept.LONG_TERM_DEBT_CURRENT,
             FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
             FinancialConcept.CASH_AND_EQUIVALENTS,
+            FinancialConcept.SHORT_TERM_INVESTMENTS,
+            FinancialConcept.NONCURRENT_INVESTMENTS,
             FinancialConcept.SHARES_OUTSTANDING,
             FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
         }
@@ -65,6 +67,7 @@ class FcffDcfCapitalBridgeResolver:
         gross_debt: Decimal | None = None,
         cash_and_equivalents: Decimal | None = None,
         diluted_shares: Decimal | None = None,
+        non_operating_assets: Decimal | None = None,
     ) -> FcffDcfCapitalBridge:
         annual = [
             observation
@@ -158,6 +161,32 @@ class FcffDcfCapitalBridgeResolver:
         else:
             shares_source = "explicit profile or CLI override"
 
+        if non_operating_assets is None:
+            investment_observations = [
+                by_concept[concept]
+                for concept in (
+                    FinancialConcept.SHORT_TERM_INVESTMENTS,
+                    FinancialConcept.NONCURRENT_INVESTMENTS,
+                )
+                if concept in by_concept
+            ]
+            if any(item.unit != unit for item in investment_observations):
+                raise ValueError(
+                    "Non-operating investments and forecast must use one currency"
+                )
+            non_operating_assets = sum(
+                (item.value for item in investment_observations), Decimal(0)
+            )
+            non_operating_assets_source = (
+                " + ".join(item.source_concept for item in investment_observations)
+                if investment_observations
+                else "none reported"
+            )
+        else:
+            if non_operating_assets < 0:
+                raise ValueError("Non-operating assets override cannot be negative")
+            non_operating_assets_source = "explicit profile or CLI override"
+
         return FcffDcfCapitalBridge(
             fiscal_year=fiscal_year,
             period_end=period_end,
@@ -168,6 +197,8 @@ class FcffDcfCapitalBridgeResolver:
             shares_source=shares_source,
             gross_debt=gross_debt,
             cash_and_equivalents=cash_and_equivalents,
+            non_operating_assets=non_operating_assets,
+            non_operating_assets_source=non_operating_assets_source,
         )
 
     @staticmethod
@@ -309,7 +340,11 @@ class FcffDcfService:
             explicit_present_value.total_present_value
             + terminal_present_value.present_value
         )
-        equity_value = enterprise_value - capital_bridge.net_debt
+        equity_value = (
+            enterprise_value
+            - capital_bridge.net_debt
+            + capital_bridge.non_operating_assets
+        )
         value_per_share = equity_value / capital_bridge.diluted_shares
         terminal_percentage = (
             terminal_present_value.present_value / enterprise_value * Decimal(100)
@@ -423,9 +458,7 @@ class FcffDcfService:
         return period
 
     @classmethod
-    def _year_fraction(
-        cls, start: datetime.date, end: datetime.date
-    ) -> Decimal:
+    def _year_fraction(cls, start: datetime.date, end: datetime.date) -> Decimal:
         return Decimal((end - start).days) / cls._DAYS_PER_YEAR
 
     @classmethod
@@ -554,9 +587,7 @@ class FcffDcfService:
                 )
             )
 
-        total_cash_spent = sum(
-            (period.cash_spent for period in periods), Decimal(0)
-        )
+        total_cash_spent = sum((period.cash_spent for period in periods), Decimal(0))
         present_value_cash_spent = sum(
             (period.present_value_cash_spent for period in periods), Decimal(0)
         )

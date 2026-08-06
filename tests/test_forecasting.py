@@ -311,6 +311,17 @@ def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
     assert [item.revenue_growth for item in forecasts[0].observations] == [
         item.revenue_growth for item in forecasts[1].observations[:9]
     ]
+    terminal = forecasts[0].observations[-1]
+    terminal_net_reinvestment = (
+        terminal.capital_expenditures
+        - terminal.depreciation_and_amortization
+        + terminal.change_in_operating_working_capital
+    )
+    assert abs(terminal_net_reinvestment / terminal.nopat - Decimal("0.2")) < Decimal(
+        "1e-20"
+    )
+    assert plans[0].terminal_return_on_invested_capital == Decimal("15")
+    assert plans[0].terminal_reinvestment_rate == Decimal("20")
 
     bridge = FcffDcfCapitalBridge(
         fiscal_year=2024,

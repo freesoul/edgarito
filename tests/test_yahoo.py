@@ -61,6 +61,8 @@ class _FakeTicker:
                 "LongTermDebt": 300,
                 "StockholdersEquity": 800,
                 "CashAndCashEquivalents": 200,
+                "OtherShortTermInvestments": 80,
+                "InvestmentinFinancialAssets": 30,
                 "Goodwill": 90,
                 "OtherIntangibleAssets": 70,
                 "OrdinarySharesNumber": 98,
@@ -90,6 +92,7 @@ class _FakeTicker:
             "sector": "Technology",
             "industry": "Software Infrastructure",
             "country": "Germany",
+            "beta": 1.15,
         }
 
     def history(self, **kwargs):
@@ -135,6 +138,7 @@ def test_yahoo_financial_client_caches_serializable_statement_snapshots(tmp_path
     assert first.currency == "EUR"
     assert first.sector == "Technology"
     assert first.industry == "Software Infrastructure"
+    assert first.beta == Decimal("1.15")
     assert first.annual_income_statements[0].values["TotalRevenue"] == Decimal("1000.0")
     assert len(factory.instances) == 1
     assert (tmp_path / "providers/yahoo/SAP.DE/financials.json").is_file()
@@ -162,6 +166,8 @@ def test_yahoo_normalizer_maps_extended_financial_concepts_and_periods(tmp_path)
     assert annual[FinancialConcept.REVENUE].source_concept == "TotalRevenue"
     assert annual[FinancialConcept.CAPITAL_EXPENDITURES].value == Decimal("60.0")
     assert annual[FinancialConcept.DIVIDENDS_PAID].value == Decimal("20.0")
+    assert annual[FinancialConcept.SHORT_TERM_INVESTMENTS].value == Decimal("80.0")
+    assert annual[FinancialConcept.NONCURRENT_INVESTMENTS].value == Decimal("30.0")
     assert annual[FinancialConcept.SHARES_OUTSTANDING].unit == "shares"
     assert quarterly[FinancialConcept.REVENUE].fiscal_period == FiscalPeriod.Q1
     assert quarterly[FinancialConcept.REVENUE].fiscal_year == 2025

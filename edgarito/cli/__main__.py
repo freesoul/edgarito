@@ -351,6 +351,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override normalized diluted shares",
     )
     valuation.add_argument(
+        "--non-operating-assets",
+        type=_decimal_value,
+        metavar="AMOUNT",
+        help="Override short-term and other non-operating investments",
+    )
+    valuation.add_argument(
         "--buyback-cash",
         type=_decimal_value,
         action="append",
@@ -626,7 +632,7 @@ async def _run_metrics(args: argparse.Namespace) -> int:
 
 
 async def _run_forecast(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load(args.profile)
+    profile = ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
     forecast_method = (
         ForecastMethod(args.forecast_method)
         if args.forecast_method is not None
@@ -686,7 +692,7 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 
 
 async def _run_valuation(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load(args.profile)
+    profile = ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
     forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
     terminal_configuration = profile.valuation.terminal_value
     terminal_method = (
@@ -736,6 +742,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             args.shares
             if args.shares is not None
             else bridge_configuration.diluted_shares
+        ),
+        non_operating_assets=(
+            args.non_operating_assets
+            if args.non_operating_assets is not None
+            else bridge_configuration.non_operating_assets
         ),
     )
     discount_configuration = profile.valuation.discount_rates
@@ -858,8 +869,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             source=(
                 "CLI override"
                 if args.buyback_cash is not None
-                else repurchase_configuration.source
-                or "valuation profile"
+                else repurchase_configuration.source or "valuation profile"
             ),
         )
     elif not args.no_buybacks and any(
@@ -883,7 +893,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         valuation_date,
         share_repurchase_parameters,
     )
-    print(FcffDcfConsolePresenter().render(result))
+    print(FcffDcfConsolePresenter().render(result, profile_name=profile.name))
     return 0
 
 
@@ -1236,6 +1246,7 @@ async def _retrieve_automatic_assumption_inputs(
         "inflation_series": None,
         "country_snapshot": None,
         "industry_snapshot": None,
+        "company_beta": None,
     }
     if not (needs_wacc or needs_terminal):
         return inputs
@@ -1265,7 +1276,11 @@ async def _retrieve_automatic_assumption_inputs(
                 classification = CompanyClassificationNormalizer().normalize_yahoo(
                     source
                 )
-                if classification.industry is None or classification.country is None:
+                if (
+                    classification.industry is None
+                    or classification.country is None
+                    or source.beta is None
+                ):
                     source = await yahoo.get_company_financials(
                         symbol, use_cache=False, make_cache=True
                     )
@@ -1278,6 +1293,7 @@ async def _retrieve_automatic_assumption_inputs(
                     industry=industry_override,
                 )
             inputs["classification"] = classification
+            inputs["company_beta"] = source.beta
             market_data = YahooMarketNormalizer().normalize(history)
         except (RuntimeError, ValueError) as exc:
             raise ValueError(

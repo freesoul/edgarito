@@ -1,6 +1,14 @@
-¡
 
 
+
+check why RACE differs from analyst forecasts
+uv run edgarito valuation   --ticker RACE   --market eu   --profile configs/valuation/race.json
+
+and whether this is reasonable and why
+uv run edgarito valuation   --ticker RACE   --market eu   --profile configs/valuation/race.json   --terminal-method exit_multiple
+
+
+and whether the fixes applied for this to pass are reasonable
 
  uv run edgarito valuation --ticker MSFT
 usage: edgarito [-h]

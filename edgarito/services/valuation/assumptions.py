@@ -79,6 +79,7 @@ class ValuationAssumptionResolver:
         inflation_series: Optional[ReferenceMarketSeries] = None,
         country_snapshot: Optional[CountryRiskPremiumSnapshot] = None,
         industry_snapshot: Optional[IndustryBetaSnapshot] = None,
+        company_beta: Optional[Decimal] = None,
     ) -> ResolvedDcfAssumptions:
         selected_on = max(
             valuation_date,
@@ -131,18 +132,15 @@ class ValuationAssumptionResolver:
                 risk_free_series=risk_free_series,
                 country_snapshot=country_snapshot,
                 industry_snapshot=industry_snapshot,
+                company_beta=company_beta,
             )
             assumptions.extend(derived)
-            providers = sorted(
-                {
-                    item.provenance.provider
-                    for item in derived
-                    if item.provenance.provider
-                }
-            )
+            providers = {
+                item.provenance.provider for item in derived if item.provenance.provider
+            }
             if market_data is not None:
-                providers.append(market_data.provider)
-            wacc_source = "automatic: " + ", ".join(providers)
+                providers.add(market_data.provider)
+            wacc_source = "automatic: " + ", ".join(sorted(providers))
 
         perpetual_growth = None
         perpetual_growth_source = None
@@ -211,6 +209,7 @@ class ValuationAssumptionResolver:
         risk_free_series,
         country_snapshot,
         industry_snapshot,
+        company_beta,
     ) -> tuple[Decimal, list[ValuationAssumption]]:
         company_id = financials.company_id
         country_name = classification.country if classification else None
@@ -304,6 +303,24 @@ class ValuationAssumptionResolver:
                 provider="valuation-profile",
                 unit=AssumptionUnit.MULTIPLE,
             )
+        elif company_beta is not None:
+            if not company_beta.is_finite() or company_beta <= 0:
+                raise ValueError("Yahoo company beta must be finite and positive")
+            beta = company_beta
+            beta_assumption = ValuationAssumption(
+                kind=ValuationAssumptionKind.LEVERED_BETA,
+                value=beta,
+                unit=AssumptionUnit.MULTIPLE,
+                selected_on=selected_on,
+                currency=currency,
+                company_id=company_id,
+                provenance=AssumptionProvenance(
+                    origin=AssumptionOrigin.MARKET_OBSERVATION,
+                    provider="yahoo",
+                    observed_on=selected_on,
+                    methodology="Yahoo company-level levered beta",
+                ),
+            )
         else:
             unlevered_beta = configuration.unlevered_beta
             if unlevered_beta is not None:
@@ -371,9 +388,16 @@ class ValuationAssumptionResolver:
                 country_row.equity_risk_premium - country_row.country_risk_premium
             )
             if country_premium is None:
-                country_premium, country_premium_methodology = (
-                    self._market_country_premium(country_row, equity_premium)
-                )
+                if self._is_mature_market_base(country_name):
+                    country_premium = Decimal(0)
+                    country_premium_methodology = (
+                        "No incremental country premium for the mature-market "
+                        "base used to estimate ERP"
+                    )
+                else:
+                    country_premium, country_premium_methodology = (
+                        self._market_country_premium(country_row, equity_premium)
+                    )
             erp_assumption = self._reference_assumption(
                 ValuationAssumptionKind.EQUITY_RISK_PREMIUM,
                 equity_premium,
@@ -543,6 +567,11 @@ class ValuationAssumptionResolver:
                 "Sovereign-CDS total ERP minus mature-market ERP",
             )
         return country.country_risk_premium, "Rating-based country equity risk premium"
+
+    @staticmethod
+    def _is_mature_market_base(country_name: str | None) -> bool:
+        normalized = re.sub(r"[^a-z0-9]", "", (country_name or "").casefold())
+        return normalized in {"unitedstates", "unitedstatesofamerica", "usa", "us"}
 
     def _derive_terminal_growth(
         self,

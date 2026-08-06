@@ -300,6 +300,10 @@ class AdaptiveMultistagePlan(BaseModel):
     max_annual_growth_fade: Decimal = Field(gt=0)
     extended_to_stable: bool = False
     explicit_growth_prefix_years: int = Field(default=0, ge=0, le=30)
+    terminal_return_on_invested_capital: Optional[Decimal] = None
+    terminal_reinvestment_rate: Optional[Decimal] = None
+    terminal_capex_to_revenue: Optional[Decimal] = None
+    depreciable_asset_life_years: Optional[int] = None
 
     @model_validator(mode="after")
     def validate_stages(self) -> "AdaptiveMultistagePlan":

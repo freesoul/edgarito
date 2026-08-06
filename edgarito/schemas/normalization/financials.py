@@ -44,6 +44,8 @@ class FinancialConcept(str, Enum):
     LONG_TERM_DEBT_NONCURRENT = "long_term_debt_noncurrent"
     STOCKHOLDERS_EQUITY = "stockholders_equity"
     CASH_AND_EQUIVALENTS = "cash_and_equivalents"
+    SHORT_TERM_INVESTMENTS = "short_term_investments"
+    NONCURRENT_INVESTMENTS = "noncurrent_investments"
     GOODWILL = "goodwill"
     INTANGIBLE_ASSETS_NET = "intangible_assets_net"
     OPERATING_CASH_FLOW = "operating_cash_flow"
@@ -88,6 +90,8 @@ CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.LONG_TERM_DEBT_NONCURRENT: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.STOCKHOLDERS_EQUITY: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.CASH_AND_EQUIVALENTS: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.SHORT_TERM_INVESTMENTS: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.NONCURRENT_INVESTMENTS: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.GOODWILL: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.INTANGIBLE_ASSETS_NET: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.OPERATING_CASH_FLOW: FinancialStatement.CASH_FLOW,

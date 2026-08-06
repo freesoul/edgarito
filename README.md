@@ -255,9 +255,10 @@ The default WACC and perpetual growth are `null`: for `valuation`, that means
 "resolve from provider and company data." A CLI or profile value always takes
 precedence over an automatically resolved value.
 
-All profile-enabled commands use the root default automatically. Supply another
-profile with `--profile`; explicitly supplied CLI options take precedence over
-the selected profile:
+Profile-enabled forecast and valuation commands first look for a bundled
+lowercase ticker profile (for example, `msft.json`) and otherwise use the root
+default. Supply another profile with `--profile`; explicitly supplied CLI
+options take precedence over the selected profile:
 
 ```bash
 uv run edgarito forecast --ticker AAPL --profile configs/valuation/growth.json
@@ -276,6 +277,15 @@ as the closest available luxury beta proxy:
 ```bash
 uv run edgarito valuation --ticker RACE --market eu \
   --profile configs/valuation/race.json
+```
+
+The bundled Microsoft profile is selected automatically for `MSFT`. It models
+the current AI infrastructure build-out as a temporary reinvestment phase,
+rolls depreciation forward using a six-year asset life, and converges to a 40%
+terminal ROIC:
+
+```bash
+uv run edgarito valuation --ticker MSFT
 ```
 
 That command retains a conventional perpetuity-growth terminal value. The same
@@ -467,7 +477,7 @@ terminal value, then bridges enterprise value to diluted per-share equity value:
 
 ```text
 enterprise value = PV(explicit FCFF) + PV(terminal value)
-equity value     = enterprise value - net debt
+equity value     = enterprise value - net debt + non-operating investments
 value per share  = equity value / diluted shares
 ```
 
@@ -488,6 +498,12 @@ stability has been reached, requesting more years only moves stable cash flows
 between the explicit and terminal portions, so value remains effectively
 unchanged.
 
+The adaptive forecast also converts stable growth and terminal ROIC into a
+sustainable reinvestment rate (`growth / ROIC`). Capex fades toward the amount
+required to fund that reinvestment after D&A and working-capital changes. A
+profile may additionally set `depreciable_asset_life_years` to replace a static
+D&A/revenue ratio with an approximate asset roll-forward.
+
 Use `--projection-method constant` to retain the previous constant-driver
 projection. Multistage behavior can also be tuned or disabled in a profile:
 
@@ -500,24 +516,30 @@ projection. Multistage behavior can also be tuned or disabled in a profile:
       "minimum_transition_years": 3,
       "maximum_transition_years": 10,
       "maximum_high_growth_years": 3,
-      "extend_to_stable": true
+      "extend_to_stable": true,
+      "fade_reinvestment_to_terminal": true,
+      "terminal_return_on_invested_capital": "15",
+      "depreciable_asset_life_years": null
     }
   }
 }
 ```
 
 An explicit multi-year revenue-growth path is preserved as the first stage and
-the adaptive fade begins after its final value. Other explicit driver paths are
-preserved and extended using their final supplied values.
+the adaptive fade begins after its final value. Explicit capex guidance is also
+preserved before capex converges to its sustainable terminal ratio.
 
 For EUR companies, the risk-free rate is the ECB 10-year AAA euro-area yield and
 terminal growth uses the trailing ECB HICP distribution. For USD companies, the
 risk-free rate is the U.S. Treasury 10-year yield; terminal growth uses FRED
 inflation when `FRED_API_KEY` is configured and otherwise a conservative
 Treasury-yield-based proxy. Damodaran supplies versioned country-risk/tax and
-industry-beta references. Yahoo supplies the latest price, classification, and
-market capitalization; reported tax, interest, debt, and shares complete the
-company-specific calculation.
+industry-beta references. Yahoo supplies the latest price, classification,
+market capitalization, and a company beta when available; the company beta
+takes precedence over a generic industry beta. Reported tax, interest, debt,
+cash, marketable investments, and shares complete the company-specific
+calculation. The mature-market ERP is not supplemented by a second U.S. country
+premium.
 
 For dual listings and ADRs, Yahoo's quote currency can differ from the financial
 statement currency. Before calculating market capitalization, valuation converts

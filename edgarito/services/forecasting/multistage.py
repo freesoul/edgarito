@@ -55,6 +55,15 @@ class AdaptiveMultistageFcffForecastService:
                 plan,
             )
 
+        if configuration.fade_reinvestment_to_terminal:
+            values, plan = self._apply_sustainable_reinvestment(
+                financials,
+                values,
+                requested_parameters,
+                plan,
+                configuration,
+            )
+
         parameters = FcffForecastParameters.model_validate(values)
         forecast = self._base_service.forecast(financials, parameters)
         forecast.method = "adaptive_multistage_fcff"
@@ -65,7 +74,118 @@ class AdaptiveMultistageFcffForecastService:
             forecast.assumption_sources[FcffForecastDriver.TAX_RATE] = (
                 ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
             )
+        if configuration.fade_reinvestment_to_terminal:
+            forecast.assumption_sources[FcffForecastDriver.CAPEX_TO_REVENUE] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
+            )
+        if (
+            configuration.depreciable_asset_life_years is not None
+            and requested_parameters.depreciation_to_revenue is None
+        ):
+            forecast.assumption_sources[FcffForecastDriver.DEPRECIATION_TO_REVENUE] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
+            )
         return forecast, plan
+
+    def _apply_sustainable_reinvestment(
+        self,
+        financials,
+        values,
+        requested_parameters,
+        plan,
+        configuration,
+    ):
+        terminal_roic = configuration.terminal_return_on_invested_capital
+        if terminal_roic <= plan.terminal_growth_rate:
+            raise ValueError(
+                "Terminal ROIC must exceed stable growth for a sustainable "
+                "reinvestment forecast"
+            )
+        reinvestment_rate = plan.terminal_growth_rate / terminal_roic
+        life = configuration.depreciable_asset_life_years
+
+        # Iterate because the terminal capex target depends on D&A, while an
+        # asset-life roll-forward makes D&A depend on prior capex.
+        target_capex_ratio = None
+        for _ in range(3):
+            if (
+                life is not None
+                and requested_parameters.depreciation_to_revenue is None
+            ):
+                provisional = FcffForecastParameters.model_validate(values)
+                seed = self._base_service.forecast(financials, provisional)
+                values["depreciation_to_revenue"] = self._depreciation_rollforward(
+                    seed, life
+                )
+            provisional = FcffForecastParameters.model_validate(values)
+            forecast = self._base_service.forecast(financials, provisional)
+            final = forecast.observations[-1]
+            required_net_reinvestment = final.nopat * reinvestment_rate
+            target_capex = (
+                final.depreciation_and_amortization
+                + required_net_reinvestment
+                - final.change_in_operating_working_capital
+            )
+            target_capex_ratio = max(
+                Decimal(0), target_capex / final.revenue * Decimal(100)
+            )
+            values["capex_to_revenue"] = self._fade_driver_path(
+                requested_parameters.capex_to_revenue,
+                forecast.observations[0].capex_to_revenue,
+                target_capex_ratio,
+                plan,
+            )
+
+        updated_plan = plan.model_copy(
+            update={
+                "terminal_return_on_invested_capital": terminal_roic,
+                "terminal_reinvestment_rate": reinvestment_rate * Decimal(100),
+                "terminal_capex_to_revenue": target_capex_ratio,
+                "depreciable_asset_life_years": life,
+            }
+        )
+        return values, updated_plan
+
+    @staticmethod
+    def _fade_driver_path(explicit, initial, target, plan):
+        years = plan.effective_years
+        convergence_year = years - plan.stable_years
+        if explicit is not None and len(explicit) > 1:
+            prefix = list(explicit[:convergence_year])
+        else:
+            held_years = max(
+                1,
+                plan.explicit_growth_prefix_years + plan.high_growth_years,
+            )
+            prefix = [explicit[0] if explicit is not None else initial] * held_years
+        remaining = convergence_year - len(prefix)
+        if remaining <= 0:
+            prefix = prefix[:convergence_year]
+            if prefix:
+                prefix[-1] = target
+            return tuple([*prefix, *([target] * plan.stable_years)])
+        start = prefix[-1]
+        prefix.extend(
+            AdaptiveMultistageFcffForecastService._linear_transition(
+                start, target, remaining
+            )
+        )
+        prefix.extend([target] * plan.stable_years)
+        return tuple(prefix)
+
+    @staticmethod
+    def _depreciation_rollforward(forecast, life_years):
+        life = Decimal(life_years)
+        depreciable_assets = forecast.base_depreciation_and_amortization * life
+        ratios = []
+        for observation in forecast.observations:
+            depreciation = depreciable_assets / life
+            ratios.append(depreciation / observation.revenue * Decimal(100))
+            depreciable_assets = max(
+                Decimal(0),
+                depreciable_assets - depreciation + observation.capital_expenditures,
+            )
+        return tuple(ratios)
 
     def _growth_path(
         self,

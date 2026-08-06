@@ -188,6 +188,19 @@ CONCEPT_DEFINITIONS = (
         instant=True,
     ),
     ConceptDefinition(
+        FinancialConcept.SHORT_TERM_INVESTMENTS,
+        ("ShortTermInvestments", "MarketableSecuritiesCurrent"),
+        instant=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.NONCURRENT_INVESTMENTS,
+        (
+            "LongTermInvestments",
+            "EquitySecuritiesWithoutReadilyDeterminableFairValueAmount",
+        ),
+        instant=True,
+    ),
+    ConceptDefinition(
         FinancialConcept.GOODWILL,
         ("Goodwill",),
         instant=True,

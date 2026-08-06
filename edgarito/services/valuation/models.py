@@ -610,15 +610,25 @@ class FcffDcfCapitalBridge(BaseModel):
     shares_source: str
     gross_debt: Optional[Decimal] = None
     cash_and_equivalents: Optional[Decimal] = None
+    non_operating_assets: Decimal = Decimal(0)
+    non_operating_assets_source: str = "none reported"
 
-    @field_validator("net_debt", "diluted_shares", "gross_debt", "cash_and_equivalents")
+    @field_validator(
+        "net_debt",
+        "diluted_shares",
+        "gross_debt",
+        "cash_and_equivalents",
+        "non_operating_assets",
+    )
     @classmethod
     def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and not value.is_finite():
             raise ValueError("Capital-bridge values must be finite")
         return value
 
-    @field_validator("unit", "net_debt_source", "shares_source")
+    @field_validator(
+        "unit", "net_debt_source", "shares_source", "non_operating_assets_source"
+    )
     @classmethod
     def normalize_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -628,6 +638,8 @@ class FcffDcfCapitalBridge(BaseModel):
 
     @model_validator(mode="after")
     def validate_debt_bridge(self) -> "FcffDcfCapitalBridge":
+        if self.non_operating_assets < 0:
+            raise ValueError("Non-operating assets cannot be negative")
         components = (self.gross_debt, self.cash_and_equivalents)
         if (components[0] is None) != (components[1] is None):
             raise ValueError("Gross debt and cash must be provided together")
@@ -705,22 +717,18 @@ class ShareRepurchaseParameters(BaseModel):
 
     @field_validator("annual_cash_amounts")
     @classmethod
-    def validate_cash_amounts(
-        cls, values: tuple[Decimal, ...]
-    ) -> tuple[Decimal, ...]:
+    def validate_cash_amounts(cls, values: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if not values:
             raise ValueError("Share repurchases require at least one cash amount")
         if any(not value.is_finite() or value <= 0 for value in values):
-            raise ValueError("Share-repurchase cash amounts must be finite and positive")
+            raise ValueError(
+                "Share-repurchase cash amounts must be finite and positive"
+            )
         return values
 
-    @field_validator(
-        "initial_purchase_price", "price_growth_rate", "discount_rate"
-    )
+    @field_validator("initial_purchase_price", "price_growth_rate", "discount_rate")
     @classmethod
-    def validate_optional_number(
-        cls, value: Optional[Decimal]
-    ) -> Optional[Decimal]:
+    def validate_optional_number(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and not value.is_finite():
             raise ValueError("Share-repurchase assumptions must be finite")
         return value
@@ -815,9 +823,7 @@ class ShareRepurchaseResult(BaseModel):
             raise ValueError("Share-repurchase result values must be finite")
         return value
 
-    @field_validator(
-        "source", "discount_rate_source", "purchase_price_source"
-    )
+    @field_validator("source", "discount_rate_source", "purchase_price_source")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -903,10 +909,15 @@ class FcffDcfResult(BaseModel):
         )
         if not _decimal_close(self.enterprise_value, expected_enterprise):
             raise ValueError("Enterprise value does not match discounted cash flows")
-        expected_equity = self.enterprise_value - self.capital_bridge.net_debt
+        expected_equity = (
+            self.enterprise_value
+            - self.capital_bridge.net_debt
+            + self.capital_bridge.non_operating_assets
+        )
         if not _decimal_close(self.equity_value, expected_equity):
             raise ValueError(
-                "Equity value does not match enterprise value minus net debt"
+                "Equity value does not match enterprise value minus net debt plus "
+                "non-operating assets"
             )
         expected_per_share = self.equity_value / self.capital_bridge.diluted_shares
         if not _decimal_close(self.value_per_share, expected_per_share):

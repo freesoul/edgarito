@@ -229,6 +229,33 @@ def test_valuation_metrics_require_complete_inputs_and_consistent_units():
     assert second_year_metrics == set()
 
 
+def test_debt_metrics_sum_reported_components_when_one_line_is_absent():
+    financials = _financials()
+    financials.observations = [
+        observation
+        for observation in financials.observations
+        if not (
+            observation.fiscal_year == 2024
+            and observation.concept == FinancialConcept.SHORT_TERM_DEBT
+        )
+    ]
+
+    metrics = FinancialMetricsService().calculate(
+        financials,
+        metrics={FinancialMetric.GROSS_DEBT, FinancialMetric.NET_DEBT},
+    )
+
+    assert _metric_value(metrics, FinancialMetric.GROSS_DEBT, 2024) == Decimal("46")
+    assert _metric_value(metrics, FinancialMetric.NET_DEBT, 2024) == Decimal("24")
+    gross_debt = next(
+        observation
+        for observation in metrics.observations
+        if observation.metric == FinancialMetric.GROSS_DEBT
+        and observation.fiscal_year == 2024
+    )
+    assert FinancialConcept.SHORT_TERM_DEBT not in gross_debt.input_concepts
+
+
 def test_fcff_retains_formula_and_atomic_input_concepts():
     metrics = FinancialMetricsService().calculate(
         _financials(), metrics={FinancialMetric.FCFF}

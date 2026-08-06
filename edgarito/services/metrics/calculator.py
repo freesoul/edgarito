@@ -494,6 +494,16 @@ class FinancialMetricsService:
             )
 
         gross_debt = self._gross_debt(current)
+        reported_debt_concepts = tuple(
+            sorted(
+                (
+                    concept
+                    for concept in DEBT_CONCEPTS
+                    if current.get(concept) is not None
+                ),
+                key=lambda concept: concept.value,
+            )
+        )
         if FinancialMetric.GROSS_DEBT in selected_metrics and gross_debt is not None:
             self._add_amount(
                 results,
@@ -502,8 +512,8 @@ class FinancialMetricsService:
                 provider,
                 granularity,
                 period,
-                "short-term debt + current long-term debt + noncurrent long-term debt",
-                tuple(sorted(DEBT_CONCEPTS, key=lambda c: c.value)),
+                "sum of reported short-term and long-term debt components",
+                reported_debt_concepts,
             )
 
         net_debt = self._combine_amounts(((gross_debt, 1), (cash, -1)))
@@ -517,7 +527,7 @@ class FinancialMetricsService:
                 period,
                 "gross debt - cash and equivalents",
                 (
-                    *tuple(sorted(DEBT_CONCEPTS, key=lambda c: c.value)),
+                    *reported_debt_concepts,
                     FinancialConcept.CASH_AND_EQUIVALENTS,
                 ),
             )
@@ -674,12 +684,20 @@ class FinancialMetricsService:
     def _gross_debt(
         observations: dict[FinancialConcept, FinancialObservation],
     ) -> Optional[FinancialObservation]:
-        return FinancialMetricsService._combine_amounts(
-            (
-                (observations.get(FinancialConcept.SHORT_TERM_DEBT), 1),
-                (observations.get(FinancialConcept.LONG_TERM_DEBT_CURRENT), 1),
-                (observations.get(FinancialConcept.LONG_TERM_DEBT_NONCURRENT), 1),
-            )
+        reported = [
+            observation
+            for concept in DEBT_CONCEPTS
+            if (observation := observations.get(concept)) is not None
+        ]
+        if not reported or len({observation.unit for observation in reported}) != 1:
+            return None
+        return reported[0].model_copy(
+            update={
+                "value": sum(
+                    (observation.value for observation in reported), Decimal(0)
+                ),
+                "period_end": max(observation.period_end for observation in reported),
+            }
         )
 
     @staticmethod

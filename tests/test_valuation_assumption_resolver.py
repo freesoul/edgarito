@@ -101,9 +101,9 @@ def test_luxury_goods_uses_damodaran_apparel_beta_proxy():
     snapshot = _industry_snapshot().model_copy(
         update={
             "industries": (
-                _industry_snapshot().industries[0].model_copy(
-                    update={"industry": "Apparel"}
-                ),
+                _industry_snapshot()
+                .industries[0]
+                .model_copy(update={"industry": "Apparel"}),
             )
         }
     )
@@ -130,13 +130,77 @@ def test_luxury_goods_uses_damodaran_apparel_beta_proxy():
     assert beta.industry == "Apparel"
 
 
+def test_company_beta_precedes_industry_beta():
+    result = ValuationAssumptionResolver().resolve(
+        financials=_financials(),
+        capital_bridge=_bridge(),
+        discount_configuration=DiscountRateConfiguration(),
+        terminal_configuration=TerminalValueConfiguration(perpetual_growth_rate="2"),
+        terminal_is_perpetuity=True,
+        valuation_date=TODAY,
+        classification=_classification(),
+        market_data=_market_data(),
+        risk_free_series=_reference_series(
+            "ECB 10-year AAA yield", ReferenceSeriesKind.GOVERNMENT_YIELD, ["3"]
+        ),
+        country_snapshot=_country_snapshot(),
+        industry_snapshot=_industry_snapshot(),
+        company_beta=Decimal("1.1"),
+    )
+
+    beta = result.assumption_set.find(ValuationAssumptionKind.LEVERED_BETA)
+    assert beta is not None
+    assert beta.value == Decimal("1.1")
+    assert beta.provenance.provider == "yahoo"
+    assert result.assumption_set.find(ValuationAssumptionKind.UNLEVERED_BETA) is None
+
+
+def test_us_mature_market_base_has_no_incremental_country_premium():
+    us_country = (
+        _country_snapshot()
+        .countries[0]
+        .model_copy(
+            update={
+                "country": "United States",
+                "country_risk_premium": Decimal("0.23"),
+                "equity_risk_premium": Decimal("4.46"),
+                "cds_equity_risk_premium": Decimal("4.69"),
+            }
+        )
+    )
+    result = ValuationAssumptionResolver().resolve(
+        financials=_financials(),
+        capital_bridge=_bridge(),
+        discount_configuration=DiscountRateConfiguration(),
+        terminal_configuration=TerminalValueConfiguration(perpetual_growth_rate="2"),
+        terminal_is_perpetuity=True,
+        valuation_date=TODAY,
+        classification=_classification().model_copy(
+            update={"country": "United States"}
+        ),
+        market_data=_market_data(),
+        risk_free_series=_reference_series(
+            "Treasury 10-year", ReferenceSeriesKind.GOVERNMENT_YIELD, ["4"]
+        ),
+        country_snapshot=_country_snapshot().model_copy(
+            update={"countries": (us_country,)}
+        ),
+        industry_snapshot=_industry_snapshot(),
+    )
+
+    premium = result.assumption_set.find(ValuationAssumptionKind.COUNTRY_RISK_PREMIUM)
+    assert premium is not None
+    assert premium.value == Decimal(0)
+    assert "mature-market base" in (premium.provenance.methodology or "")
+
+
 def test_country_premium_prefers_sovereign_cds_total_erp():
     country_snapshot = _country_snapshot().model_copy(
         update={
             "countries": (
-                _country_snapshot().countries[0].model_copy(
-                    update={"cds_equity_risk_premium": Decimal("4.94")}
-                ),
+                _country_snapshot()
+                .countries[0]
+                .model_copy(update={"cds_equity_risk_premium": Decimal("4.94")}),
             )
         }
     )
@@ -156,9 +220,7 @@ def test_country_premium_prefers_sovereign_cds_total_erp():
         industry_snapshot=_industry_snapshot(),
     )
 
-    premium = result.assumption_set.find(
-        ValuationAssumptionKind.COUNTRY_RISK_PREMIUM
-    )
+    premium = result.assumption_set.find(ValuationAssumptionKind.COUNTRY_RISK_PREMIUM)
     assert premium is not None
     assert premium.value == Decimal("0.71")
     assert premium.provenance.methodology == (

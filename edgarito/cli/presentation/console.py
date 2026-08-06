@@ -573,12 +573,13 @@ class ForecastConsolePresenter:
 
 
 class FcffDcfConsolePresenter:
-    def render(self, result: FcffDcfResult) -> str:
+    def render(self, result: FcffDcfResult, *, profile_name: str | None = None) -> str:
         identifier = result.ticker or result.company_id
         values = [
             result.enterprise_value,
             result.equity_value,
             result.capital_bridge.net_debt,
+            result.capital_bridge.non_operating_assets,
             result.terminal_value.terminal_value,
             *(
                 item.amount
@@ -604,6 +605,7 @@ class FcffDcfConsolePresenter:
             f"{identifier} - {result.company_name}",
             f"Provider: {result.provider.upper()} | Valuation date: "
             f"{result.valuation_date.isoformat()}",
+            f"Valuation profile: {profile_name or 'unspecified'}",
             f"Model: FCFF DCF | Timing: {timing}",
             f"WACC: {result.parameters.wacc:,.2f}% ({result.parameters.wacc_source})",
             f"Terminal method: {terminal_method}",
@@ -629,6 +631,23 @@ class FcffDcfConsolePresenter:
                 f"{' + '.join(stages)} years{extension} | stable growth anchor "
                 f"{plan.terminal_growth_rate:,.2f}%"
             )
+            if plan.terminal_return_on_invested_capital is not None:
+                details = (
+                    "Stable reinvestment: "
+                    f"{plan.terminal_reinvestment_rate:,.2f}% of NOPAT at "
+                    f"{plan.terminal_return_on_invested_capital:,.2f}% terminal ROIC"
+                )
+                if plan.terminal_capex_to_revenue is not None:
+                    details += (
+                        f" | terminal capex/revenue "
+                        f"{plan.terminal_capex_to_revenue:,.2f}%"
+                    )
+                if plan.depreciable_asset_life_years is not None:
+                    details += (
+                        f" | {plan.depreciable_asset_life_years}-year depreciable "
+                        "asset life"
+                    )
+                lines.append(details)
         if result.parameters.perpetual_growth_rate is not None:
             source = result.parameters.perpetual_growth_source or "explicit"
             lines.append(
@@ -679,6 +698,8 @@ class FcffDcfConsolePresenter:
                 f"{result.enterprise_value / scale:,.1f}",
                 f"Less net debt ({amount_unit}): "
                 f"{result.capital_bridge.net_debt / scale:,.1f}",
+                f"Add non-operating investments ({amount_unit}): "
+                f"{result.capital_bridge.non_operating_assets / scale:,.1f}",
                 f"Equity value ({amount_unit}): {result.equity_value / scale:,.1f}",
                 f"Diluted shares ({share_suffix or 'units'}): "
                 f"{result.capital_bridge.diluted_shares / share_scale:,.1f}",
@@ -719,8 +740,7 @@ class FcffDcfConsolePresenter:
                     f"{repurchases.accretion_percentage:+,.2f}%",
                     f"Repurchase discount rate: {repurchases.discount_rate:,.2f}% "
                     f"({repurchases.discount_rate_source})",
-                    f"Repurchase-price growth: "
-                    f"{repurchases.price_growth_rate:,.2f}%",
+                    f"Repurchase-price growth: {repurchases.price_growth_rate:,.2f}%",
                     f"Purchase-price basis: {repurchases.purchase_price_source}",
                     f"Buyback source: {repurchases.source}",
                 ]
@@ -734,6 +754,8 @@ class FcffDcfConsolePresenter:
             [
                 "",
                 f"Net debt source: {result.capital_bridge.net_debt_source}",
+                "Non-operating investments source: "
+                f"{result.capital_bridge.non_operating_assets_source}",
                 f"Shares source: {result.capital_bridge.shares_source}",
             ]
         )
@@ -752,8 +774,7 @@ class FcffDcfConsolePresenter:
             )
         else:
             lines.append(
-                f"Final value per share ({result.unit}): "
-                f"{result.value_per_share:,.2f}"
+                f"Final value per share ({result.unit}): {result.value_per_share:,.2f}"
             )
         return "\n".join(lines)
 

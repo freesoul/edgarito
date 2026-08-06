@@ -131,6 +131,16 @@ CONCEPT_DEFINITIONS = (
         "balance_sheets",
         ("CashAndCashEquivalents", "CashFinancial"),
     ),
+    YahooConceptDefinition(
+        FinancialConcept.SHORT_TERM_INVESTMENTS,
+        "balance_sheets",
+        ("OtherShortTermInvestments", "ShortTermInvestments"),
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.NONCURRENT_INVESTMENTS,
+        "balance_sheets",
+        ("InvestmentinFinancialAssets", "LongTermEquityInvestment"),
+    ),
     YahooConceptDefinition(FinancialConcept.GOODWILL, "balance_sheets", ("Goodwill",)),
     YahooConceptDefinition(
         FinancialConcept.INTANGIBLE_ASSETS_NET,

@@ -138,8 +138,15 @@ class CapitalBridgeConfiguration(_ProfileModel):
     gross_debt: Optional[Decimal] = None
     cash_and_equivalents: Optional[Decimal] = None
     diluted_shares: Optional[Decimal] = None
+    non_operating_assets: Optional[Decimal] = None
 
-    @field_validator("net_debt", "gross_debt", "cash_and_equivalents", "diluted_shares")
+    @field_validator(
+        "net_debt",
+        "gross_debt",
+        "cash_and_equivalents",
+        "diluted_shares",
+        "non_operating_assets",
+    )
     @classmethod
     def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and not value.is_finite():
@@ -150,6 +157,8 @@ class CapitalBridgeConfiguration(_ProfileModel):
     def validate_bridge(self) -> "CapitalBridgeConfiguration":
         if self.diluted_shares is not None and self.diluted_shares <= 0:
             raise ValueError("diluted_shares must be positive")
+        if self.non_operating_assets is not None and self.non_operating_assets < 0:
+            raise ValueError("non_operating_assets cannot be negative")
         components = (self.gross_debt, self.cash_and_equivalents)
         if (components[0] is None) != (components[1] is None):
             raise ValueError("gross_debt and cash_and_equivalents must be set together")
@@ -177,22 +186,16 @@ class ShareRepurchaseConfiguration(_ProfileModel):
 
     @field_validator("annual_cash_amounts")
     @classmethod
-    def validate_cash_amounts(
-        cls, values: tuple[Decimal, ...]
-    ) -> tuple[Decimal, ...]:
+    def validate_cash_amounts(cls, values: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if any(not value.is_finite() or value <= 0 for value in values):
             raise ValueError(
                 "Share-repurchase cash amounts must be finite and positive"
             )
         return values
 
-    @field_validator(
-        "initial_purchase_price", "price_growth_rate", "discount_rate"
-    )
+    @field_validator("initial_purchase_price", "price_growth_rate", "discount_rate")
     @classmethod
-    def validate_optional_number(
-        cls, value: Optional[Decimal]
-    ) -> Optional[Decimal]:
+    def validate_optional_number(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and not value.is_finite():
             raise ValueError("Share-repurchase assumptions must be finite")
         return value
@@ -224,9 +227,7 @@ class ShareRepurchaseConfiguration(_ProfileModel):
                 self.source,
             )
         ):
-            raise ValueError(
-                "Share-repurchase assumptions require annual_cash_amounts"
-            )
+            raise ValueError("Share-repurchase assumptions require annual_cash_amounts")
         return self
 
 
@@ -242,11 +243,15 @@ class MultistageValuationConfiguration(_ProfileModel):
     maximum_transition_years: int = Field(default=10, ge=1, le=20)
     maximum_high_growth_years: int = Field(default=3, ge=0, le=10)
     extend_to_stable: bool = True
+    fade_reinvestment_to_terminal: bool = True
+    terminal_return_on_invested_capital: Decimal = Decimal("15")
+    depreciable_asset_life_years: Optional[int] = Field(default=None, ge=2, le=30)
 
     @field_validator(
         "convergence_tolerance",
         "max_annual_growth_fade",
         "growth_gap_per_high_growth_year",
+        "terminal_return_on_invested_capital",
     )
     @classmethod
     def validate_positive_rate(cls, value: Decimal) -> Decimal:
@@ -256,12 +261,8 @@ class MultistageValuationConfiguration(_ProfileModel):
 
     @field_validator("stable_growth_rate")
     @classmethod
-    def validate_stable_growth(
-        cls, value: Optional[Decimal]
-    ) -> Optional[Decimal]:
-        if value is not None and (
-            not value.is_finite() or value <= Decimal("-100")
-        ):
+    def validate_stable_growth(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and (not value.is_finite() or value <= Decimal("-100")):
             raise ValueError("Stable growth must be finite and greater than -100%")
         return value
 
@@ -408,6 +409,22 @@ class ValuationProfileLoader:
             return ForecastValuationProfile.model_validate(payload)
         except ValueError as exc:
             raise ValueError(f"Invalid valuation profile {source}: {exc}") from exc
+
+    @staticmethod
+    def load_for_ticker(
+        ticker: str | None, path: str | Path | None = None
+    ) -> ForecastValuationProfile:
+        """Use an explicit profile, then a bundled ticker profile, then default."""
+        if path is not None or not ticker:
+            return ValuationProfileLoader.load(path)
+        profile_name = ticker.strip().casefold()
+        if profile_name:
+            candidate = ValuationProfileLoader.default_path().parent / (
+                f"{profile_name}.json"
+            )
+            if candidate.is_file():
+                return ValuationProfileLoader.load(candidate)
+        return ValuationProfileLoader.load()
 
     @staticmethod
     def default_path() -> Path:

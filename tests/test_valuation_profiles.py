@@ -42,9 +42,7 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
 
 
 def test_race_profile_overrides_provider_classification_with_luxury_economics():
-    profile = ValuationProfileLoader.load(
-        ROOT / "configs" / "valuation" / "race.json"
-    )
+    profile = ValuationProfileLoader.load(ROOT / "configs" / "valuation" / "race.json")
 
     assert profile.name == "race"
     assert profile.model_selection.sector == Sector.CONSUMER_DISCRETIONARY
@@ -69,6 +67,21 @@ def test_race_profile_overrides_provider_classification_with_luxury_economics():
         Decimal("700000000"),
     )
     assert profile.valuation.share_repurchases.initial_purchase_price is None
+
+
+def test_ticker_profile_is_auto_selected_but_explicit_profile_wins():
+    automatic = ValuationProfileLoader.load_for_ticker("MSFT")
+    explicit = ValuationProfileLoader.load_for_ticker(
+        "MSFT", ROOT / "configs" / "valuation" / "default.json"
+    )
+
+    assert automatic.name == "msft"
+    assert (
+        automatic.valuation.multistage.terminal_return_on_invested_capital
+        == Decimal("40")
+    )
+    assert automatic.valuation.multistage.depreciable_asset_life_years == 6
+    assert explicit.name == "default"
 
 
 def test_custom_profile_can_partially_override_defaults(tmp_path):
