@@ -7,7 +7,6 @@ from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
-    FinancialStatement,
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts, Measurement
@@ -16,7 +15,6 @@ from edgarito.schemas.providers.edgar.company_facts import CompanyFacts, Measure
 @dataclass(frozen=True)
 class ConceptDefinition:
     concept: FinancialConcept
-    statement: FinancialStatement
     source_concepts: tuple[str, ...]
     unit: str = "USD"
     instant: bool = False
@@ -45,7 +43,6 @@ class _Candidate:
 CONCEPT_DEFINITIONS = (
     ConceptDefinition(
         FinancialConcept.REVENUE,
-        FinancialStatement.INCOME_STATEMENT,
         (
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "Revenues",
@@ -56,29 +53,24 @@ CONCEPT_DEFINITIONS = (
     ),
     ConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         ("OperatingIncomeLoss",),
     ),
     ConceptDefinition(
         FinancialConcept.NET_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         ("NetIncomeLoss",),
     ),
     ConceptDefinition(
         FinancialConcept.TOTAL_ASSETS,
-        FinancialStatement.BALANCE_SHEET,
         ("Assets",),
         instant=True,
     ),
     ConceptDefinition(
         FinancialConcept.TOTAL_LIABILITIES,
-        FinancialStatement.BALANCE_SHEET,
         ("Liabilities",),
         instant=True,
     ),
     ConceptDefinition(
         FinancialConcept.STOCKHOLDERS_EQUITY,
-        FinancialStatement.BALANCE_SHEET,
         (
             "StockholdersEquity",
             "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
@@ -87,7 +79,6 @@ CONCEPT_DEFINITIONS = (
     ),
     ConceptDefinition(
         FinancialConcept.CASH_AND_EQUIVALENTS,
-        FinancialStatement.BALANCE_SHEET,
         (
             "CashAndCashEquivalentsAtCarryingValue",
             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
@@ -96,12 +87,10 @@ CONCEPT_DEFINITIONS = (
     ),
     ConceptDefinition(
         FinancialConcept.OPERATING_CASH_FLOW,
-        FinancialStatement.CASH_FLOW,
         ("NetCashProvidedByUsedInOperatingActivities",),
     ),
     ConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
-        FinancialStatement.CASH_FLOW,
         ("PaymentsToAcquirePropertyPlantAndEquipment",),
     ),
 )
@@ -180,15 +169,21 @@ class SecUsGaapNormalizer:
         supplies a potentially restated value. This prevents later comparative
         filings from moving an older fact into the later filing's fiscal year.
         """
-        groups: dict[tuple[Optional[datetime.date], datetime.date], list[Measurement]] = {}
+        groups: dict[
+            tuple[Optional[datetime.date], datetime.date], list[Measurement]
+        ] = {}
         for measurement in measurements:
             if measurement.form not in self._FORMS or measurement.fp is None:
                 continue
-            groups.setdefault((measurement.start, measurement.end), []).append(measurement)
+            groups.setdefault((measurement.start, measurement.end), []).append(
+                measurement
+            )
 
         candidates = []
         for group in groups.values():
-            ordered = sorted(group, key=lambda m: (m.filed, m.accn, m.form.endswith("/A")))
+            ordered = sorted(
+                group, key=lambda m: (m.filed, m.accn, m.form.endswith("/A"))
+            )
             identity = ordered[0]
             measurement = ordered[-1]
             if identity.fy is None and identity.fp != FiscalPeriod.FY:
@@ -258,7 +253,9 @@ class SecUsGaapNormalizer:
             quarterly: dict[FiscalPeriod, FinancialObservation] = {}
             ytd: dict[FiscalPeriod, _Candidate] = {}
             for period in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3):
-                period_candidates = [c for c in year_candidates if c.identity.fp == period]
+                period_candidates = [
+                    c for c in year_candidates if c.identity.fp == period
+                ]
                 discrete = self._pick_discrete(period_candidates)
                 if discrete is not None:
                     quarterly[period] = self._to_observation(
@@ -272,20 +269,29 @@ class SecUsGaapNormalizer:
                 if cumulative is not None:
                     ytd[period] = cumulative
 
-            if FiscalPeriod.Q2 not in quarterly and FiscalPeriod.Q2 in ytd and FiscalPeriod.Q1 in quarterly:
+            if (
+                FiscalPeriod.Q2 not in quarterly
+                and FiscalPeriod.Q2 in ytd
+                and FiscalPeriod.Q1 in quarterly
+            ):
                 quarterly[FiscalPeriod.Q2] = self._derive_observation(
                     definition,
                     ytd[FiscalPeriod.Q2],
                     fiscal_year,
                     FiscalPeriod.Q2,
-                    ytd[FiscalPeriod.Q2].measurement.val - quarterly[FiscalPeriod.Q1].value,
+                    ytd[FiscalPeriod.Q2].measurement.val
+                    - quarterly[FiscalPeriod.Q1].value,
                     "Q2 = Q2 YTD - Q1",
-                    period_start=quarterly[FiscalPeriod.Q1].period_end + datetime.timedelta(days=1),
+                    period_start=quarterly[FiscalPeriod.Q1].period_end
+                    + datetime.timedelta(days=1),
                 )
 
             if FiscalPeriod.Q3 not in quarterly and FiscalPeriod.Q3 in ytd:
                 if FiscalPeriod.Q2 in ytd:
-                    q3_value = ytd[FiscalPeriod.Q3].measurement.val - ytd[FiscalPeriod.Q2].measurement.val
+                    q3_value = (
+                        ytd[FiscalPeriod.Q3].measurement.val
+                        - ytd[FiscalPeriod.Q2].measurement.val
+                    )
                     derivation = "Q3 = Q3 YTD - Q2 YTD"
                 elif FiscalPeriod.Q1 in quarterly and FiscalPeriod.Q2 in quarterly:
                     q3_value = (
@@ -306,11 +312,14 @@ class SecUsGaapNormalizer:
                         FiscalPeriod.Q3,
                         q3_value,
                         derivation,
-                        period_start=q2.period_end + datetime.timedelta(days=1) if q2 else None,
+                        period_start=q2.period_end + datetime.timedelta(days=1)
+                        if q2
+                        else None,
                     )
 
             if annual_candidate is not None and all(
-                period in quarterly for period in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3)
+                period in quarterly
+                for period in (FiscalPeriod.Q1, FiscalPeriod.Q2, FiscalPeriod.Q3)
             ):
                 q4_value = annual_candidate.measurement.val - sum(
                     quarterly[period].value
@@ -323,7 +332,8 @@ class SecUsGaapNormalizer:
                     FiscalPeriod.Q4,
                     q4_value,
                     "Q4 = FY - Q1 - Q2 - Q3",
-                    period_start=quarterly[FiscalPeriod.Q3].period_end + datetime.timedelta(days=1),
+                    period_start=quarterly[FiscalPeriod.Q3].period_end
+                    + datetime.timedelta(days=1),
                 )
 
             results.extend(quarterly.values())
@@ -356,7 +366,8 @@ class SecUsGaapNormalizer:
         discrete = [
             candidate
             for candidate in candidates
-            if candidate.duration_days is not None and 60 <= candidate.duration_days <= 120
+            if candidate.duration_days is not None
+            and 60 <= candidate.duration_days <= 120
         ]
         return max(discrete, key=lambda c: c.measurement.filed, default=None)
 
@@ -365,9 +376,14 @@ class SecUsGaapNormalizer:
         cumulative = [
             candidate
             for candidate in candidates
-            if candidate.duration_days is not None and 120 < candidate.duration_days < 300
+            if candidate.duration_days is not None
+            and 120 < candidate.duration_days < 300
         ]
-        return max(cumulative, key=lambda c: (c.duration_days or 0, c.measurement.filed), default=None)
+        return max(
+            cumulative,
+            key=lambda c: (c.duration_days or 0, c.measurement.filed),
+            default=None,
+        )
 
     @staticmethod
     def _to_observation(
@@ -380,7 +396,7 @@ class SecUsGaapNormalizer:
         measurement = candidate.measurement
         return FinancialObservation(
             concept=definition.concept,
-            statement=definition.statement,
+            statement=definition.concept.statement,
             value=measurement.val,
             unit=candidate.unit,
             granularity=granularity,

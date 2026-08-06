@@ -4,7 +4,6 @@ from typing import Mapping, Optional
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
 
-
 PROVIDER_MARKETS = {
     ProviderName.SEC: frozenset({Market.US}),
     ProviderName.ALPHAVANTAGE: frozenset({Market.US, Market.EU}),

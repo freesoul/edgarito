@@ -18,12 +18,12 @@ class Measurement(BaseModel):
     filed: datetime.date
     frame: Optional[str] = None
     start: Optional[datetime.date] = None
-    
-    @field_validator('fp', mode='before')
+
+    @field_validator("fp", mode="before")
     @classmethod
     def convert_empty_string_to_none(cls, v):
         """Convert empty strings to None for optional fiscal period field."""
-        if v == '':
+        if v == "":
             return None
         return v
 

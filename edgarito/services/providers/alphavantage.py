@@ -142,8 +142,7 @@ class AlphaVantageClient:
     ) -> ResponseModel:
         normalized_symbol = self._normalize_symbol(symbol)
         cache_path = (
-            f"providers/alphavantage/{normalized_symbol}/"
-            f"{function.value.lower()}.json"
+            f"providers/alphavantage/{normalized_symbol}/{function.value.lower()}.json"
         )
         if use_cache:
             cached_data = self._cache.read(cache_path)

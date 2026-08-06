@@ -9,7 +9,6 @@ from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
-    FinancialStatement,
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.providers.alphavantage.fundamentals import (
@@ -21,7 +20,6 @@ from edgarito.schemas.providers.alphavantage.fundamentals import (
 @dataclass(frozen=True)
 class AlphaVantageConceptDefinition:
     concept: FinancialConcept
-    statement: FinancialStatement
     response_name: str
     source_concept: str
 
@@ -29,55 +27,46 @@ class AlphaVantageConceptDefinition:
 CONCEPT_DEFINITIONS = (
     AlphaVantageConceptDefinition(
         FinancialConcept.REVENUE,
-        FinancialStatement.INCOME_STATEMENT,
         "income_statement",
         "totalRevenue",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         "income_statement",
         "operatingIncome",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.NET_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         "income_statement",
         "netIncome",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.TOTAL_ASSETS,
-        FinancialStatement.BALANCE_SHEET,
         "balance_sheet",
         "totalAssets",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.TOTAL_LIABILITIES,
-        FinancialStatement.BALANCE_SHEET,
         "balance_sheet",
         "totalLiabilities",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.STOCKHOLDERS_EQUITY,
-        FinancialStatement.BALANCE_SHEET,
         "balance_sheet",
         "totalShareholderEquity",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.CASH_AND_EQUIVALENTS,
-        FinancialStatement.BALANCE_SHEET,
         "balance_sheet",
         "cashAndCashEquivalentsAtCarryingValue",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.OPERATING_CASH_FLOW,
-        FinancialStatement.CASH_FLOW,
         "cash_flow",
         "operatingCashflow",
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
-        FinancialStatement.CASH_FLOW,
         "cash_flow",
         "capitalExpenditures",
     ),
@@ -165,7 +154,7 @@ class AlphaVantageNormalizer:
                 key,
                 FinancialObservation(
                     concept=definition.concept,
-                    statement=definition.statement,
+                    statement=definition.concept.statement,
                     value=value,
                     unit=report.reported_currency,
                     granularity=granularity,
@@ -252,9 +241,7 @@ class AlphaVantageNormalizer:
 
     @staticmethod
     def _observation_sort_key(observation: FinancialObservation):
-        granularity_order = (
-            0 if observation.granularity == Granularity.ANNUAL else 1
-        )
+        granularity_order = 0 if observation.granularity == Granularity.ANNUAL else 1
         return (
             granularity_order,
             observation.fiscal_year,

@@ -1,6 +1,6 @@
 # Edgarito
 
-Edgarito retrieves company fundamentals from configured providers, caches raw responses, normalizes them into provider-neutral observations, optionally crosschecks providers, and displays historical financial statements in a CLI.
+Edgarito retrieves company fundamentals from configured providers, caches raw responses, normalizes them into provider-neutral observations, optionally crosschecks providers, and calculates historical financial metrics.
 
 ## Setup
 
@@ -46,6 +46,50 @@ uv run python -m edgarito financials --ticker AAPL --user-agent "Your Name (your
 
 Provider responses are cached below `<cache_path>/providers/`. Use `--refresh` to bypass existing snapshots. In SEC quarterly output, an asterisk marks a value derived from a reported YTD or full-year fact.
 
+## Compute metrics
+
+Use the `metrics` command with the same identifier, provider, market, period, cache, and crosscheck options as `financials`:
+
+```bash
+uv run edgarito metrics --ticker AAPL
+uv run edgarito metrics --ticker AAPL --period quarterly --limit 8
+uv run edgarito metrics --ticker AAPL --provider fmp
+uv run edgarito metrics --ticker RACE --market eu
+uv run edgarito metrics --ticker AAPL --metric revenue_growth --metric net_margin
+uv run edgarito metrics --ticker AAPL --crosscheck
+```
+
+`--metric` can be repeated and accepts:
+
+- `revenue_growth`
+- `operating_margin`
+- `net_margin`
+- `free_cash_flow`
+- `free_cash_flow_margin`
+- `return_on_assets`
+- `return_on_equity`
+- `liabilities_to_assets`
+- `cash_to_liabilities`
+- `operating_cash_flow_to_net_income`
+
+Metrics are calculated only from the selected provider's normalized observations. `--crosscheck` validates the underlying observations against other configured providers but does not merge their values.
+
+Revenue growth compares consecutive periods: year over year for annual data and quarter over quarter for quarterly data. Return on assets and return on equity use average beginning and ending balances; quarterly returns are not annualized. Free cash flow is operating cash flow minus capital expenditures. A metric is omitted when a required input is unavailable, input currencies differ, its denominator is zero, or a required prior period is not consecutive.
+
+Programmatically, calculate all metrics from an existing `NormalizedCompanyFinancials` object, or pass a selected metric set:
+
+```python
+from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
+
+
+company_metrics = FinancialMetricsService().calculate(
+    financials,
+    metrics={FinancialMetric.REVENUE_GROWTH, FinancialMetric.NET_MARGIN},
+)
+```
+
+Each metric observation retains its formula and required input concepts for traceability.
+
 ## Provider configuration
 
 The built-in provider routing is equivalent to:
@@ -78,6 +122,7 @@ FinancialDataService
     -> NormalizedCompanyFinancials
     -> optional FinancialsCrosschecker
     -> FinancialsConsolePresenter
+       or FinancialMetricsService -> MetricsConsolePresenter
 ```
 
 Normalized observations share concept, statement, value, currency, fiscal period, source taxonomy, source concept, and filing metadata fields. Provider-specific metadata such as SEC accession numbers and filing forms remains populated when the source supplies it.
@@ -199,3 +244,23 @@ financials = asyncio.run(main())
 ```
 
 `FinancialsCrosschecker` can also be used directly when you already have two `NormalizedCompanyFinancials` objects. Its default value tolerance is 1% with a one-unit absolute floor.
+
+## Development checks
+
+Install the development tools and run the same checks expected for the project:
+
+```bash
+uv sync --extra dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+To apply safe lint fixes and formatting locally:
+
+```bash
+uv run ruff check . --fix
+uv run ruff format .
+```
+
+Ruff checks Python errors, import ordering, and common bug patterns. The copied SEC filing-type reference table is excluded to avoid rewriting generated reference data.

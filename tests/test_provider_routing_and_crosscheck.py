@@ -15,7 +15,6 @@ from edgarito.enums.provider import ProviderName
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
-    FinancialStatement,
     NormalizedCompanyFinancials,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
@@ -49,7 +48,7 @@ def _financials(provider: str, value: str = "100") -> NormalizedCompanyFinancial
         observations=[
             FinancialObservation(
                 concept=FinancialConcept.REVENUE,
-                statement=FinancialStatement.INCOME_STATEMENT,
+                statement=FinancialConcept.REVENUE.statement,
                 value=Decimal(value),
                 unit="USD",
                 granularity=Granularity.ANNUAL,
@@ -118,7 +117,7 @@ def test_crosschecker_reports_values_and_missing_observations_without_merging():
     secondary.observations.append(
         FinancialObservation(
             concept=FinancialConcept.NET_INCOME,
-            statement=FinancialStatement.INCOME_STATEMENT,
+            statement=FinancialConcept.NET_INCOME.statement,
             value=Decimal("20"),
             unit="USD",
             granularity=Granularity.ANNUAL,
@@ -143,9 +142,7 @@ def test_crosschecker_reports_values_and_missing_observations_without_merging():
 
 def test_service_crosschecks_by_default_and_only_warns(tmp_path):
     sec = _FakeProvider(ProviderName.SEC, _financials("sec", "100"))
-    alpha = _FakeProvider(
-        ProviderName.ALPHAVANTAGE, _financials("alphavantage", "120")
-    )
+    alpha = _FakeProvider(ProviderName.ALPHAVANTAGE, _financials("alphavantage", "120"))
     service = FinancialDataService(
         FileSystemCache(tmp_path),
         _configuration(),
@@ -164,9 +161,7 @@ def test_service_crosschecks_by_default_and_only_warns(tmp_path):
 
 def test_service_allows_provider_override_and_disabling_crosscheck(tmp_path):
     sec = _FakeProvider(ProviderName.SEC, _financials("sec"))
-    alpha = _FakeProvider(
-        ProviderName.ALPHAVANTAGE, _financials("alphavantage")
-    )
+    alpha = _FakeProvider(ProviderName.ALPHAVANTAGE, _financials("alphavantage"))
     service = FinancialDataService(
         FileSystemCache(tmp_path),
         _configuration(),

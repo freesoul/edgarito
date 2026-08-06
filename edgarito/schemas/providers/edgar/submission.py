@@ -1,5 +1,6 @@
 import datetime
 from typing import List, Optional
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from edgarito.schemas.providers.edgar.submission_custom import TransposedFiling
@@ -45,7 +46,9 @@ class FilingRecent(BaseModel):
     @field_validator("reportDate", mode="before")
     def empty_str_to_none(cls, v):
         if isinstance(v, list):
-            return [None if isinstance(item, str) and item == "" else item for item in v]
+            return [
+                None if isinstance(item, str) and item == "" else item for item in v
+            ]
         return v
 
     def extend_in_place(self, other: "FilingRecent") -> None:
@@ -64,7 +67,9 @@ class FilingRecent(BaseModel):
         of FilingRecentRow, where each row holds one element from each field.
         Assumes all list fields have the same length.
         """
-        n = len(self.accessionNumber)  # Using one field to determine the number of rows.
+        n = len(
+            self.accessionNumber
+        )  # Using one field to determine the number of rows.
         rows = []
         for i in range(n):
             row_data = {}
@@ -91,7 +96,9 @@ class FormerName(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
-    from_: datetime.datetime = Field(..., alias="from")  # from is a reserved keyword in Python.
+    from_: datetime.datetime = Field(
+        ..., alias="from"
+    )  # from is a reserved keyword in Python.
     to: datetime.datetime
 
 

@@ -10,7 +10,6 @@ from edgarito.schemas.normalization.financials import FinancialConcept
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 JPM_FIXTURE = Path(__file__).parent / "fixtures" / "jpm_facts.json"
 
@@ -36,10 +35,14 @@ def test_normalizes_recent_annual_revenue():
         granularity=Granularity.ANNUAL,
     )
 
-    revenue = find_observation(financials, FinancialConcept.REVENUE, 2025, FiscalPeriod.FY)
+    revenue = find_observation(
+        financials, FinancialConcept.REVENUE, 2025, FiscalPeriod.FY
+    )
     assert revenue.value == Decimal("416161000000")
     assert revenue.granularity == Granularity.ANNUAL
-    assert revenue.source_concept == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert (
+        revenue.source_concept == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    )
     assert not revenue.is_derived
 
 
@@ -97,7 +100,14 @@ def test_bank_revenue_uses_net_interest_revenue_fallback():
 
 
 def test_cli_runs_from_cached_provider_snapshots(tmp_path, capsys):
-    ticker_path = tmp_path / "providers" / "edgar" / "www.sec.gov" / "files" / "company_tickers.json"
+    ticker_path = (
+        tmp_path
+        / "providers"
+        / "edgar"
+        / "www.sec.gov"
+        / "files"
+        / "company_tickers.json"
+    )
     facts_path = (
         tmp_path
         / "providers"

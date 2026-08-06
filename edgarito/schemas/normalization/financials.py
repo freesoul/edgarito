@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -30,6 +30,23 @@ class FinancialConcept(str, Enum):
     def label(self) -> str:
         return self.value.replace("_", " ").title()
 
+    @property
+    def statement(self) -> FinancialStatement:
+        return CONCEPT_STATEMENTS[self]
+
+
+CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
+    FinancialConcept.REVENUE: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.OPERATING_INCOME: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.NET_INCOME: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.TOTAL_ASSETS: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.TOTAL_LIABILITIES: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.STOCKHOLDERS_EQUITY: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.CASH_AND_EQUIVALENTS: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.OPERATING_CASH_FLOW: FinancialStatement.CASH_FLOW,
+    FinancialConcept.CAPITAL_EXPENDITURES: FinancialStatement.CASH_FLOW,
+}
+
 
 class FinancialObservation(BaseModel):
     """One provider-neutral reported or derived financial value."""
@@ -53,6 +70,15 @@ class FinancialObservation(BaseModel):
 
     is_derived: bool = False
     derivation: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_statement(self) -> "FinancialObservation":
+        if self.statement != self.concept.statement:
+            raise ValueError(
+                f"{self.concept.value} belongs to "
+                f"{self.concept.statement.value}, not {self.statement.value}"
+            )
+        return self
 
     @property
     def period_key(self) -> tuple[int, FiscalPeriod]:

@@ -10,14 +10,14 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.providers.alphavantage import AlphaVantageClient
+from edgarito.services.providers.edgar import EdgarClient
+from edgarito.services.providers.fmp import FmpClient
 from edgarito.services.reconciliation.crosscheck import (
     CrosscheckReport,
     FinancialDataCrosscheckWarning,
     FinancialsCrosschecker,
 )
-from edgarito.services.providers.alphavantage import AlphaVantageClient
-from edgarito.services.providers.edgar import EdgarClient
-from edgarito.services.providers.fmp import FmpClient
 from edgarito.services.reconciliation.providers import (
     AlphaVantageFinancialsProvider,
     FinancialsQuery,
@@ -37,9 +37,7 @@ class FinancialDataService:
         user_agent: Optional[str] = None,
         alphavantage_api_key: Optional[str] = None,
         fmp_api_key: Optional[str] = None,
-        providers: Optional[
-            Mapping[ProviderName, NormalizedFinancialsProvider]
-        ] = None,
+        providers: Optional[Mapping[ProviderName, NormalizedFinancialsProvider]] = None,
         crosschecker: Optional[FinancialsCrosschecker] = None,
     ):
         self._cache = cache
@@ -179,9 +177,7 @@ class FinancialDataService:
             provider = AlphaVantageFinancialsProvider(client)
         elif name == ProviderName.FMP:
             if not self._fmp_api_key:
-                raise ValueError(
-                    "The FMP provider requires FMP_API_KEY / fmp_api_key"
-                )
+                raise ValueError("The FMP provider requires FMP_API_KEY / fmp_api_key")
             client = FmpClient(self._cache, self._fmp_api_key)
             provider = FmpFinancialsProvider(client)
         else:

@@ -140,9 +140,7 @@ class FinancialsCrosschecker:
                 abs(primary_observation.value), abs(secondary_observation.value)
             )
             relative_difference = (
-                absolute_difference / largest_value
-                if largest_value
-                else Decimal(0)
+                absolute_difference / largest_value if largest_value else Decimal(0)
             )
             allowed_difference = max(
                 self.absolute_tolerance,

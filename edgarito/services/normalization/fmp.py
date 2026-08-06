@@ -7,7 +7,6 @@ from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
-    FinancialStatement,
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.providers.fmp.fundamentals import (
@@ -19,7 +18,6 @@ from edgarito.schemas.providers.fmp.fundamentals import FmpCompanyFinancials
 @dataclass(frozen=True)
 class FmpConceptDefinition:
     concept: FinancialConcept
-    statement: FinancialStatement
     annual_reports_name: str
     quarterly_reports_name: str
     source_concept: str
@@ -30,7 +28,6 @@ class FmpConceptDefinition:
 CONCEPT_DEFINITIONS = (
     FmpConceptDefinition(
         FinancialConcept.REVENUE,
-        FinancialStatement.INCOME_STATEMENT,
         "annual_income_statements",
         "quarterly_income_statements",
         "revenue",
@@ -38,7 +35,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         "annual_income_statements",
         "quarterly_income_statements",
         "operatingIncome",
@@ -46,7 +42,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.NET_INCOME,
-        FinancialStatement.INCOME_STATEMENT,
         "annual_income_statements",
         "quarterly_income_statements",
         "netIncome",
@@ -54,7 +49,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.TOTAL_ASSETS,
-        FinancialStatement.BALANCE_SHEET,
         "annual_balance_sheets",
         "quarterly_balance_sheets",
         "totalAssets",
@@ -62,7 +56,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.TOTAL_LIABILITIES,
-        FinancialStatement.BALANCE_SHEET,
         "annual_balance_sheets",
         "quarterly_balance_sheets",
         "totalLiabilities",
@@ -70,7 +63,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.STOCKHOLDERS_EQUITY,
-        FinancialStatement.BALANCE_SHEET,
         "annual_balance_sheets",
         "quarterly_balance_sheets",
         "totalStockholdersEquity",
@@ -78,7 +70,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.CASH_AND_EQUIVALENTS,
-        FinancialStatement.BALANCE_SHEET,
         "annual_balance_sheets",
         "quarterly_balance_sheets",
         "cashAndCashEquivalents",
@@ -86,7 +77,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.OPERATING_CASH_FLOW,
-        FinancialStatement.CASH_FLOW,
         "annual_cash_flow_statements",
         "quarterly_cash_flow_statements",
         "operatingCashFlow",
@@ -94,7 +84,6 @@ CONCEPT_DEFINITIONS = (
     ),
     FmpConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
-        FinancialStatement.CASH_FLOW,
         "annual_cash_flow_statements",
         "quarterly_cash_flow_statements",
         "capitalExpenditure",
@@ -156,7 +145,10 @@ class FmpNormalizer:
         for report in reports:
             if granularity == Granularity.ANNUAL and report.period != FiscalPeriod.FY:
                 continue
-            if granularity == Granularity.QUARTERLY and report.period == FiscalPeriod.FY:
+            if (
+                granularity == Granularity.QUARTERLY
+                and report.period == FiscalPeriod.FY
+            ):
                 continue
             value: Optional[Decimal] = getattr(report, definition.value_attribute)
             if value is None:
@@ -169,7 +161,7 @@ class FmpNormalizer:
                 key,
                 FinancialObservation(
                     concept=definition.concept,
-                    statement=definition.statement,
+                    statement=definition.concept.statement,
                     value=value,
                     unit=report.reported_currency,
                     granularity=granularity,
@@ -205,9 +197,7 @@ class FmpNormalizer:
 
     @staticmethod
     def _observation_sort_key(observation: FinancialObservation):
-        granularity_order = (
-            0 if observation.granularity == Granularity.ANNUAL else 1
-        )
+        granularity_order = 0 if observation.granularity == Granularity.ANNUAL else 1
         return (
             granularity_order,
             observation.fiscal_year,

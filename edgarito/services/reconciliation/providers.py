@@ -30,9 +30,7 @@ class FinancialsQuery:
 class NormalizedFinancialsProvider(Protocol):
     name: ProviderName
 
-    async def retrieve(
-        self, query: FinancialsQuery
-    ) -> NormalizedCompanyFinancials: ...
+    async def retrieve(self, query: FinancialsQuery) -> NormalizedCompanyFinancials: ...
 
 
 class SecFinancialsProvider:

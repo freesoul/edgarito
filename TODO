@@ -1,14 +1,14 @@
 
-
-- Compute simple metrics
-- Compute parametrized forecasts
-- Add valuation methods (DCF, comparables, etc.)
-- Retrieve and normalize sector/industry
-- Make a full report pipeline that chooses the proper valuation methods depending on the sector/industry
-- Add red flag automated detector
-- Add AI integrations to check reports, management, etc from filings and news
-- Make exportable reports, PDF/Excel/CSV for parts or whole report.
-- Add other input rather than non-standard tickers, like ISIN, CIK, and so on, or mappings.
-
-
-
+- pylint
+- **Retrieve and normalize sector/industry**
+- **Add identifier mappings** such as ISIN, CIK, exchange-specific symbols, and provider symbols
+- **Compute parametrized forecasts**
+- **Add valuation methods**
+   - DCF first
+   - Comparables after sector, peer, price, shares, and enterprise-value data exist
+- **Add deterministic red-flag detection**
+- **Create the full report pipeline**
+- **Add exports**
+   - CSV/Excel can arrive earlier for raw financials and metrics
+   - PDF should wait until the report structure stabilizes
+- **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs

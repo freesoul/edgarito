@@ -1,5 +1,5 @@
-from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.schemas.cli.use_cases.retrieve_financials import RetrieveFinancialsRequest
+from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 from edgarito.services.providers.edgar import EdgarClient
 
@@ -11,7 +11,9 @@ class RetrieveFinancials:
         self._edgar = edgar
         self._normalizer = normalizer
 
-    async def execute(self, request: RetrieveFinancialsRequest) -> NormalizedCompanyFinancials:
+    async def execute(
+        self, request: RetrieveFinancialsRequest
+    ) -> NormalizedCompanyFinancials:
         ticker = request.ticker.upper() if request.ticker else None
         cik = request.cik
         if ticker is not None:

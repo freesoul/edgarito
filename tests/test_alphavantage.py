@@ -104,8 +104,7 @@ def test_provider_retrieves_and_caches_all_fundamental_responses(tmp_path):
     assert first.overview.name == "Apple Inc."
     assert len(session.calls) == 4
     cached_files = sorted(
-        path.relative_to(tmp_path).as_posix()
-        for path in tmp_path.rglob("*.json")
+        path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*.json")
     )
     assert cached_files == [
         "providers/alphavantage/AAPL/balance_sheet.json",
@@ -219,9 +218,7 @@ def test_normalizer_filters_granularity_and_concepts():
     assert normalized.observations[0].granularity == Granularity.ANNUAL
 
 
-def test_cli_can_override_the_default_with_alphavantage(
-    tmp_path, capsys, monkeypatch
-):
+def test_cli_can_override_the_default_with_alphavantage(tmp_path, capsys, monkeypatch):
     responses = _api_responses()
     cache = FileSystemCache(tmp_path)
     for function, response in responses.items():

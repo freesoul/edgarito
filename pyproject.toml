@@ -23,7 +23,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.9,<1",
+]
 
 [project.scripts]
 edgarito = "edgarito.cli.__main__:main"
@@ -31,3 +34,18 @@ edgarito = "edgarito.cli.__main__:main"
 [tool.setuptools.packages.find]
 include = ["edgarito", "edgarito.*"]
 exclude = ["venv_windows", "venv", "cache"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = [
+    "cache",
+    "edgarito/enums/edgar/reference/all_filing_types.py",
+]
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

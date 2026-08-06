@@ -1,4 +1,5 @@
 from edgarito.schemas.normalization.financials import (
+    CONCEPT_STATEMENTS,
     FinancialConcept,
     FinancialObservation,
     FinancialStatement,
@@ -6,6 +7,7 @@ from edgarito.schemas.normalization.financials import (
 )
 
 __all__ = [
+    "CONCEPT_STATEMENTS",
     "FinancialConcept",
     "FinancialObservation",
     "FinancialStatement",

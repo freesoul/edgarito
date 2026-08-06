@@ -192,9 +192,7 @@ class FmpClient:
     ) -> ResponseModel:
         normalized_symbol = self._normalize_symbol(symbol)
         suffix = f"_{period.value}" if period else ""
-        cache_path = (
-            f"providers/fmp/{normalized_symbol}/{endpoint.value}{suffix}.json"
-        )
+        cache_path = f"providers/fmp/{normalized_symbol}/{endpoint.value}{suffix}.json"
         if use_cache:
             cached_data = self._cache.read(cache_path)
             if cached_data is not None:

@@ -17,4 +17,4 @@ Most applications should use CoreFilingType instead.
 # Re-export from the reference implementation
 from edgarito.enums.edgar.reference.all_filing_types import FilingType
 
-__all__ = ['FilingType']
+__all__ = ["FilingType"]
