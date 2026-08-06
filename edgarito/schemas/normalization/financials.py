@@ -47,9 +47,9 @@ class FinancialObservation(BaseModel):
     provider: str
     taxonomy: str
     source_concept: str
-    accession_number: str
-    form: str
-    filed: datetime.date
+    accession_number: Optional[str] = None
+    form: Optional[str] = None
+    filed: Optional[datetime.date] = None
 
     is_derived: bool = False
     derivation: Optional[str] = None

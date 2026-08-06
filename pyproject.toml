@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edgarito"
 version = "0.1.1"
-description = "Retrieve and normalize company financial data from SEC EDGAR"
+description = "Retrieve, normalize, and reconcile company financial data"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

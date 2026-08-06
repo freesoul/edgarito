@@ -7,15 +7,20 @@ from typing import Optional
 from pydantic import ValidationError
 
 from edgarito.cli.presentation.console import FinancialsConsolePresenter
-from edgarito.cli.use_cases.retrieve_financials import RetrieveFinancials
 from edgarito.enums.granularity import Granularity
+from edgarito.enums.market import Market
+from edgarito.enums.provider import ProviderName
 from edgarito.logger import configure_logger
 from edgarito.schemas.normalization.financials import FinancialConcept
-from edgarito.schemas.cli.use_cases.retrieve_financials import RetrieveFinancialsRequest
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
-from edgarito.services.providers.edgar import EdgarClient
-from edgarito.settings import EDGARITO_CACHE_DIR, EDGARITO_USER_AGENT
+from edgarito.services.reconciliation.financials import FinancialDataService
+from edgarito.settings import (
+    ALPHAVANTAGE_API_KEY,
+    EDGARITO_CACHE_DIR,
+    EDGARITO_USER_AGENT,
+    FMP_API_KEY,
+    PROVIDER_CONFIGURATION,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,12 +29,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     financials = subparsers.add_parser(
-        "financials", help="Display normalized SEC historicals"
+        "financials", help="Display normalized historical financials"
     )
 
     identifier = financials.add_mutually_exclusive_group(required=True)
-    identifier.add_argument("--ticker", help="US stock ticker, for example AAPL")
+    identifier.add_argument("--ticker", help="Stock ticker, for example AAPL")
     identifier.add_argument("--cik", type=int, help="SEC Central Index Key")
+
+    financials.add_argument(
+        "--market",
+        choices=[market.value for market in Market],
+        default=Market.US.value,
+        help="Stock market configuration to use (default: us)",
+    )
+    financials.add_argument(
+        "--provider",
+        choices=[provider.value for provider in ProviderName],
+        help="Override the configured default provider",
+    )
 
     financials.add_argument(
         "--period",
@@ -50,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--refresh", action="store_true", help="Ignore cached provider snapshots"
     )
     financials.add_argument(
+        "--crosscheck",
+        action="store_true",
+        help="Compare with the other configured providers and emit warnings",
+    )
+    financials.add_argument(
         "--cache-dir",
         default=EDGARITO_CACHE_DIR,
         help="Snapshot cache directory (default: cache)",
@@ -64,11 +86,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _run_financials(args: argparse.Namespace) -> int:
-    if not args.user_agent:
-        raise ValueError(
-            "Provide --user-agent or configure user_agent in .cli.env / "
-            "EDGARITO_USER_AGENT in .env as required by the SEC"
-        )
     if args.limit < 1:
         raise ValueError("--limit must be at least 1")
 
@@ -81,19 +98,25 @@ async def _run_financials(args: argparse.Namespace) -> int:
     concepts = (
         {FinancialConcept(value) for value in args.concept} if args.concept else None
     )
-    request = RetrieveFinancialsRequest(
-        ticker=args.ticker,
-        cik=args.cik,
-        granularity=granularity,
-        concepts=concepts,
-        use_cache=not args.refresh,
-        make_cache=True,
-    )
-
     cache = FileSystemCache(Path(args.cache_dir))
-    async with EdgarClient(cache=cache, user_agent=args.user_agent) as edgar:
-        use_case = RetrieveFinancials(edgar, SecUsGaapNormalizer())
-        financials = await use_case.execute(request)
+    async with FinancialDataService(
+        cache=cache,
+        provider_configuration=PROVIDER_CONFIGURATION,
+        user_agent=args.user_agent,
+        alphavantage_api_key=ALPHAVANTAGE_API_KEY,
+        fmp_api_key=FMP_API_KEY,
+    ) as service:
+        financials = await service.retrieve(
+            ticker=args.ticker,
+            cik=args.cik,
+            market=Market(args.market),
+            provider=ProviderName(args.provider) if args.provider else None,
+            granularity=granularity,
+            concepts=concepts,
+            use_cache=not args.refresh,
+            make_cache=True,
+            crosscheck=args.crosscheck,
+        )
 
     print(FinancialsConsolePresenter().render(financials, limit=args.limit))
     return 0

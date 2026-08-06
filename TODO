@@ -1,0 +1,14 @@
+
+
+- Compute simple metrics
+- Compute parametrized forecasts
+- Add valuation methods (DCF, comparables, etc.)
+- Retrieve and normalize sector/industry
+- Make a full report pipeline that chooses the proper valuation methods depending on the sector/industry
+- Add red flag automated detector
+- Add AI integrations to check reports, management, etc from filings and news
+- Make exportable reports, PDF/Excel/CSV for parts or whole report.
+- Add other input rather than non-standard tickers, like ISIN, CIK, and so on, or mappings.
+
+
+
