@@ -398,7 +398,10 @@ class ValuationSelectionConsolePresenter:
         ]
         if profile.economic_traits:
             traits = ", ".join(
-                self._label(trait.value) for trait in sorted(profile.economic_traits)
+                self._label(trait.value)
+                for trait in sorted(
+                    profile.economic_traits, key=lambda item: item.value
+                )
             )
             lines.append(f"Economic traits: {traits}")
         if profile.annual_fiscal_years:
@@ -443,11 +446,27 @@ class ValuationSelectionConsolePresenter:
             lines.append(f"  ~ {limitation}")
         if model.missing_inputs:
             missing = ", ".join(
-                self._label(item.value) for item in sorted(model.missing_inputs)
+                self._label(item.value)
+                for item in sorted(model.missing_inputs, key=lambda item: item.value)
             )
             lines.append(f"  Missing: {missing}")
         return lines
 
     @staticmethod
     def _label(value: str) -> str:
-        return value.replace("_", " ").title()
+        acronyms = {
+            "affo": "AFFO",
+            "dcf": "DCF",
+            "ddm": "DDM",
+            "ebit": "EBIT",
+            "ebitda": "EBITDA",
+            "ev": "EV",
+            "fcf": "FCF",
+            "fcfe": "FCFE",
+            "fcff": "FCFF",
+            "nav": "NAV",
+            "roe": "ROE",
+            "sotp": "SOTP",
+            "wacc": "WACC",
+        }
+        return " ".join(acronyms.get(part, part.title()) for part in value.split("_"))

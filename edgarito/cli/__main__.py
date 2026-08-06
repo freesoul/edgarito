@@ -12,6 +12,7 @@ from edgarito.cli.presentation.console import (
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
     MetricsConsolePresenter,
+    ValuationSelectionConsolePresenter,
 )
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
@@ -31,6 +32,16 @@ from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
 )
 from edgarito.services.reconciliation.financials import FinancialDataService
+from edgarito.services.valuation import (
+    BusinessArchetype,
+    CompanyLifecycle,
+    Cyclicality,
+    EconomicTrait,
+    ValuationInput,
+    ValuationModelSelector,
+    ValuationProfileBuilder,
+    ValuationProfileOverrides,
+)
 from edgarito.settings import (
     ALPHAVANTAGE_API_KEY,
     CLASSIFICATION_PROVIDER_CONFIGURATION,
@@ -56,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     forecast = subparsers.add_parser(
         "forecast", help="Project annual free cash flow from explicit assumptions"
     )
+    valuation_models = subparsers.add_parser(
+        "valuation-models",
+        help="Rank suitable valuation models and report missing inputs",
+    )
     classification = subparsers.add_parser(
         "classification", help="Retrieve normalized company sector and industry"
     )
@@ -63,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
     _add_retrieval_arguments(forecast, include_period=False)
+    _add_retrieval_arguments(valuation_models, include_period=False)
 
     financials.add_argument(
         "--concept",
@@ -107,6 +123,46 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Annual periods used to infer omitted assumptions (default: 3)",
+    )
+    valuation_models.add_argument(
+        "--classification-provider",
+        choices=[
+            provider.value
+            for provider in CLASSIFICATION_PROVIDER_CONFIGURATION.available_providers
+        ],
+        help="Override the configured classification provider",
+    )
+    valuation_models.add_argument(
+        "--business-type",
+        choices=[item.value for item in BusinessArchetype],
+        help="Override the inferred economic business type",
+    )
+    valuation_models.add_argument(
+        "--lifecycle",
+        choices=[item.value for item in CompanyLifecycle],
+        help="Override the inferred company lifecycle",
+    )
+    valuation_models.add_argument(
+        "--cyclicality",
+        choices=[item.value for item in Cyclicality],
+        help="Override inferred cyclicality",
+    )
+    valuation_models.add_argument(
+        "--trait",
+        action="append",
+        choices=[item.value for item in EconomicTrait],
+        help="Add a known economic trait; repeat for multiple traits",
+    )
+    valuation_models.add_argument(
+        "--available-input",
+        action="append",
+        choices=[item.value for item in ValuationInput],
+        help="Mark external valuation data as available; repeat as needed",
+    )
+    valuation_models.add_argument(
+        "--peer-count",
+        type=int,
+        help="Number of genuinely comparable companies available",
     )
     _add_identifier_arguments(classification)
     classification.add_argument(
@@ -248,7 +304,55 @@ async def _run_forecast(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_valuation_models(args: argparse.Namespace) -> int:
+    financials = await _retrieve_financials(
+        args,
+        Granularity.ANNUAL,
+        ValuationProfileBuilder.required_concepts(),
+    )
+    classification = await _retrieve_classification(
+        args,
+        provider=(
+            ProviderName(args.classification_provider)
+            if args.classification_provider
+            else None
+        ),
+        crosscheck=False,
+    )
+    overrides = ValuationProfileOverrides(
+        business_archetype=(
+            BusinessArchetype(args.business_type) if args.business_type else None
+        ),
+        lifecycle=CompanyLifecycle(args.lifecycle) if args.lifecycle else None,
+        cyclicality=Cyclicality(args.cyclicality) if args.cyclicality else None,
+        economic_traits={EconomicTrait(value) for value in args.trait or []},
+        available_inputs={
+            ValuationInput(value) for value in args.available_input or []
+        },
+        peer_count=args.peer_count,
+    )
+    profile = ValuationProfileBuilder().build(financials, classification, overrides)
+    selection = ValuationModelSelector().select(profile)
+    print(ValuationSelectionConsolePresenter().render(selection))
+    return 0
+
+
 async def _run_classification(args: argparse.Namespace) -> int:
+    classification = await _retrieve_classification(
+        args,
+        provider=ProviderName(args.provider) if args.provider else None,
+        crosscheck=args.crosscheck,
+    )
+    print(ClassificationConsolePresenter().render(classification))
+    return 0
+
+
+async def _retrieve_classification(
+    args: argparse.Namespace,
+    *,
+    provider: Optional[ProviderName],
+    crosscheck: bool,
+):
     async with CompanyClassificationService(
         cache=FileSystemCache(Path(args.cache_dir)),
         provider_configuration=CLASSIFICATION_PROVIDER_CONFIGURATION,
@@ -263,13 +367,12 @@ async def _run_classification(args: argparse.Namespace) -> int:
             exchange=args.exchange,
             exchange_symbols=_parse_mappings(args.exchange_symbol, "--exchange-symbol"),
             provider_symbols=_parse_provider_symbols(args.provider_symbol),
-            provider=ProviderName(args.provider) if args.provider else None,
+            provider=provider,
             use_cache=not args.refresh,
             make_cache=True,
-            crosscheck=args.crosscheck,
+            crosscheck=crosscheck,
         )
-    print(ClassificationConsolePresenter().render(classification))
-    return 0
+    return classification
 
 
 async def _retrieve_financials(
@@ -360,6 +463,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_metrics(args))
         if args.command == "forecast":
             return asyncio.run(_run_forecast(args))
+        if args.command == "valuation-models":
+            return asyncio.run(_run_valuation_models(args))
         if args.command == "classification":
             return asyncio.run(_run_classification(args))
     except (ValueError, RuntimeError, FileNotFoundError, ValidationError) as exc:

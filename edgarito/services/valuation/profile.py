@@ -54,6 +54,18 @@ class ValuationProfileBuilder:
         r"\b(defense|aerospace|engineering.*construction|government contractor)\b"
     )
 
+    @staticmethod
+    def required_concepts() -> set[FinancialConcept]:
+        return {
+            FinancialConcept.REVENUE,
+            FinancialConcept.NET_INCOME,
+            FinancialConcept.OPERATING_CASH_FLOW,
+            FinancialConcept.CAPITAL_EXPENDITURES,
+            FinancialConcept.STOCKHOLDERS_EQUITY,
+            FinancialConcept.TOTAL_ASSETS,
+            FinancialConcept.TOTAL_LIABILITIES,
+        }
+
     def build(
         self,
         financials: NormalizedCompanyFinancials,
@@ -234,6 +246,8 @@ class ValuationProfileBuilder:
             return BusinessArchetype.RESOURCE_PRODUCER
         if cls._PIPELINE.search(industry_key):
             return BusinessArchetype.PROJECT_PIPELINE
+        if sector in {Sector.FINANCIALS, Sector.REAL_ESTATE}:
+            return BusinessArchetype.UNRESOLVED
         return BusinessArchetype.GENERAL_OPERATING
 
     @classmethod
@@ -294,8 +308,11 @@ class ValuationProfileBuilder:
         if latest_equity is not None and latest_equity <= 0:
             return CompanyLifecycle.DISTRESSED
 
+        recent_growth = growth_rates[-3:]
         average_growth = (
-            sum(growth_rates, Decimal(0)) / len(growth_rates) if growth_rates else None
+            sum(recent_growth, Decimal(0)) / len(recent_growth)
+            if recent_growth
+            else None
         )
         latest_earnings = earnings[-1].value if earnings else None
         latest_fcf = fcf_by_year[max(fcf_by_year)] if fcf_by_year else None

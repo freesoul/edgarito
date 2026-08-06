@@ -240,6 +240,87 @@ growth assumption, margin assumption, currency, and formula. The forecast also
 records whether each assumption path was explicit or inferred from historical
 averages.
 
+## Select suitable valuation models
+
+Before calculating a valuation, `valuation-models` builds an economic profile and
+ranks the minimal supported model families:
+
+- FCFF DCF
+- Equity DCF / Dividend Discount
+- Residual Income
+- NAV / Sum-of-the-Parts
+- Comparable Multiples
+
+The selector separates economic suitability from data readiness. A model can be
+the correct primary method while still being blocked by missing inputs, and a
+hard economic rejection is not treated as a data problem.
+
+```bash
+uv run edgarito valuation-models --ticker AAPL
+uv run edgarito valuation-models --ticker JPM
+uv run edgarito valuation-models --isin US02079K3059
+```
+
+The economic profile uses normalized sector and provider industry together with
+historical revenue, earnings, free cash flow, book equity, lifecycle and
+cyclicality. Sector is only an initial clue: bank, insurer, REIT, resource,
+pipeline, holding-company and conglomerate patterns take precedence when the
+industry identifies the underlying economics. A broad Financials or Real Estate
+classification without a specific business type is reported as unresolved and
+does not receive a primary model automatically.
+
+Explicit facts can override uncertain provider classifications and mark external
+valuation inputs as available:
+
+```bash
+uv run edgarito valuation-models --ticker TEST \
+  --business-type holding_company \
+  --trait multi_segment \
+  --available-input segment_values \
+  --available-input net_debt \
+  --available-input diluted_shares
+```
+
+Other useful options include `--lifecycle`, `--cyclicality`, repeatable `--trait`,
+repeatable `--available-input`, `--peer-count`, and
+`--classification-provider`. The report returns:
+
+- one economically preferred primary intrinsic model;
+- conditional intrinsic alternatives;
+- comparable-multiple cross-checks and suitable denominator bases;
+- hard rejection reasons;
+- the required forecasting profile;
+- readiness and exact missing inputs for every model.
+
+Programmatically:
+
+```python
+from edgarito.services.valuation import (
+    BusinessArchetype,
+    ValuationInput,
+    ValuationModelSelector,
+    ValuationProfileBuilder,
+    ValuationProfileOverrides,
+)
+
+
+profile = ValuationProfileBuilder().build(
+    financials,
+    classification,
+    ValuationProfileOverrides(
+        business_archetype=BusinessArchetype.HOLDING_COMPANY,
+        available_inputs={ValuationInput.SEGMENT_VALUES},
+    ),
+)
+selection = ValuationModelSelector().select(profile)
+primary = selection.primary
+```
+
+The current `operating cash flow - capital expenditures` history is deliberately
+not marked as FCFF. Enterprise DCF remains blocked until an explicit FCFF forecast
+and its EBIT, tax, depreciation, working-capital and investment assumptions are
+available.
+
 ## Provider configuration
 
 The built-in provider routing is equivalent to:
@@ -276,6 +357,8 @@ FinancialDataService
     -> FinancialsConsolePresenter
        or FinancialMetricsService -> MetricsConsolePresenter
        or FreeCashFlowForecastService -> ForecastConsolePresenter
+       or ValuationProfileBuilder -> ValuationModelSelector
+          -> ValuationSelectionConsolePresenter
 
 CompanyClassificationService
     -> configured FMP or Alpha Vantage profile client

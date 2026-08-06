@@ -1,5 +1,9 @@
 
+
 - **Add valuation methods**
+   - Ensure data readiness (so we don't have Blocked)
+   - Add missing metric computations
+   - Implement the models
 - **Add deterministic red-flag detection**
 - **Create the full report pipeline**
 - **Add exports**

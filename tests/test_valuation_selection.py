@@ -1,8 +1,12 @@
 import datetime
+import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
+import edgarito.cli.__main__ as cli_module
+from edgarito.cli import main
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.classification import (
@@ -28,6 +32,8 @@ from edgarito.services.valuation import (
     ValuationProfileBuilder,
     ValuationProfileOverrides,
 )
+
+FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 
 
 def _observation(
@@ -222,9 +228,83 @@ def test_economic_override_takes_precedence_over_official_sector():
     )
 
 
+def test_broad_sector_without_specific_economics_does_not_choose_a_primary():
+    profile = ValuationProfileBuilder().build(
+        _financials(), _classification(Sector.FINANCIALS, "Financial Services")
+    )
+    selection = ValuationModelSelector().select(profile)
+
+    assert profile.business_archetype == BusinessArchetype.UNRESOLVED
+    assert selection.primary is None
+    assert all(model.role != ModelRole.PRIMARY for model in selection.models)
+    assert all(model.limitations for model in selection.models)
+
+
 def test_profile_rejects_mismatched_company_data():
     classification = _classification(Sector.TECHNOLOGY, "Software")
     classification.company_id = "2"
 
     with pytest.raises(ValueError, match="different company IDs"):
         ValuationProfileBuilder().build(_financials(), classification)
+
+
+def test_cli_reports_valuation_suitability_from_cached_data(
+    tmp_path, capsys, monkeypatch
+):
+    ticker_path = (
+        tmp_path
+        / "providers"
+        / "edgar"
+        / "www.sec.gov"
+        / "files"
+        / "company_tickers.json"
+    )
+    facts_path = (
+        tmp_path
+        / "providers"
+        / "edgar"
+        / "data.sec.gov"
+        / "api"
+        / "xbrl"
+        / "companyfacts"
+        / "CIK0000320193.json"
+    )
+    ticker_path.parent.mkdir(parents=True)
+    facts_path.parent.mkdir(parents=True)
+    ticker_path.write_text(
+        json.dumps({"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}),
+        encoding="utf-8",
+    )
+    facts_path.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    fmp_profile = [
+        {
+            "symbol": "AAPL",
+            "companyName": "Apple Inc.",
+            "cik": "320193",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+        }
+    ]
+    profile_path = tmp_path / "providers" / "fmp" / "AAPL" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(json.dumps(fmp_profile), encoding="utf-8")
+    monkeypatch.setattr(cli_module, "FMP_API_KEY", "test-api-key")
+
+    exit_code = main(
+        [
+            "valuation-models",
+            "--ticker",
+            "AAPL",
+            "--cache-dir",
+            str(tmp_path),
+            "--user-agent",
+            "Edgarito Tests (tests@example.com)",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Economic profile: General Operating" in output
+    assert "PRIMARY" in output
+    assert "FCFF DCF — suitability 90/100; data Blocked" in output
+    assert "Comparable Multiples" in output

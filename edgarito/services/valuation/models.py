@@ -26,6 +26,7 @@ class ValuationModel(str, Enum):
 
 
 class BusinessArchetype(str, Enum):
+    UNRESOLVED = "unresolved"
     GENERAL_OPERATING = "general_operating"
     FINANCIAL_INTERMEDIARY = "financial_intermediary"
     ASSET_MANAGER = "asset_manager"

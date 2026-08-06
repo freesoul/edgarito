@@ -33,6 +33,13 @@ class ValuationModelSelector:
     """Rank valuation models by economic fit and report data blockers."""
 
     _BASE_SCORES = {
+        BusinessArchetype.UNRESOLVED: {
+            ValuationModel.FCFF_DCF: 60,
+            ValuationModel.EQUITY_DCF: 60,
+            ValuationModel.RESIDUAL_INCOME: 60,
+            ValuationModel.NAV_SOTP: 60,
+            ValuationModel.COMPARABLE_MULTIPLES: 60,
+        },
         BusinessArchetype.GENERAL_OPERATING: {
             ValuationModel.FCFF_DCF: 90,
             ValuationModel.EQUITY_DCF: 45,
@@ -109,13 +116,24 @@ class ValuationModelSelector:
             profile, assessments[ValuationModel.COMPARABLE_MULTIPLES]
         )
 
+        if profile.business_archetype == BusinessArchetype.UNRESOLVED:
+            for assessment in assessments.values():
+                assessment.limitations.append(
+                    "Sector is insufficient to identify the company's economics; "
+                    "supply a business-type override or a more specific industry"
+                )
+
         intrinsic = [
             assessment
             for assessment in assessments.values()
             if assessment.model != ValuationModel.COMPARABLE_MULTIPLES
             and not assessment.hard_rejections
         ]
-        primary_model = max(intrinsic, key=lambda item: item.score).model
+        primary_model = (
+            None
+            if profile.business_archetype == BusinessArchetype.UNRESOLVED
+            else max(intrinsic, key=lambda item: item.score).model
+        )
 
         models = [
             self._result(
@@ -367,7 +385,7 @@ class ValuationModelSelector:
         self,
         assessment: _Assessment,
         profile: ValuationProfile,
-        primary_model: ValuationModel,
+        primary_model: ValuationModel | None,
     ) -> ModelSuitability:
         score = max(0, min(100, assessment.score))
         missing = assessment.required_inputs - profile.available_inputs
