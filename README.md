@@ -1,32 +1,50 @@
 # Edgarito
 
-**A comprehensive Python toolkit for SEC EDGAR data analysis and financial statement extraction.**
+Edgarito retrieves SEC EDGAR Company Facts, stores the raw provider responses in a filesystem cache, normalizes selected US-GAAP concepts into provider-neutral observations, and displays historical financial statements in a CLI.
 
-Edgarito provides an async client for the SEC EDGAR REST API with structured Pydantic schemas, powerful financial statement readers with robust data deduplication, computed financial metrics, and automated red flag detection for investment analysis.
+## Install
 
-├── enums/                  # Enumerations (filing types, periods, granularity)
-├── schemas/               # Pydantic models for API responses
-├── services/
-│   ├── retrieval/         # EDGAR REST API clients
-│   ├── cache/             # FileSystem caching
-│   ├── financial/         # Financial statement readers
-│   └── analysis/          # Red flags and metrics
-└── examples/              # Usage examples
+```bash
+pip install -e .
 ```
 
-## Contributing
+SEC requests require a descriptive user agent containing contact information:
 
-Contributions welcome! Areas for improvement:
+```bash
+export EDGARITO_USER_AGENT="Your Name your-email@example.com"
+```
 
-- Additional financial metrics
-- More red flag detection rules  
-- Support for IFRS (currently US-GAAP only)
-- Direct XBRL parsing from filings (as fallback to REST API)
+PowerShell:
 
-## License
+```powershell
+$env:EDGARITO_USER_AGENT = "Your Name your-email@example.com"
+```
 
-MIT License - see LICENSE file for details
+## Display financials
 
-## Disclaimer
+```bash
+edgarito financials --ticker AAPL
+edgarito financials --ticker AAPL --period quarterly --limit 8
+edgarito financials --cik 320193 --period all
+edgarito financials --ticker AAPL --concept revenue --concept net_income
+```
 
-This tool is for informational purposes only. Not financial advice. Always verify data with official SEC filings at https://www.sec.gov/edgar.
+The same command works without installing the console script:
+
+```bash
+python -m edgarito financials --ticker AAPL --user-agent "Your Name your-email@example.com"
+```
+
+Provider responses are cached below `cache/providers/edgar/`. Use `--refresh` to bypass existing snapshots. Asterisks in quarterly output mark values derived from reported YTD or full-year facts.
+
+## Current flow
+
+```text
+EdgarClient
+    -> services/cache
+    -> SecUsGaapNormalizer
+    -> NormalizedCompanyFinancials
+    -> FinancialsConsolePresenter
+```
+
+The normalized observations retain source taxonomy, source concept, accession number, filing form, filed date, unit, and derivation metadata so future providers can feed the same schema and be compared under `crosscheck`.

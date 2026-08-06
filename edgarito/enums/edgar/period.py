@@ -10,7 +10,8 @@ class FiscalPeriod(enum.Enum):
     Q2 = "Q2"
     Q3 = "Q3"
     Q4 = "Q4"
-    Year = "FY"
+    FY = "FY"
+    Year = "FY"  # Backwards-compatible alias.
 
     def __gt__(self, other: "FiscalPeriod"):
         return FISCAL_PERIOD_PRIORITY[self] > FISCAL_PERIOD_PRIORITY[other]

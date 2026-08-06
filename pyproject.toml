@@ -5,8 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edgarito"
 version = "0.1.1"
-description = "Async client for the REST API of EDGAR which returns data structured into pydantic schemas and SEC filings"
+description = "Retrieve and normalize company financial data from SEC EDGAR"
 readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.11,<4",
+    "pydantic>=2.10,<3",
+]
 authors = [
     { name = "Jean-François Kener", email = "betterask.jf@gmail.com" }
 ]
@@ -14,7 +19,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent"
-]   
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+edgarito = "edgarito.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["edgarito", "edgarito.*"]

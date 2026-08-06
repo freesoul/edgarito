@@ -4,6 +4,7 @@ import pathlib
 
 import urllib.parse
 
+
 class FileSystemCache:
     def __init__(self, root_directory: Union[str, pathlib.Path]):
         self._logger = logging.getLogger(__class__.__name__)
@@ -20,11 +21,11 @@ class FileSystemCache:
         with file_path.open("r", encoding="utf-8") as file:
             return file.read()
 
-    def save(self, path_in_cache: str, content: bytes):
+    def save(self, path_in_cache: str, content: str) -> None:
         file_path = self._root / path_in_cache
         file_path.parent.mkdir(parents=True, exist_ok=True)
         self._logger.info(f"Saving to cache: {file_path}")
-        with open(file_path, "w") as file:
+        with file_path.open("w", encoding="utf-8") as file:
             file.write(content)
 
     def remove(self, path_in_cache: str):
@@ -35,4 +36,5 @@ class FileSystemCache:
 
     @staticmethod
     def path_from_url(url: str) -> str:
-        return urllib.parse.urlparse(url).path.lstrip("/")
+        parsed = urllib.parse.urlparse(url)
+        return f"{parsed.netloc}/{parsed.path.lstrip('/')}"
