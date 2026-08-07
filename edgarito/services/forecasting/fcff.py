@@ -19,7 +19,6 @@ from edgarito.services.forecasting.models import (
 )
 from edgarito.services.metrics.calculator import (
     OPERATING_WORKING_CAPITAL_CONCEPTS,
-    OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS,
     operating_working_capital_value,
 )
 
@@ -243,13 +242,7 @@ class FcffForecastService:
 
         periods = []
         for fiscal_year, values in sorted(by_year.items()):
-            if (
-                not (
-                    cls._CORE_REQUIRED_CONCEPTS
-                    | OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
-                )
-                <= values.keys()
-            ):
+            if not cls._CORE_REQUIRED_CONCEPTS <= values.keys():
                 continue
             operating_working_capital = operating_working_capital_value(values)
             if operating_working_capital is None:
@@ -325,25 +318,42 @@ class FcffForecastService:
             for observation in annual
             if observation.fiscal_year == latest_year
         }
-        missing = (
-            cls._CORE_REQUIRED_CONCEPTS
-            | OPERATING_WORKING_CAPITAL_REQUIRED_ASSET_CONCEPTS
+        missing = sorted(
+            cls._CORE_REQUIRED_CONCEPTS - present, key=lambda item: item.value
         )
-        missing = sorted(missing - present, key=lambda item: item.value)
         details = [concept.value for concept in missing]
-        has_detailed_liabilities = {
-            FinancialConcept.ACCOUNTS_PAYABLE,
-            FinancialConcept.ACCRUED_LIABILITIES,
-            FinancialConcept.DEFERRED_REVENUE_CURRENT,
-        } <= present
-        if (
-            not has_detailed_liabilities
-            and FinancialConcept.CURRENT_LIABILITIES not in present
-        ):
-            details.append(
-                "working-capital liabilities (accrued/payables/deferred revenue "
-                "or total current liabilities)"
-            )
+        latest_values = {
+            observation.concept: observation
+            for observation in annual
+            if observation.fiscal_year == latest_year
+        }
+        if operating_working_capital_value(latest_values) is None:
+            has_detailed_assets = {
+                FinancialConcept.ACCOUNTS_RECEIVABLE,
+                FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+            } <= present
+            has_aggregate_assets = {
+                FinancialConcept.CURRENT_ASSETS,
+                FinancialConcept.CASH_AND_EQUIVALENTS,
+            } <= present
+            has_detailed_liabilities = {
+                FinancialConcept.ACCOUNTS_PAYABLE,
+                FinancialConcept.ACCRUED_LIABILITIES,
+                FinancialConcept.DEFERRED_REVENUE_CURRENT,
+            } <= present
+            has_current_liabilities = FinancialConcept.CURRENT_LIABILITIES in present
+            if not has_detailed_assets and not has_aggregate_assets:
+                details.append(
+                    "working-capital assets (receivables and prepaid/other current "
+                    "assets, or total current assets and cash)"
+                )
+            if not has_current_liabilities and not (
+                has_detailed_assets and has_detailed_liabilities
+            ):
+                details.append(
+                    "working-capital liabilities (accrued/payables/deferred revenue "
+                    "with detailed assets, or total current liabilities)"
+                )
         detail = ", ".join(details)
         suffix = f" Missing for FY{latest_year}: {detail}." if details else ""
         raise ValueError(

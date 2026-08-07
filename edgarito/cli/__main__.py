@@ -1554,6 +1554,38 @@ async def _retrieve_automatic_assumption_inputs(
                 else:
                     risk_free = await risk_free_task
             inputs["risk_free_series"] = risk_free
+        elif normalized_currency == "DKK":
+            today = datetime.date.today()
+            inflation_start = today - datetime.timedelta(days=365 * 6)
+            async with EcbClient(cache) as ecb:
+                risk_free_task = ecb.get_series(
+                    "IRS",
+                    "M.DK.L.L40.CI.0000.DKK.N.Z",
+                    kind=ReferenceSeriesKind.GOVERNMENT_YIELD,
+                    unit=ReferenceValueUnit.PERCENTAGE_POINTS,
+                    start_period=today - datetime.timedelta(days=120),
+                    end_period=today,
+                    use_cache=use_cache,
+                    make_cache=True,
+                )
+                if needs_terminal:
+                    risk_free, inflation = await asyncio.gather(
+                        risk_free_task,
+                        ecb.get_series(
+                            "HICP",
+                            "M.DK.N.000000.4D0.ANR",
+                            kind=ReferenceSeriesKind.INFLATION_RATE,
+                            unit=ReferenceValueUnit.PERCENT_CHANGE,
+                            start_period=inflation_start,
+                            end_period=today,
+                            use_cache=use_cache,
+                            make_cache=True,
+                        ),
+                    )
+                    inputs["inflation_series"] = inflation
+                else:
+                    risk_free = await risk_free_task
+            inputs["risk_free_series"] = risk_free
         elif normalized_currency == "USD":
             async with TreasuryClient(cache) as treasury:
                 inputs["risk_free_series"] = await treasury.get_par_yield(
@@ -1576,7 +1608,7 @@ async def _retrieve_automatic_assumption_inputs(
                     )
         else:
             raise ValueError(
-                f"automatic macro assumptions currently support EUR and USD, not "
+                f"automatic macro assumptions currently support DKK, EUR, and USD, not "
                 f"{normalized_currency}; set risk_free_rate/WACC and terminal growth "
                 "in the profile"
             )

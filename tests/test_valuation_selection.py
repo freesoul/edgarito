@@ -1,7 +1,9 @@
+import asyncio
 import datetime
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -336,3 +338,46 @@ def test_cli_reports_valuation_suitability_from_cached_data(
     assert "PRIMARY" in output
     assert "FCFF DCF — suitability 90/100; data Partial" in output
     assert "Comparable Multiples" in output
+
+
+def test_automatic_assumptions_use_danish_yield_and_inflation_for_dkk(
+    tmp_path, monkeypatch
+):
+    calls = []
+    risk_free = object()
+    inflation = object()
+
+    class FakeEcbClient:
+        def __init__(self, cache):
+            self.cache = cache
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+        async def get_series(self, flow_ref, key, **kwargs):
+            calls.append((flow_ref, key, kwargs))
+            return risk_free if flow_ref == "IRS" else inflation
+
+    monkeypatch.setattr(cli_module, "EcbClient", FakeEcbClient)
+    args = SimpleNamespace(cache_dir=tmp_path, refresh=False, ticker="NVO")
+
+    inputs = asyncio.run(
+        cli_module._retrieve_automatic_assumption_inputs(
+            args,
+            _financials(),
+            "DKK",
+            needs_wacc=False,
+            needs_terminal=True,
+        )
+    )
+
+    assert inputs["risk_free_series"] is risk_free
+    assert inputs["inflation_series"] is inflation
+    assert [(flow, key) for flow, key, _ in calls] == [
+        ("IRS", "M.DK.L.L40.CI.0000.DKK.N.Z"),
+        ("HICP", "M.DK.N.000000.4D0.ANR"),
+    ]
+    assert all(call[2]["end_period"] == datetime.date.today() for call in calls)

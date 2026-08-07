@@ -229,6 +229,69 @@ def test_valuation_metrics_require_complete_inputs_and_consistent_units():
     assert second_year_metrics == set()
 
 
+def test_operating_working_capital_uses_aggregate_balance_sheet_fallback():
+    financials = _financials()
+    financials.observations = [
+        observation
+        for observation in financials.observations
+        if observation.concept
+        not in {
+            FinancialConcept.ACCOUNTS_RECEIVABLE,
+            FinancialConcept.INVENTORY,
+            FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+            FinancialConcept.ACCOUNTS_PAYABLE,
+            FinancialConcept.ACCRUED_LIABILITIES,
+            FinancialConcept.DEFERRED_REVENUE_CURRENT,
+        }
+    ] + [
+        _observation(concept, value, fiscal_year)
+        for fiscal_year, values in {
+            2023: {
+                FinancialConcept.CURRENT_ASSETS: "50",
+                FinancialConcept.SHORT_TERM_INVESTMENTS: "2",
+                FinancialConcept.CURRENT_LIABILITIES: "30",
+            },
+            2024: {
+                FinancialConcept.CURRENT_ASSETS: "60",
+                FinancialConcept.SHORT_TERM_INVESTMENTS: "3",
+                FinancialConcept.CURRENT_LIABILITIES: "35",
+            },
+        }.items()
+        for concept, value in values.items()
+    ]
+
+    metrics = FinancialMetricsService().calculate(
+        financials,
+        metrics={
+            FinancialMetric.OPERATING_WORKING_CAPITAL,
+            FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL,
+        },
+    )
+
+    observation = next(
+        item
+        for item in metrics.observations
+        if item.metric == FinancialMetric.OPERATING_WORKING_CAPITAL
+        and item.fiscal_year == 2024
+    )
+    assert observation.value == Decimal("10")
+    assert observation.formula == (
+        "current assets - cash and equivalents - reported short-term investments "
+        "- current liabilities + reported current debt"
+    )
+    assert observation.input_concepts == (
+        FinancialConcept.CASH_AND_EQUIVALENTS,
+        FinancialConcept.CURRENT_ASSETS,
+        FinancialConcept.CURRENT_LIABILITIES,
+        FinancialConcept.LONG_TERM_DEBT_CURRENT,
+        FinancialConcept.SHORT_TERM_DEBT,
+        FinancialConcept.SHORT_TERM_INVESTMENTS,
+    )
+    assert _metric_value(
+        metrics, FinancialMetric.CHANGE_IN_OPERATING_WORKING_CAPITAL, 2024
+    ) == Decimal("4")
+
+
 def test_debt_metrics_sum_reported_components_when_one_line_is_absent():
     financials = _financials()
     financials.observations = [

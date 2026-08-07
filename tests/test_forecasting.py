@@ -406,6 +406,57 @@ def test_fcff_falls_back_to_aggregate_current_liabilities_for_working_capital():
     assert forecast.base_fcff == Decimal("19.0")
 
 
+def test_fcff_falls_back_to_aggregate_current_assets_and_liabilities():
+    financials = _fcff_financials()
+    aggregate_balances = {
+        2023: {
+            FinancialConcept.CURRENT_ASSETS: "50",
+            FinancialConcept.CASH_AND_EQUIVALENTS: "8",
+            FinancialConcept.SHORT_TERM_INVESTMENTS: "2",
+            FinancialConcept.CURRENT_LIABILITIES: "30",
+            FinancialConcept.SHORT_TERM_DEBT: "5",
+        },
+        2024: {
+            FinancialConcept.CURRENT_ASSETS: "60",
+            FinancialConcept.CASH_AND_EQUIVALENTS: "10",
+            FinancialConcept.SHORT_TERM_INVESTMENTS: "3",
+            FinancialConcept.CURRENT_LIABILITIES: "35",
+            FinancialConcept.SHORT_TERM_DEBT: "8",
+        },
+    }
+    financials = financials.model_copy(
+        update={
+            "observations": [
+                item
+                for item in financials.observations
+                if item.concept
+                not in {
+                    FinancialConcept.ACCOUNTS_RECEIVABLE,
+                    FinancialConcept.INVENTORY,
+                    FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS,
+                    FinancialConcept.ACCOUNTS_PAYABLE,
+                    FinancialConcept.ACCRUED_LIABILITIES,
+                    FinancialConcept.DEFERRED_REVENUE_CURRENT,
+                }
+            ]
+            + [
+                _observation(concept, value, fiscal_year)
+                for fiscal_year, period_values in aggregate_balances.items()
+                for concept, value in period_values.items()
+            ]
+        }
+    )
+
+    forecast = FcffForecastService().forecast(
+        financials,
+        FcffForecastParameters(forecast_years=1),
+    )
+
+    assert forecast.historical_fiscal_years == (2023, 2024)
+    assert forecast.base_operating_working_capital == Decimal("20")
+    assert forecast.base_fcff == Decimal("18.0")
+
+
 def test_fcff_accepts_inventory_folded_into_other_current_assets():
     financials = _fcff_financials()
     combined_other_assets = {2023: "15", 2024: "18"}
