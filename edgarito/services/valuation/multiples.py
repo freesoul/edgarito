@@ -57,23 +57,33 @@ class LtmMultiplesService:
         financials: NormalizedCompanyFinancials,
         market_data: SecurityMarketData,
         as_of: datetime.date | None = None,
+        *,
+        point_in_time: bool = False,
     ) -> CompanyTradingMultiples:
         try:
-            return self._compute_quarterly(financials, market_data, as_of)
+            return self._compute_quarterly(
+                financials, market_data, as_of, point_in_time=point_in_time
+            )
         except ValueError as exc:
             if "four consecutive quarterly revenue periods" not in str(exc):
                 raise
-            return self._compute_latest_annual(financials, market_data, as_of)
+            return self._compute_latest_annual(
+                financials, market_data, as_of, point_in_time=point_in_time
+            )
 
     def _compute_quarterly(
         self,
         financials: NormalizedCompanyFinancials,
         market_data: SecurityMarketData,
         as_of: datetime.date | None = None,
+        *,
+        point_in_time: bool = False,
     ) -> CompanyTradingMultiples:
         ticker = financials.ticker or financials.company_id
         price = self._latest_price(market_data, as_of)
-        by_period = self._quarterly_by_period(financials, as_of)
+        by_period = self._quarterly_by_period(
+            financials, as_of, point_in_time=point_in_time
+        )
         period_keys = self._latest_ltm_keys(by_period)
         first_revenue = by_period[period_keys[0]][FinancialConcept.REVENUE]
         predecessor = next(
@@ -181,6 +191,8 @@ class LtmMultiplesService:
         financials: NormalizedCompanyFinancials,
         market_data: SecurityMarketData,
         as_of: datetime.date | None,
+        *,
+        point_in_time: bool = False,
     ) -> CompanyTradingMultiples:
         price = self._latest_price(market_data, as_of)
         annual = [
@@ -188,7 +200,10 @@ class LtmMultiplesService:
             for item in financials.observations
             if item.granularity == Granularity.ANNUAL
             and item.fiscal_period == FiscalPeriod.FY
-            and (as_of is None or item.period_end <= as_of)
+            and (
+                as_of is None
+                or self._is_available(item, as_of, point_in_time=point_in_time)
+            )
         ]
         revenue_periods = [
             item for item in annual if item.concept == FinancialConcept.REVENUE
@@ -221,7 +236,11 @@ class LtmMultiplesService:
         ]
         by_concept = {}
         for item in same_period:
-            by_concept.setdefault(item.concept, item)
+            current = by_concept.get(item.concept)
+            if current is None or self.availability_date(item) > self.availability_date(
+                current
+            ):
+                by_concept[item.concept] = item
         currency = revenue.unit
 
         def value(concept):
@@ -299,23 +318,65 @@ class LtmMultiplesService:
             warnings=warnings,
         )
 
-    @staticmethod
+    @classmethod
     def _quarterly_by_period(
+        cls,
         financials: NormalizedCompanyFinancials,
         as_of: datetime.date | None = None,
+        *,
+        point_in_time: bool = False,
     ) -> dict[PeriodKey, dict[FinancialConcept, FinancialObservation]]:
         by_period: dict[PeriodKey, dict[FinancialConcept, FinancialObservation]] = {}
         for observation in financials.observations:
             if (
                 observation.granularity != Granularity.QUARTERLY
                 or observation.fiscal_period == FiscalPeriod.FY
-                or (as_of is not None and observation.period_end > as_of)
+                or (
+                    as_of is not None
+                    and not cls._is_available(
+                        observation, as_of, point_in_time=point_in_time
+                    )
+                )
             ):
                 continue
-            by_period.setdefault(observation.period_key, {}).setdefault(
-                observation.concept, observation
-            )
+            values = by_period.setdefault(observation.period_key, {})
+            current = values.get(observation.concept)
+            if current is None or cls.availability_date(
+                observation
+            ) > cls.availability_date(current):
+                values[observation.concept] = observation
         return by_period
+
+    @staticmethod
+    def availability_date(observation: FinancialObservation) -> datetime.date:
+        """Return the earliest defensible date for a historical snapshot.
+
+        SEC-normalized observations carry their actual filing date. Yahoo's
+        standardized statement tables do not expose filing dates, so use a
+        conservative, provider-wide publication lag instead of pretending the
+        period-end values were public on the balance-sheet date.
+        """
+        if observation.filed is not None:
+            return observation.filed
+        if observation.provider.casefold() == "yahoo":
+            lag_days = 90 if observation.granularity == Granularity.ANNUAL else 45
+            return observation.period_end + datetime.timedelta(days=lag_days)
+        return observation.period_end
+
+    @classmethod
+    def _is_available(
+        cls,
+        observation: FinancialObservation,
+        as_of: datetime.date,
+        *,
+        point_in_time: bool,
+    ) -> bool:
+        available_on = (
+            cls.availability_date(observation)
+            if point_in_time or observation.filed is not None
+            else observation.period_end
+        )
+        return available_on <= as_of
 
     @classmethod
     def _latest_ltm_keys(

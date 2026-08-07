@@ -973,8 +973,9 @@ class ComparableImpliedValuationConsolePresenter:
             f"Metric: {result.forecast_metric_label}",
             "",
             "MULTIPLE RESOLUTION",
-            f"Fundamental anchor:             {anchor(multiple.fundamental_anchor)}",
-            f"Peer median anchor:             {anchor(multiple.peer_anchor)}",
+            f"Fundamental forward anchor:     {anchor(multiple.fundamental_anchor)}",
+            f"Peer/base multiple (current LTM): {anchor(multiple.market_anchor)}",
+            f"Peer median:                    {anchor(multiple.peer_anchor)}",
             f"Target historical median:       {anchor(multiple.historical_anchor)}",
             "Target historical IQR:          "
             + (
@@ -998,10 +999,15 @@ class ComparableImpliedValuationConsolePresenter:
                 else "unavailable"
             ),
             f"Current target multiple:        {anchor(multiple.current_target_anchor)}",
-            f"Observed market anchor:         {anchor(multiple.market_anchor)}",
-            "Median synchronized peer premium:"
+            "Current target premium vs base: "
             + (
-                f" {multiple.historical_peer_premium:+,.1f}%"
+                f"{multiple.observed_premium:+,.1%}"
+                if multiple.observed_premium is not None
+                else "unavailable"
+            ),
+            "Historical target premium median:"
+            + (
+                f" {multiple.historical_peer_premium:+,.1%}"
                 if multiple.historical_peer_premium is not None
                 else " unavailable"
             ),
@@ -1016,12 +1022,24 @@ class ComparableImpliedValuationConsolePresenter:
             f"Historical persistence:         {multiple.historical_persistence:,.1%}",
             f"Fundamental-support score:      {multiple.fundamental_support:,.1%}",
             f"Horizon retention:              {multiple.horizon_retention:,.1%}",
-            f"Combined premium persistence:   {multiple.persistence_factor:,.1%}",
-            f"Resolved multiple:              {multiple.point_estimate:,.2f}x",
+            f"Resolved premium persistence:   {multiple.persistence_factor:,.1%}",
+            "Resolved target premium:        "
+            + (
+                f"{multiple.resolved_premium:+,.1%}"
+                if multiple.resolved_premium is not None
+                else "unavailable"
+            ),
+            f"Resolved forward multiple:      {multiple.point_estimate:,.2f}x",
             f"Reasonable range:                {multiple.lower_bound:,.2f}x-"
             f"{multiple.upper_bound:,.2f}x",
-            f"Confidence: {multiple.confidence.value} | Peer sample: "
-            f"{multiple.sample_size}",
+            "Confidence:",
+            f"  peer baseline:                {multiple.peer_confidence.value}",
+            f"  target history:               "
+            f"{multiple.target_history_confidence.value}",
+            f"  premium persistence:          "
+            f"{multiple.premium_persistence_confidence.value}",
+            f"  overall relative valuation:   {multiple.confidence.value}",
+            f"Peer sample: {multiple.sample_size}",
             "",
             f"{'Case':<12}{'Multiple':>12}{'Target-date price':>22}{'Present value':>20}",
             "-" * 66,
@@ -1043,7 +1061,10 @@ class ComparableImpliedValuationConsolePresenter:
                     "MODEL COMPARISON",
                     f"Intrinsic FCFF DCF:             "
                     f"{result.intrinsic_value_per_share:,.2f} {result.currency}",
-                    f"Relative present-value estimate: "
+                    f"Relative target-date price:     "
+                    f"{result.point_case.implied_value_per_share:,.2f} "
+                    f"{result.currency}",
+                    f"Relative present-value equivalent today: "
                     f"{result.point_case.present_value_per_share:,.2f} "
                     f"{result.currency}",
                     f"Market-premium difference:      {difference:+,.2f} "
@@ -1074,6 +1095,9 @@ class ComparableImpliedValuationConsolePresenter:
                 [
                     f"Analyst target price:            "
                     f"{result.analyst_target_price:,.2f} {result.currency}",
+                    "Analyst target vs resolved target-date price: "
+                    f"{result.analyst_target_price - result.point_case.implied_value_per_share:+,.2f} "
+                    f"{result.currency}",
                     f"Analyst-target implied multiple: "
                     f"{result.analyst_target_implied_multiple:,.2f}x "
                     f"{ValuationSelectionConsolePresenter._label(result.basis.value)}",

@@ -301,11 +301,13 @@ uv run edgarito valuation --ticker RACE --market eu \
 ```
 
 The output shows the intrinsic DCF and a separate forward target-price range.
-The multiple resolver combines a DCF-consistent fundamental anchor, the target's
-available point-in-time history, and the selected peer median. Any observed
-premium is retained only after multiplying historical stability by observable
-economic support and horizon decay. Thin history or too few peers lowers
-confidence and produces warnings instead of fabricated precision. Use
+The multiple resolver treats the selected peer median as a baseline and the
+target multiple as a ratio premium to that baseline; it never averages the two
+raw multiples. Synchronized historical target-versus-peer premiums estimate
+mean reversion, while a horizon-matched DCF forward multiple and observable peer
+economics measure fundamental support. Thin history or too few peers lowers
+separately reported confidence dimensions and produces warnings instead of
+fabricated precision. Use
 `--model comparables` to print only the relative result. Add, for example,
 `--analyst-target-price 400` to show the forward multiple implied by an external
 price target rather than treating that target as a model input.
@@ -320,7 +322,7 @@ multiple:
     "basis": "ev_to_ebitda",
     "horizon_years": "1",
     "multiple_resolution": {
-      "method": "blended",
+      "method": "premium_persistence",
       "use_target_history": true,
       "use_peer_median": true,
       "use_fundamental_anchor": true,

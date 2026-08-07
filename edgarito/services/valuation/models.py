@@ -311,6 +311,8 @@ class ComparableMultiplesReport(BaseModel):
 class HistoricalMultipleObservation(BaseModel):
     observed_on: datetime.date
     value: Decimal = Field(gt=0)
+    fundamentals_period_end: Optional[datetime.date] = None
+    price_date: Optional[datetime.date] = None
 
 
 class HistoricalMultipleSummary(BaseModel):
@@ -351,16 +353,18 @@ class ResolvedMultiple(BaseModel):
     current_target_anchor: Optional[Decimal] = None
     market_anchor: Optional[Decimal] = None
     observed_premium: Optional[Decimal] = None
+    resolved_premium: Optional[Decimal] = None
     historical_peer_premium: Optional[Decimal] = None
     premium_history_sample_size: int = Field(default=0, ge=0)
-    premium_mean_reversion_beta: Optional[Decimal] = Field(
-        default=None, ge=0, le=1
-    )
+    premium_mean_reversion_beta: Optional[Decimal] = Field(default=None, ge=0, le=1)
     historical_persistence: Decimal = Field(ge=0, le=1)
     fundamental_support: Decimal = Field(ge=0, le=1)
     horizon_retention: Decimal = Field(ge=0, le=1)
     persistence_factor: Decimal = Field(ge=0, le=1)
     sample_size: int = Field(ge=0)
+    peer_confidence: MultipleConfidence = MultipleConfidence.LOW
+    target_history_confidence: MultipleConfidence = MultipleConfidence.LOW
+    premium_persistence_confidence: MultipleConfidence = MultipleConfidence.LOW
     confidence: MultipleConfidence
     methodology: str
     warnings: tuple[str, ...] = ()

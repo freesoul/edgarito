@@ -92,7 +92,7 @@
     "basis": "ev_to_ebitda",
     "horizon_years": "1",
     "multiple_resolution": {
-      "method": "blended",
+      "method": "premium_persistence",
       "use_target_history": true,
       "use_peer_median": true,
       "use_fundamental_anchor": true,

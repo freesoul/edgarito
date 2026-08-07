@@ -40,6 +40,28 @@ class _FakeEcbClient:
         )
 
 
+class _HistoricalFakeEcbClient:
+    async def get_series(self, flow_ref, key, **kwargs):
+        return ReferenceMarketSeries(
+            provider="ecb",
+            series_id=f"EXR/{key}",
+            name="USD per EUR",
+            kind=ReferenceSeriesKind.EXCHANGE_RATE,
+            unit=ReferenceValueUnit.CURRENCY_PER_CURRENCY,
+            frequency=MarketDataFrequency.DAILY,
+            retrieved_at=RETRIEVED,
+            observations=(
+                ReferenceObservation(
+                    period_end=datetime.date(2025, 8, 5), value=Decimal("1.20")
+                ),
+                ReferenceObservation(
+                    period_end=datetime.date(2026, 8, 5), value=Decimal("1.15")
+                ),
+            ),
+            currency="USD",
+        )
+
+
 def test_ecb_fx_converter_aligns_yahoo_quote_with_statement_currency():
     market_data = SecurityMarketData(
         provider="yahoo",
@@ -88,3 +110,33 @@ def test_ecb_fx_converter_uses_euro_cross_for_two_non_euro_currencies():
 
     assert converted.latest_price is not None
     assert converted.latest_price.close == Decimal("85")
+
+
+def test_ecb_fx_converter_preserves_and_date_aligns_full_price_history():
+    market_data = SecurityMarketData(
+        provider="yahoo",
+        provider_symbol="RACE",
+        identifiers=SecurityIdentifiers(ticker="RACE"),
+        currency="USD",
+        frequency=MarketDataFrequency.DAILY,
+        retrieved_at=RETRIEVED,
+        prices=(
+            PriceBar(observed_on=datetime.date(2025, 8, 6), close=Decimal("120")),
+            PriceBar(observed_on=datetime.date(2026, 8, 6), close=Decimal("115")),
+        ),
+    )
+
+    converted = asyncio.run(
+        EcbMarketDataCurrencyConverter(_HistoricalFakeEcbClient()).convert(
+            market_data, "EUR"
+        )
+    )
+
+    assert [item.close for item in converted.prices] == [
+        Decimal("100"),
+        Decimal("100"),
+    ]
+    assert [item.observed_on for item in converted.prices] == [
+        datetime.date(2025, 8, 6),
+        datetime.date(2026, 8, 6),
+    ]

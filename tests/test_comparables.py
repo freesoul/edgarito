@@ -4,6 +4,7 @@ from statistics import median
 
 import pytest
 
+from edgarito.cli.presentation.console import ComparableImpliedValuationConsolePresenter
 from edgarito.config.valuation import MultipleResolutionConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -30,8 +31,10 @@ from edgarito.services.valuation import (
     FcffDcfParameters,
     FcffDcfService,
     HistoricalMultipleObservation,
+    HistoricalMultiplesService,
     HistoricalMultipleSummary,
     LtmMultiplesService,
+    MultipleConfidence,
     MultipleResolver,
     MultipleStatus,
     PeerSelectionParameters,
@@ -281,6 +284,61 @@ def test_latest_annual_fallback_is_explicit_when_quarters_are_unavailable():
     assert any("latest annual" in warning for warning in result.warnings)
 
 
+def test_point_in_time_multiples_exclude_financials_filed_after_as_of_date():
+    as_of = datetime.date(2026, 4, 15)
+    financials = _financials()
+    available = [
+        item.model_copy(
+            update={"filed": min(item.period_end + datetime.timedelta(days=10), as_of)}
+        )
+        for item in financials.observations
+    ]
+    current_revenue = next(
+        item
+        for item in available
+        if item.concept == FinancialConcept.REVENUE
+        and item.fiscal_period == FiscalPeriod.Q1
+    )
+    future_amendment = current_revenue.model_copy(
+        update={"value": Decimal("1000"), "filed": datetime.date(2026, 4, 20)}
+    )
+    financials = financials.model_copy(
+        update={"observations": [future_amendment, *available]}
+    )
+
+    result = LtmMultiplesService().compute(
+        financials, _market_data(), as_of=as_of, point_in_time=True
+    )
+
+    assert result.fundamentals.revenue == Decimal("400")
+    assert result.fundamentals.period_end == datetime.date(2026, 3, 31)
+
+    amended = LtmMultiplesService().compute(
+        financials,
+        _market_data(),
+        as_of=datetime.date(2026, 4, 30),
+        point_in_time=True,
+    )
+    assert amended.fundamentals.revenue == Decimal("1300")
+
+
+def test_historical_multiple_failures_include_date_and_reason():
+    market = _market_data("EUR").model_copy(
+        update={
+            "prices": (
+                PriceBar(observed_on=datetime.date(2026, 3, 31), close=Decimal("10")),
+            )
+        }
+    )
+    summary = HistoricalMultiplesService().compute(
+        _financials(), market, RelativeValuationBasis.EV_TO_EBITDA
+    )
+
+    assert not summary.observations
+    assert any("2026-03-31" in warning for warning in summary.warnings)
+    assert any("FX alignment is required" in warning for warning in summary.warnings)
+
+
 def test_comparable_report_aggregates_only_selected_peer_values():
     target_profile = _profile("TARGET")
     peer_profiles = [_profile("PEER1"), _profile("PEER2", revenue="1800")]
@@ -433,6 +491,8 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
         intrinsic.terminal_value.terminal_value / Decimal("125")
     )
     assert resolved.peer_anchor == Decimal("10")
+    assert resolved.market_anchor == Decimal("10")
+    assert resolved.observed_premium == Decimal("5.2") / Decimal("10") - Decimal(1)
     assert resolved.historical_anchor == Decimal("12.5")
     assert resolved.lower_bound <= resolved.point_estimate <= resolved.upper_bound
     assert resolved.persistence_factor < Decimal(1)
@@ -446,6 +506,177 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     )
     assert implied.analyst_target_implied_multiple == Decimal("1.76")
     assert implied.current_price_implied_multiple == Decimal("1.6")
+    rendered = ComparableImpliedValuationConsolePresenter().render(implied)
+    assert "Analyst target vs resolved target-date price" in rendered
+    assert "Relative present-value equivalent today" in rendered
+
+
+def test_zero_persistence_collapses_to_peer_base_and_never_averages_raw_multiples():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            insufficient_history_persistence=Decimal(0),
+        ),
+    )
+
+    assert resolved.market_anchor == Decimal("10")
+    assert resolved.observed_premium == Decimal("5.2") / Decimal("10") - Decimal(1)
+    assert resolved.persistence_factor == 0
+    assert resolved.point_estimate == Decimal("10")
+
+
+def test_full_persistence_retains_observed_ratio_premium(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args, **kwargs: (Decimal(1), 6)),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            insufficient_history_persistence=Decimal(1),
+            annual_premium_decay=Decimal(0),
+        ),
+    )
+
+    assert resolved.persistence_factor == 1
+    assert resolved.point_estimate == Decimal("5.2")
+
+
+def test_missing_history_forces_low_overall_confidence():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    assert resolved.peer_confidence == MultipleConfidence.MEDIUM
+    assert resolved.target_history_confidence == MultipleConfidence.LOW
+    assert resolved.premium_persistence_confidence == MultipleConfidence.LOW
+    assert resolved.confidence == MultipleConfidence.LOW
+
+
+def test_sufficient_synchronized_premium_history_increases_confidence():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    dates = tuple(datetime.date(year, 12, 31) for year in range(2018, 2026))
+    target_history = HistoricalMultipleSummary(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        observations=tuple(
+            HistoricalMultipleObservation(observed_on=date, value=value)
+            for date, value in zip(
+                dates,
+                (
+                    Decimal("12"),
+                    Decimal("13"),
+                    Decimal("12.5"),
+                    Decimal("13.5"),
+                    Decimal("13"),
+                    Decimal("14"),
+                    Decimal("13.5"),
+                    Decimal("14.5"),
+                ),
+                strict=True,
+            )
+        ),
+    )
+    peer_histories = tuple(
+        HistoricalMultipleSummary(
+            basis=RelativeValuationBasis.EV_TO_EBITDA,
+            observations=tuple(
+                HistoricalMultipleObservation(observed_on=date, value=value)
+                for date, value in zip(dates, values, strict=True)
+            ),
+        )
+        for values in (
+            tuple(Decimal("9") + Decimal(index) / 10 for index in range(8)),
+            tuple(Decimal("10") + Decimal(index) / 10 for index in range(8)),
+        )
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=target_history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    assert resolved.target_history_confidence == MultipleConfidence.HIGH
+    assert resolved.premium_persistence_confidence == MultipleConfidence.MEDIUM
+    assert resolved.confidence == MultipleConfidence.MEDIUM
+
+
+def _basic_resolver_inputs():
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    peers = [
+        target.model_copy(
+            update={
+                "ticker": f"PEER{index}",
+                "multiples": [
+                    item.model_copy(update={"value": value})
+                    if item.basis == RelativeValuationBasis.EV_TO_EBITDA
+                    else item
+                    for item in target.multiples
+                ],
+            }
+        )
+        for index, value in enumerate((Decimal("8"), Decimal("12")), start=1)
+    ]
+    universe = PeerUniverseSelector().select(
+        _profile("TARGET"),
+        [_profile("PEER1"), _profile("PEER2")],
+        PeerSelectionParameters(
+            max_peers=2,
+            preferred_minimum=2,
+            minimum_score=0,
+        ),
+    )
+    report = ComparableMultiplesService().build(universe, target, peers)
+    forecast = _relative_forecast()
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal("20"),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    intrinsic = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+    return target, report, forecast, intrinsic
 
 
 def _relative_forecast() -> FcffForecast:
@@ -490,3 +721,167 @@ def _relative_forecast() -> FcffForecast:
         assumption_sources={},
         observations=[observation],
     )
+
+
+def _multiyear_forecast() -> FcffForecast:
+    first = _relative_forecast()
+    observations = [
+        first.observations[0].model_copy(
+            update={
+                "forecast_year": year,
+                "fiscal_year": 2025 + year,
+                "period_end": datetime.date(2025 + year, 12, 31),
+            }
+        )
+        for year in range(1, 4)
+    ]
+    return first.model_copy(
+        update={
+            "parameters": FcffForecastParameters(forecast_years=3),
+            "observations": observations,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("basis", "metric"),
+    (
+        (RelativeValuationBasis.EV_TO_EBITDA, Decimal("125")),
+        (RelativeValuationBasis.EV_TO_EBIT, Decimal("100")),
+        (RelativeValuationBasis.EV_TO_REVENUE, Decimal("1000")),
+        (RelativeValuationBasis.EV_TO_FCF, Decimal("70")),
+    ),
+)
+def test_fundamental_anchor_values_remaining_fcff_at_matching_horizon(basis, metric):
+    forecast = _multiyear_forecast()
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal(0),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    intrinsic = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+
+    anchor = MultipleResolver._fundamental_anchor(
+        basis, forecast, intrinsic, Decimal(1)
+    )
+    expected_enterprise_value = (
+        Decimal("70") / Decimal("1.1")
+        + Decimal("70") / (Decimal("1.1") ** 2)
+        + intrinsic.terminal_value.terminal_value / (Decimal("1.1") ** 2)
+    )
+
+    assert anchor == expected_enterprise_value / metric
+    assert anchor != intrinsic.terminal_value.terminal_value / metric
+
+
+def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):
+    target, report, _, _ = _basic_resolver_inputs()
+    forecast = _multiyear_forecast()
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal(0),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    intrinsic = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args, **kwargs: (Decimal(1), 6)),
+    )
+    policy = MultipleResolutionConfiguration(
+        minimum_peer_sample=2,
+        annual_premium_decay=Decimal("0.2"),
+    )
+
+    one_year = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=policy,
+    )
+    two_year = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(2),
+        policy=policy,
+    )
+
+    assert two_year.horizon_retention < one_year.horizon_retention
+    assert two_year.persistence_factor < one_year.persistence_factor
+
+
+def test_stronger_target_economics_increase_fundamental_support():
+    target, report, _, _ = _basic_resolver_inputs()
+    strong = target.model_copy(
+        update={
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "ebitda": Decimal("300"),
+                    "operating_income": Decimal("250"),
+                    "free_cash_flow": Decimal("250"),
+                    "gross_debt": Decimal(0),
+                    "cash_and_equivalents": Decimal("100"),
+                    "capital_expenditures": Decimal("1"),
+                    "book_equity": Decimal("100"),
+                }
+            )
+        }
+    )
+    weak = target.model_copy(
+        update={
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "ebitda": Decimal("20"),
+                    "operating_income": Decimal("5"),
+                    "free_cash_flow": Decimal("1"),
+                    "gross_debt": Decimal("500"),
+                    "cash_and_equivalents": Decimal(0),
+                    "capital_expenditures": Decimal("200"),
+                    "book_equity": Decimal("1000"),
+                }
+            )
+        }
+    )
+
+    strong_support, _ = MultipleResolver._fundamental_support(
+        strong,
+        report.peers,
+        [],
+        fundamental_anchor=Decimal("15"),
+        base_anchor=Decimal("10"),
+        observed_premium=Decimal(1),
+    )
+    weak_support, _ = MultipleResolver._fundamental_support(
+        weak,
+        report.peers,
+        [],
+        fundamental_anchor=Decimal("15"),
+        base_anchor=Decimal("10"),
+        observed_premium=Decimal(1),
+    )
+
+    assert strong_support > weak_support

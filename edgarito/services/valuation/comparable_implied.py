@@ -34,21 +34,39 @@ class HistoricalMultiplesService:
         market_data,
         basis: RelativeValuationBasis,
     ) -> HistoricalMultipleSummary:
+        revenue_observations = [
+            item
+            for item in financials.observations
+            if item.concept.value == "revenue"
+            and item.granularity.value in {"quarterly", "annual"}
+        ]
         dates = sorted(
-            {
-                item.period_end
-                for item in financials.observations
-                if item.concept.value == "revenue"
-                and item.granularity.value in {"quarterly", "annual"}
-            }
+            {self._ltm_service.availability_date(item) for item in revenue_observations}
         )
         observations_by_period = {}
+        warnings = []
+        if any(
+            item.provider.casefold() == "yahoo" and item.filed is None
+            for item in revenue_observations
+        ):
+            warnings.append(
+                "Yahoo statements do not expose filing dates; historical snapshots "
+                "use conservative 45-day quarterly and 90-day annual availability "
+                "lags"
+            )
         for observed_on in dates:
             try:
                 snapshot = self._ltm_service.compute(
-                    financials, market_data, as_of=observed_on
+                    financials,
+                    market_data,
+                    as_of=observed_on,
+                    point_in_time=True,
                 )
-            except ValueError:
+            except ValueError as exc:
+                warnings.append(
+                    f"{observed_on.isoformat()}: historical {basis.value} "
+                    f"snapshot failed: {exc}"
+                )
                 continue
             multiple = next(
                 (
@@ -61,17 +79,34 @@ class HistoricalMultiplesService:
                 None,
             )
             if multiple is not None and multiple.value is not None:
-                observations_by_period[snapshot.fundamentals.period_end] = (
+                observations_by_period.setdefault(
+                    snapshot.fundamentals.period_end,
                     HistoricalMultipleObservation(
-                        observed_on=observed_on, value=multiple.value
-                    )
+                        observed_on=observed_on,
+                        value=multiple.value,
+                        fundamentals_period_end=snapshot.fundamentals.period_end,
+                        price_date=snapshot.price_date,
+                    ),
+                )
+            else:
+                selected = next(
+                    (item for item in snapshot.multiples if item.basis == basis), None
+                )
+                reason = (
+                    selected.reason
+                    if selected is not None and selected.reason
+                    else "the requested multiple was not computed"
+                )
+                context = "; ".join(snapshot.warnings)
+                warnings.append(
+                    f"{observed_on.isoformat()}: historical {basis.value} "
+                    f"unavailable: {reason}" + (f" ({context})" if context else "")
                 )
 
         observations = sorted(
             observations_by_period.values(), key=lambda item: item.observed_on
         )
 
-        warnings = []
         if len(observations) < 4:
             warnings.append(
                 "Fewer than four point-in-time observations are available; "
@@ -144,42 +179,40 @@ class MultipleResolver:
                 "use an enterprise-value basis"
             )
         fundamental = self._fundamental_anchor(
-            basis, target_forecast, intrinsic_valuation
+            basis,
+            target_forecast,
+            intrinsic_valuation,
+            horizon_years,
         )
         effective_history = target_history if policy.use_target_history else None
         target_current = self._target_multiple(target, basis)
         peer_summary = next(
             (item for item in peer_report.summaries if item.basis == basis), None
         )
-        peer_anchor = peer_summary.median if peer_summary is not None else None
-        historical_anchor = (
-            effective_history.median
-            if effective_history is not None
+        peer_anchor = (
+            peer_summary.median
+            if policy.use_peer_median and peer_summary is not None
             else None
+        )
+        historical_anchor = (
+            effective_history.median if effective_history is not None else None
         )
 
         warnings = list(
             effective_history.warnings if effective_history is not None else ()
         )
-        market_values = []
-        if historical_anchor is not None:
-            market_values.append(historical_anchor)
-        elif policy.use_target_history and target_current is not None:
-            market_values.append(target_current)
+        if peer_anchor is not None:
+            market_anchor = peer_anchor
             warnings.append(
-                "Target history is insufficient; current target multiple is used "
-                "only as a low-confidence market anchor"
-            )
-        if policy.use_peer_median and peer_anchor is not None:
-            market_values.append(peer_anchor)
-        if not market_values:
-            market_anchor = fundamental
-            warnings.append(
-                "No usable history or peer anchor is available; the relative "
-                "estimate collapses to the DCF-consistent fundamental multiple"
+                "Peer baseline uses current LTM multiples because peer consensus "
+                "forward fundamentals are not available"
             )
         else:
-            market_anchor = median(market_values)
+            market_anchor = fundamental
+            warnings.append(
+                "No usable peer baseline is available; the DCF-implied forward "
+                "multiple is used as the base case"
+            )
 
         (
             historical_persistence,
@@ -189,8 +222,24 @@ class MultipleResolver:
         ) = self._historical_persistence(
             effective_history, peer_histories, policy, warnings
         )
-        fundamental_support, support_count = self._fundamental_support(
-            target, peer_report.peers, warnings
+        observed_premium = (
+            target_current / market_anchor - Decimal(1)
+            if target_current is not None and market_anchor > 0
+            else historical_peer_premium
+        )
+        if observed_premium is None:
+            observed_premium = Decimal(0)
+            warnings.append(
+                "No current or historical target premium is available; the "
+                "resolved multiple remains at the base forward multiple"
+            )
+        fundamental_support, _support_count = self._fundamental_support(
+            target,
+            peer_report.peers,
+            warnings,
+            fundamental_anchor=fundamental,
+            base_anchor=market_anchor,
+            observed_premium=observed_premium,
         )
         horizon_retention = (
             Decimal(
@@ -205,21 +254,13 @@ class MultipleResolver:
             Decimal(1),
             historical_persistence * fundamental_support * horizon_retention,
         )
-        observed_premium = market_anchor - fundamental
-        if historical_peer_premium is None:
-            historical_peer_premium = (
-                (historical_anchor / peer_anchor - Decimal(1)) * Decimal(100)
-                if historical_anchor is not None
-                and peer_anchor is not None
-                and peer_anchor > 0
-                else None
-            )
-        point = fundamental + persistence * observed_premium
+        resolved_premium = observed_premium * persistence
+        point = market_anchor * (Decimal(1) + resolved_premium)
         range_step = policy.persistence_range_width
         lower_persistence = max(Decimal(0), persistence - range_step)
         upper_persistence = min(Decimal(1), persistence + range_step)
-        lower = fundamental + lower_persistence * observed_premium
-        upper = fundamental + upper_persistence * observed_premium
+        lower = market_anchor * (Decimal(1) + lower_persistence * observed_premium)
+        upper = market_anchor * (Decimal(1) + upper_persistence * observed_premium)
         lower, upper = min(lower, upper), max(lower, upper)
         lower = max(Decimal("0.01"), lower)
         point = max(Decimal("0.01"), point)
@@ -229,16 +270,19 @@ class MultipleResolver:
         history_size = (
             len(effective_history.observations) if effective_history is not None else 0
         )
-        if (
-            history_size >= 8
-            and sample_size >= policy.minimum_peer_sample
-            and support_count >= 3
-        ):
-            confidence = MultipleConfidence.HIGH
-        elif history_size >= 4 or sample_size >= policy.minimum_peer_sample:
-            confidence = MultipleConfidence.MEDIUM
-        else:
-            confidence = MultipleConfidence.LOW
+        peer_confidence = self._sample_confidence(
+            sample_size, policy.minimum_peer_sample
+        )
+        target_history_confidence = self._history_confidence(history_size)
+        premium_persistence_confidence = self._persistence_confidence(
+            premium_history_sample_size, premium_mean_reversion_beta
+        )
+        confidence = min(
+            peer_confidence,
+            target_history_confidence,
+            premium_persistence_confidence,
+            key=self._confidence_rank,
+        )
         if sample_size < policy.minimum_peer_sample:
             warnings.append(
                 f"Only {sample_size} peer observations support {basis.value}; "
@@ -264,9 +308,7 @@ class MultipleResolver:
                 else None
             ),
             historical_volatility=(
-                effective_history.volatility
-                if effective_history is not None
-                else None
+                effective_history.volatility if effective_history is not None else None
             ),
             historical_trend=(
                 effective_history.trend if effective_history is not None else None
@@ -275,6 +317,7 @@ class MultipleResolver:
             current_target_anchor=target_current,
             market_anchor=market_anchor,
             observed_premium=observed_premium,
+            resolved_premium=resolved_premium,
             historical_peer_premium=historical_peer_premium,
             premium_history_sample_size=premium_history_sample_size,
             premium_mean_reversion_beta=premium_mean_reversion_beta,
@@ -283,28 +326,92 @@ class MultipleResolver:
             horizon_retention=horizon_retention,
             persistence_factor=persistence,
             sample_size=sample_size,
+            peer_confidence=peer_confidence,
+            target_history_confidence=target_history_confidence,
+            premium_persistence_confidence=premium_persistence_confidence,
             confidence=confidence,
             methodology=(
-                "fundamental anchor + (historical/peer market anchor - fundamental "
-                "anchor) × historical persistence × economic support × horizon decay"
+                "peer/base forward multiple × (1 + current target premium × "
+                "historical persistence × fundamental support × horizon retention)"
             ),
             warnings=tuple(dict.fromkeys(warnings)),
         )
 
     @staticmethod
-    def _fundamental_anchor(basis, forecast, valuation):
-        final = forecast.observations[-1]
+    def _fundamental_anchor(basis, forecast, valuation, horizon_years):
+        target_date = valuation.valuation_date + datetime.timedelta(
+            days=int(horizon_years * Decimal(365))
+        )
+        target = min(
+            forecast.observations,
+            key=lambda item: abs((item.period_end - target_date).days),
+        )
         metric = {
             RelativeValuationBasis.EV_TO_EBITDA: (
-                final.operating_income + final.depreciation_and_amortization
+                target.operating_income + target.depreciation_and_amortization
             ),
-            RelativeValuationBasis.EV_TO_EBIT: final.operating_income,
-            RelativeValuationBasis.EV_TO_REVENUE: final.revenue,
-            RelativeValuationBasis.EV_TO_FCF: final.fcff,
+            RelativeValuationBasis.EV_TO_EBIT: target.operating_income,
+            RelativeValuationBasis.EV_TO_REVENUE: target.revenue,
+            RelativeValuationBasis.EV_TO_FCF: target.fcff,
         }[basis]
         if metric <= 0:
-            raise ValueError("Fundamental multiple requires a positive terminal metric")
-        return valuation.terminal_value.terminal_value / metric
+            raise ValueError("Fundamental multiple requires a positive forward metric")
+        future_cash_flows = sum(
+            (
+                item.amount
+                * PresentValueService.discount_factor(
+                    valuation.parameters.wacc,
+                    item.period - horizon_years,
+                )
+                for item in valuation.explicit_forecast_present_value.cash_flows
+                if item.period > horizon_years
+            ),
+            Decimal(0),
+        )
+        terminal = valuation.terminal_present_value
+        if terminal.period < horizon_years:
+            raise ValueError(
+                "Relative valuation horizon extends beyond the DCF terminal date"
+            )
+        enterprise_value_at_horizon = future_cash_flows + terminal.amount * (
+            PresentValueService.discount_factor(
+                valuation.parameters.wacc,
+                terminal.period - horizon_years,
+            )
+        )
+        return enterprise_value_at_horizon / metric
+
+    @staticmethod
+    def _confidence_rank(confidence):
+        return {
+            MultipleConfidence.LOW: 0,
+            MultipleConfidence.MEDIUM: 1,
+            MultipleConfidence.HIGH: 2,
+        }[confidence]
+
+    @staticmethod
+    def _sample_confidence(sample_size, requested):
+        if sample_size >= max(8, requested * 2):
+            return MultipleConfidence.HIGH
+        if sample_size >= requested:
+            return MultipleConfidence.MEDIUM
+        return MultipleConfidence.LOW
+
+    @staticmethod
+    def _history_confidence(sample_size):
+        if sample_size >= 8:
+            return MultipleConfidence.HIGH
+        if sample_size >= 4:
+            return MultipleConfidence.MEDIUM
+        return MultipleConfidence.LOW
+
+    @staticmethod
+    def _persistence_confidence(sample_size, beta):
+        if beta is None or sample_size < 8:
+            return MultipleConfidence.LOW
+        if sample_size >= 16:
+            return MultipleConfidence.HIGH
+        return MultipleConfidence.MEDIUM
 
     @staticmethod
     def _target_multiple(target, basis):
@@ -335,42 +442,36 @@ class MultipleResolver:
                         f"{len(premiums)} synchronized observations; treat the "
                         "persistence estimate as low precision"
                     )
-                duration = min(Decimal(1), Decimal(len(premiums)) / Decimal(8))
-                persistence = beta * (Decimal("0.5") + Decimal("0.5") * duration)
+                evidence_weight = min(
+                    Decimal(1), Decimal(len(premiums) - 3) / Decimal(5)
+                )
+                persistence = (
+                    beta * evidence_weight
+                    + policy.insufficient_history_persistence
+                    * (Decimal(1) - evidence_weight)
+                )
                 return (
                     persistence,
-                    median(premiums) * Decimal(100),
+                    median(premiums),
                     len(premiums),
                     beta,
                 )
             warnings.append(
                 "Historical peer-premium variation is too small to estimate "
-                "mean reversion; target-multiple stability is used instead"
+                "mean reversion; the configured insufficient-history fallback is used"
             )
         elif peer_histories:
             warnings.append(
                 "Fewer than four synchronized target/peer observations are "
-                "available; premium persistence uses target-multiple stability"
+                "available; premium persistence uses the configured low-confidence "
+                "fallback"
             )
-        if history is None or len(history.observations) < 4:
-            return policy.insufficient_history_persistence, None, len(premium_series), None
-        values = sorted(item.value for item in history.observations)
-        lower_percentile, upper_percentile = policy.winsorize_percentiles
-        lower = HistoricalMultiplesService._percentile(
-            values, lower_percentile / Decimal(100)
-        )
-        upper = HistoricalMultiplesService._percentile(
-            values, upper_percentile / Decimal(100)
-        )
-        winsorized = [max(lower, min(upper, value)) for value in values]
-        mean = sum(winsorized, Decimal(0)) / Decimal(len(winsorized))
-        variance = sum(
-            ((value - mean) ** 2 for value in winsorized), Decimal(0)
-        ) / Decimal(len(winsorized))
-        volatility = variance.sqrt() / mean if mean > 0 else Decimal(1)
-        stability = max(Decimal(0), Decimal(1) - min(Decimal(1), volatility))
-        duration = min(Decimal(1), Decimal(len(history.observations)) / Decimal(8))
-        return stability * duration, None, len(premium_series), None
+        else:
+            warnings.append(
+                "No synchronized peer history is available; premium persistence "
+                "uses the configured low-confidence fallback"
+            )
+        return policy.insufficient_history_persistence, None, len(premium_series), None
 
     @staticmethod
     def _aligned_peer_premiums(history, peer_histories, policy):
@@ -384,7 +485,7 @@ class MultipleResolver:
                     item
                     for item in peer_history.observations
                     if item.observed_on <= target_observation.observed_on
-                    and (target_observation.observed_on - item.observed_on).days <= 550
+                    and (target_observation.observed_on - item.observed_on).days <= 120
                 ]
                 if candidates:
                     peer_values.append(candidates[-1].value)
@@ -409,9 +510,7 @@ class MultipleResolver:
         current = values[1:]
         lagged_mean = sum(lagged, Decimal(0)) / Decimal(len(lagged))
         current_mean = sum(current, Decimal(0)) / Decimal(len(current))
-        denominator = sum(
-            ((value - lagged_mean) ** 2 for value in lagged), Decimal(0)
-        )
+        denominator = sum(((value - lagged_mean) ** 2 for value in lagged), Decimal(0))
         if denominator == 0:
             return None
         numerator = sum(
@@ -424,7 +523,15 @@ class MultipleResolver:
         return max(Decimal(0), min(Decimal(1), numerator / denominator))
 
     @staticmethod
-    def _fundamental_support(target, peers, warnings):
+    def _fundamental_support(
+        target,
+        peers,
+        warnings,
+        *,
+        fundamental_anchor,
+        base_anchor,
+        observed_premium,
+    ):
         scores = []
         target_fundamentals = target.fundamentals
         peer_fundamentals = [peer.fundamentals for peer in peers]
@@ -444,13 +551,14 @@ class MultipleResolver:
             ):
                 return
             anchor = median(usable)
-            scale = max(abs(anchor), Decimal(1) if allow_signed else Decimal("0.01"))
+            scale = max(
+                abs(target_value) + abs(anchor),
+                Decimal(1) if allow_signed else Decimal("0.01"),
+            )
             relative = (target_value - anchor) / scale
             if lower_is_better:
                 relative = -relative
-            scores.append(
-                max(Decimal(0), min(Decimal(1), Decimal("0.75") + relative / 2))
-            )
+            scores.append(max(Decimal(0), min(Decimal(1), Decimal("0.5") + relative)))
 
         target_margin = (
             target_fundamentals.ebitda / target_fundamentals.revenue
@@ -488,14 +596,18 @@ class MultipleResolver:
             allow_signed=True,
         )
         target_leverage = (
-            target_fundamentals.gross_debt / target_fundamentals.ebitda
+            (
+                target_fundamentals.gross_debt
+                - (target_fundamentals.cash_and_equivalents or Decimal(0))
+            )
+            / target_fundamentals.ebitda
             if target_fundamentals.gross_debt is not None
             and target_fundamentals.ebitda is not None
             and target_fundamentals.ebitda > 0
             else None
         )
         peer_leverage = [
-            item.gross_debt / item.ebitda
+            (item.gross_debt - (item.cash_and_equivalents or Decimal(0))) / item.ebitda
             if item.gross_debt is not None
             and item.ebitda is not None
             and item.ebitda > 0
@@ -538,13 +650,32 @@ class MultipleResolver:
             roic(target_fundamentals),
             [roic(item) for item in peer_fundamentals],
         )
-        if not scores:
-            warnings.append(
-                "Peer economics are insufficient to support a historical premium; "
-                "premium persistence is capped at 50%"
+        quality_support = (
+            sum(scores, Decimal(0)) / Decimal(len(scores)) if scores else None
+        )
+        anchor_premium = fundamental_anchor / base_anchor - Decimal(1)
+        if observed_premium > 0:
+            anchor_support = max(
+                Decimal(0), min(Decimal(1), anchor_premium / observed_premium)
             )
-            return Decimal("0.5"), 0
-        return sum(scores, Decimal(0)) / Decimal(len(scores)), len(scores)
+        elif observed_premium < 0:
+            anchor_support = max(
+                Decimal(0), min(Decimal(1), anchor_premium / observed_premium)
+            )
+        else:
+            anchor_support = Decimal(1)
+        support_components = [anchor_support]
+        if quality_support is not None:
+            support_components.append(quality_support)
+        if quality_support is None:
+            warnings.append(
+                "Peer economics are insufficient for cross-sectional premium "
+                "support; only the DCF-implied forward premium is used"
+            )
+        return (
+            sum(support_components, Decimal(0)) / Decimal(len(support_components)),
+            len(scores) + 1,
+        )
 
 
 class ComparableImpliedValuationService:

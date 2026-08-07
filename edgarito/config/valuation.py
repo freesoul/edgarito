@@ -330,7 +330,7 @@ class ComparableSelectionConfiguration(_ProfileModel):
 
 
 class MultipleResolutionConfiguration(_ProfileModel):
-    method: Literal["blended"] = "blended"
+    method: Literal["premium_persistence", "blended"] = "premium_persistence"
     use_target_history: bool = True
     use_peer_median: bool = True
     use_fundamental_anchor: bool = True
