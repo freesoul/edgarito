@@ -278,6 +278,8 @@ class FcffForecast(BaseModel):
     seed_period_end: Optional[datetime.date] = None
     current_fiscal_year: Optional[int] = None
     actual_quarters: int = Field(default=0, ge=0, le=4)
+    financial_snapshot_retrieved_at: Optional[datetime.datetime] = None
+    availability_mode: Optional[str] = None
 
     base_fiscal_year: int
     base_period_end: datetime.date
@@ -295,6 +297,7 @@ class FcffForecast(BaseModel):
     historical_fiscal_years: tuple[int, ...]
     assumption_sources: dict[FcffForecastDriver, ForecastAssumptionSource]
     observations: list[FcffForecastObservation] = Field(default_factory=list)
+    warnings: tuple[str, ...] = ()
 
 
 class AdaptiveMultistagePlan(BaseModel):

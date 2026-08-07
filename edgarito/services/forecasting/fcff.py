@@ -10,6 +10,10 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.financial_observation_availability import (
+    FinancialObservationAvailabilityService,
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastDriver,
@@ -70,6 +74,14 @@ class FcffForecastService:
     )
     _REQUIRED_CONCEPTS = _CORE_REQUIRED_CONCEPTS | OPERATING_WORKING_CAPITAL_CONCEPTS
 
+    def __init__(
+        self,
+        availability_service: FinancialObservationAvailabilityService | None = None,
+    ) -> None:
+        self._availability_service = (
+            availability_service or FinancialObservationAvailabilityService()
+        )
+
     @classmethod
     def required_concepts(cls) -> set[FinancialConcept]:
         return set(cls._REQUIRED_CONCEPTS)
@@ -80,15 +92,24 @@ class FcffForecastService:
         parameters: Optional[FcffForecastParameters] = None,
         *,
         as_of: datetime.date | None = None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
     ) -> FcffForecast:
         parameters = parameters or FcffForecastParameters()
+        availability_mode = ObservationAvailabilityMode(availability_mode)
         if as_of is not None:
             financials = financials.model_copy(
                 update={
                     "observations": [
                         item
                         for item in financials.observations
-                        if self._available_on(item) <= as_of
+                        if self._availability_service.is_available(
+                            item,
+                            as_of=as_of,
+                            mode=availability_mode,
+                            snapshot_retrieved_at=financials.retrieved_at,
+                        )
                     ]
                 }
             )
@@ -229,6 +250,8 @@ class FcffForecastService:
             seed_period_end=context.seed_period_end,
             current_fiscal_year=context.current_fiscal_year,
             actual_quarters=context.actual_quarters,
+            financial_snapshot_retrieved_at=financials.retrieved_at,
+            availability_mode=availability_mode.value,
             base_fiscal_year=base.fiscal_year,
             base_period_end=context.seed_period_end,
             base_revenue=base.revenue,
@@ -246,6 +269,60 @@ class FcffForecastService:
             ),
             assumption_sources=sources,
             observations=observations,
+            warnings=self._incomplete_quarter_warnings(
+                financials, context.seed_period_end
+            ),
+        )
+
+    @classmethod
+    def _incomplete_quarter_warnings(
+        cls,
+        financials: NormalizedCompanyFinancials,
+        selected_seed_end: datetime.date,
+    ) -> tuple[str, ...]:
+        by_period: dict[
+            tuple[int, FiscalPeriod], dict[FinancialConcept, FinancialObservation]
+        ] = {}
+        for item in financials.observations:
+            if (
+                item.granularity == Granularity.QUARTERLY
+                and item.fiscal_period
+                in {
+                    FiscalPeriod.Q1,
+                    FiscalPeriod.Q2,
+                    FiscalPeriod.Q3,
+                    FiscalPeriod.Q4,
+                }
+                and item.period_end > selected_seed_end
+            ):
+                by_period.setdefault(item.period_key, {}).setdefault(item.concept, item)
+        candidates = [
+            values
+            for values in by_period.values()
+            if FinancialConcept.REVENUE in values
+        ]
+        if not candidates:
+            return ()
+        values = max(
+            candidates,
+            key=lambda items: items[FinancialConcept.REVENUE].period_end,
+        )
+        revenue = values[FinancialConcept.REVENUE]
+        missing = sorted(
+            cls._CORE_REQUIRED_CONCEPTS - values.keys(),
+            key=lambda item: item.value,
+        )
+        details = [concept.label for concept in missing]
+        if operating_working_capital_value(values) is None:
+            details.append("Operating Working Capital Components")
+        if not details:
+            details.append("a coherent single-currency operating dataset")
+        return (
+            f"FY{revenue.fiscal_year} {revenue.fiscal_period.value} ending "
+            f"{revenue.period_end.isoformat()} is incomplete in the "
+            f"{financials.provider.upper()} snapshot; forecast seed falls back to "
+            f"{selected_seed_end.isoformat()} because "
+            f"{', '.join(details)} are unavailable",
         )
 
     def _forecast_context(self, financials, annual_periods, parameters, as_of):
@@ -707,15 +784,6 @@ class FcffForecastService:
             return base_date.replace(year=base_date.year + years)
         except ValueError:
             return base_date.replace(year=base_date.year + years, day=28)
-
-    @staticmethod
-    def _available_on(observation: FinancialObservation) -> datetime.date:
-        if observation.filed is not None:
-            return observation.filed
-        if observation.provider.casefold() == "yahoo":
-            lag = 90 if observation.granularity == Granularity.ANNUAL else 45
-            return observation.period_end + datetime.timedelta(days=lag)
-        return observation.period_end
 
 
 # Preserve the old generic service import while changing its semantics to FCFF.

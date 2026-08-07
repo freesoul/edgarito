@@ -11,6 +11,9 @@ from edgarito.config.valuation import ValuationProfileLoader
 from edgarito.schemas.market import SecurityMarketData
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
 from edgarito.services.normalization.classification import (
     CompanyClassificationNormalizer,
 )
@@ -86,6 +89,11 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         peer_symbols,
         peer_source=peer_source,
         as_of=args.as_of,
+        availability_mode=(
+            ObservationAvailabilityMode.POINT_IN_TIME
+            if args.as_of is not None
+            else ObservationAvailabilityMode.CURRENT_SNAPSHOT
+        ),
     )
     print(
         ComparableMultiplesConsolePresenter().render(
@@ -103,6 +111,7 @@ async def _build_comparable_report(
     *,
     peer_source=None,
     as_of=None,
+    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
 ):
     configuration = valuation_profile.comparables
     selection_configuration = valuation_profile.model_selection
@@ -251,7 +260,12 @@ async def _build_comparable_report(
                     f"{source.currency}: {exc}"
                 )
         try:
-            multiples = multiples_service.compute(financials, market_data, as_of)
+            multiples = multiples_service.compute(
+                financials,
+                market_data,
+                as_of,
+                availability_mode=availability_mode,
+            )
         except ValueError as exc:
             multiples = None
             retrieval_warnings.append(f"{symbol} multiples unavailable: {exc}")

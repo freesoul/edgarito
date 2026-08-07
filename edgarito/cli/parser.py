@@ -456,6 +456,16 @@ def build_parser() -> argparse.ArgumentParser:
             "debug logging"
         ),
     )
+    valuation.add_argument(
+        "--financial-snapshot-max-age-hours",
+        type=int,
+        default=24,
+        metavar="HOURS",
+        help=(
+            "Warn when a cached current financial snapshot is older than this "
+            "threshold (default: 24); use --refresh to retrieve a new snapshot"
+        ),
+    )
     valuation_models.add_argument(
         "--classification-provider",
         choices=[

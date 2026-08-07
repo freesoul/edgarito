@@ -11,6 +11,10 @@ from edgarito.schemas.valuation.assumptions import (
     ValuationAssumptionKind,
     ValuationAssumptionSet,
 )
+from edgarito.services.financial_observation_availability import (
+    FinancialObservationAvailabilityService,
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
     FcffForecast,
@@ -50,6 +54,14 @@ class FcffDcfCapitalBridgeResolver:
         }
     )
 
+    def __init__(
+        self,
+        availability_service: FinancialObservationAvailabilityService | None = None,
+    ) -> None:
+        self._availability_service = (
+            availability_service or FinancialObservationAvailabilityService()
+        )
+
     @classmethod
     def required_concepts(cls) -> set[FinancialConcept]:
         return set(cls._CONCEPTS)
@@ -67,12 +79,22 @@ class FcffDcfCapitalBridgeResolver:
         diluted_shares: Decimal | None = None,
         non_operating_assets: Decimal | None = None,
         valuation_date: datetime.date | None = None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
     ) -> FcffDcfCapitalBridge:
         as_of = valuation_date or period_end
+        availability_mode = ObservationAvailabilityMode(availability_mode)
         eligible = [
             item
             for item in financials.observations
-            if item.concept in self._CONCEPTS and self._available_on(item) <= as_of
+            if item.concept in self._CONCEPTS
+            and self._availability_service.is_available(
+                item,
+                as_of=as_of,
+                mode=availability_mode,
+                snapshot_retrieved_at=financials.retrieved_at,
+            )
         ]
         by_date: dict[datetime.date, dict[FinancialConcept, FinancialObservation]] = {}
         for item in eligible:
@@ -218,15 +240,6 @@ class FcffDcfCapitalBridgeResolver:
             ),
             warnings=tuple(warnings),
         )
-
-    @staticmethod
-    def _available_on(observation: FinancialObservation) -> datetime.date:
-        if observation.filed is not None:
-            return observation.filed
-        if observation.provider.casefold() == "yahoo":
-            lag = 90 if observation.granularity == Granularity.ANNUAL else 45
-            return observation.period_end + datetime.timedelta(days=lag)
-        return observation.period_end
 
     @staticmethod
     def _latest_coherent_balance_date(by_date):
@@ -437,7 +450,7 @@ class FcffDcfService:
             if enterprise_value != 0
             else None
         )
-        warnings = list(capital_bridge.warnings)
+        warnings = [*forecast.warnings, *capital_bridge.warnings]
         if terminal_percentage is not None and terminal_percentage > Decimal(75):
             warnings.append(
                 "Discounted terminal value exceeds 75% of enterprise value; "
@@ -514,6 +527,9 @@ class FcffDcfService:
             forecast_seed_type=forecast.seed_type.value,
             forecast_seed_methodology=forecast.seed_methodology,
             forecast_seed_period_end=forecast.seed_period_end,
+            forecast_actual_quarters=forecast.actual_quarters,
+            financial_snapshot_retrieved_at=(forecast.financial_snapshot_retrieved_at),
+            observation_availability_mode=forecast.availability_mode,
             capital_bridge=capital_bridge,
             explicit_forecast_present_value=explicit_present_value,
             terminal_value=terminal_value,

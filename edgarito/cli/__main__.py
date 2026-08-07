@@ -57,6 +57,9 @@ from edgarito.schemas.valuation.relative import (
 )
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
     FcffForecastParameters,
@@ -1089,8 +1092,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         required_concepts,
     )
     valuation_date = datetime.date.today()
+    additional_warnings.extend(_financial_snapshot_warnings(financials, args))
     forecast = forecast_service.forecast(
-        financials, forecast_parameters, as_of=valuation_date
+        financials,
+        forecast_parameters,
+        as_of=valuation_date,
+        availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
     )
     seed_forecast = forecast
     bridge_configuration = profile.valuation.capital_bridge
@@ -1124,6 +1131,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             else bridge_configuration.non_operating_assets
         ),
         valuation_date=valuation_date,
+        availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
     )
     discount_configuration = profile.valuation.discount_rates
     needs_automatic_wacc = (
@@ -1207,6 +1215,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     peer_symbols,
                     peer_source=peer_source,
                     as_of=valuation_date,
+                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
             except (RuntimeError, ValueError) as exc:
                 comparable_error = str(exc)
@@ -1311,6 +1320,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 tax_assumption.value if tax_assumption is not None else None
             ),
             as_of=valuation_date,
+            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
         )
         multistage_plan = multistage_plan.model_copy(
             update={
@@ -1551,6 +1561,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             multistage_configuration=multistage_configuration,
             use_multistage=use_multistage,
             valuation_date=valuation_date,
+            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
             normalized_tax_rate=(
                 tax_assumption.value if tax_assumption is not None else None
             ),
@@ -1776,6 +1787,41 @@ async def _retrieve_financials(
             make_cache=True,
             crosscheck=args.crosscheck,
         )
+
+
+def _financial_snapshot_warnings(
+    financials: NormalizedCompanyFinancials,
+    args: argparse.Namespace,
+) -> list[str]:
+    """Surface current-snapshot freshness without changing generic cache policy."""
+    if financials.provider.casefold() != "yahoo":
+        return []
+    max_age_hours = getattr(args, "financial_snapshot_max_age_hours", 24)
+    if max_age_hours <= 0:
+        raise ValueError("--financial-snapshot-max-age-hours must be positive")
+    retrieved_at = financials.retrieved_at
+    if retrieved_at is None:
+        return [
+            "Yahoo financial snapshot retrieval time is unavailable; cache freshness "
+            "cannot be established. Use --refresh for a current snapshot"
+        ]
+    age = datetime.datetime.now(datetime.timezone.utc) - retrieved_at.astimezone(
+        datetime.timezone.utc
+    )
+    if age < datetime.timedelta(0):
+        return [
+            "Yahoo financial snapshot retrieval time is in the future; provenance "
+            "should be checked"
+        ]
+    threshold = datetime.timedelta(hours=max_age_hours)
+    if age <= threshold:
+        return []
+    age_hours = int(age.total_seconds() // 3600)
+    return [
+        f"Yahoo financial snapshot is stale ({age_hours} hours old; retrieved "
+        f"{retrieved_at.astimezone(datetime.timezone.utc):%Y-%m-%d %H:%M} UTC). "
+        "Use --refresh for a current snapshot"
+    ]
 
 
 def _granularity(period: str) -> Optional[Granularity]:

@@ -1,6 +1,10 @@
 from decimal import Decimal
 from statistics import median
 
+from edgarito.services.financial_observation_availability import (
+    FinancialObservationAvailabilityService,
+    ObservationAvailabilityMode,
+)
 from edgarito.services.valuation.models import (
     HistoricalMultipleObservation,
     HistoricalMultipleSummary,
@@ -15,6 +19,7 @@ class HistoricalMultiplesService:
 
     def __init__(self, ltm_service: LtmMultiplesService | None = None):
         self._ltm_service = ltm_service or LtmMultiplesService()
+        self._availability_service = FinancialObservationAvailabilityService()
 
     def compute(
         self,
@@ -29,7 +34,13 @@ class HistoricalMultiplesService:
             and item.granularity.value in {"quarterly", "annual"}
         ]
         dates = sorted(
-            {self._ltm_service.availability_date(item) for item in revenue_observations}
+            {
+                self._availability_service.available_on(
+                    item,
+                    mode=ObservationAvailabilityMode.POINT_IN_TIME,
+                )
+                for item in revenue_observations
+            }
         )
         observations_by_period = {}
         warnings = []
@@ -48,7 +59,7 @@ class HistoricalMultiplesService:
                     financials,
                     market_data,
                     as_of=observed_on,
-                    point_in_time=True,
+                    availability_mode=ObservationAvailabilityMode.POINT_IN_TIME,
                 )
             except ValueError as exc:
                 warnings.append(

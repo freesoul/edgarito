@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal
 
 from edgarito.cli.presentation._valuation_format import section, subsection
@@ -52,6 +53,9 @@ class FcffDcfConsolePresenter:
             f"{profile_name or 'unspecified'}",
             f"Model: FCFF DCF | Cash-flow timing: {timing} | "
             f"Terminal method: {terminal_method}",
+            self._snapshot_label(result),
+            "Availability mode: "
+            f"{(result.observation_availability_mode or 'unspecified').replace('_', ' ')}",
             "",
             *subsection("DEFAULT ASSUMPTIONS"),
             *self._compact_assumptions(result),
@@ -141,7 +145,7 @@ class FcffDcfConsolePresenter:
             (
                 "Forecast seed / method",
                 f"{result.forecast_seed_type} through {seed_date} / "
-                f"{self._short_seed_method(result.forecast_seed_methodology)}",
+                f"{self._seed_context(result)}",
             ),
             ("Projection structure", projection),
         )
@@ -155,6 +159,15 @@ class FcffDcfConsolePresenter:
                 f"Forecast seed methodology: {result.forecast_seed_methodology}",
             ]
         )
+        if (
+            result.provider.casefold() == "yahoo"
+            and result.observation_availability_mode == "current_snapshot"
+        ):
+            lines.append(
+                "Availability policy: Yahoo observations present in the retrieved "
+                "current snapshot are current evidence when their period has ended; "
+                "historical reconstruction still uses conservative publication lags"
+            )
         if result.parameters.perpetual_growth_rate is not None:
             lines.append(
                 "Terminal growth source: "
@@ -281,6 +294,32 @@ class FcffDcfConsolePresenter:
     @staticmethod
     def _short_seed_method(methodology: str) -> str:
         return methodology.split(";", 1)[0]
+
+    @classmethod
+    def _seed_context(cls, result: FcffDcfResult) -> str:
+        if result.forecast_actual_quarters:
+            noun = "quarter" if result.forecast_actual_quarters == 1 else "quarters"
+            source = (
+                f" from {result.provider.upper()} snapshot"
+                if result.observation_availability_mode == "current_snapshot"
+                else ""
+            )
+            return (
+                f"{result.forecast_actual_quarters} currently reported fiscal "
+                f"{noun}{source}"
+            )
+        return cls._short_seed_method(result.forecast_seed_methodology)
+
+    @staticmethod
+    def _snapshot_label(result: FcffDcfResult) -> str:
+        retrieved_at = result.financial_snapshot_retrieved_at
+        if retrieved_at is None:
+            return f"Financial snapshot: {result.provider.upper()} retrieval time unavailable"
+        timestamp = retrieved_at.astimezone(datetime.timezone.utc)
+        return (
+            f"Financial snapshot: {result.provider.upper()} retrieved "
+            f"{timestamp:%Y-%m-%d %H:%M} UTC"
+        )
 
     @staticmethod
     def _assumption_value(

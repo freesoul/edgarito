@@ -10,6 +10,10 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.financial_observation_availability import (
+    FinancialObservationAvailabilityService,
+    ObservationAvailabilityMode,
+)
 from edgarito.services.valuation.models import (
     CompanyTradingMultiples,
     ComparableMultiplesReport,
@@ -50,6 +54,8 @@ class LtmMultiplesService:
         FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
     }
 
+    _availability_service = FinancialObservationAvailabilityService()
+
     @classmethod
     def required_concepts(cls) -> set[FinancialConcept]:
         return cls._FLOW_CONCEPTS | cls._BALANCE_CONCEPTS
@@ -61,16 +67,22 @@ class LtmMultiplesService:
         as_of: datetime.date | None = None,
         *,
         point_in_time: bool = False,
+        availability_mode: ObservationAvailabilityMode | None = None,
     ) -> CompanyTradingMultiples:
+        mode = availability_mode or (
+            ObservationAvailabilityMode.POINT_IN_TIME
+            if point_in_time
+            else ObservationAvailabilityMode.CURRENT_SNAPSHOT
+        )
         try:
             return self._compute_quarterly(
-                financials, market_data, as_of, point_in_time=point_in_time
+                financials, market_data, as_of, availability_mode=mode
             )
         except ValueError as exc:
             if "four consecutive quarterly revenue periods" not in str(exc):
                 raise
             return self._compute_latest_annual(
-                financials, market_data, as_of, point_in_time=point_in_time
+                financials, market_data, as_of, availability_mode=mode
             )
 
     def _compute_quarterly(
@@ -79,12 +91,12 @@ class LtmMultiplesService:
         market_data: SecurityMarketData,
         as_of: datetime.date | None = None,
         *,
-        point_in_time: bool = False,
+        availability_mode: ObservationAvailabilityMode,
     ) -> CompanyTradingMultiples:
         ticker = financials.ticker or financials.company_id
         price = self._latest_price(market_data, as_of)
         by_period = self._quarterly_by_period(
-            financials, as_of, point_in_time=point_in_time
+            financials, as_of, availability_mode=availability_mode
         )
         period_keys = self._latest_ltm_keys(by_period)
         first_revenue = by_period[period_keys[0]][FinancialConcept.REVENUE]
@@ -203,7 +215,7 @@ class LtmMultiplesService:
         market_data: SecurityMarketData,
         as_of: datetime.date | None,
         *,
-        point_in_time: bool = False,
+        availability_mode: ObservationAvailabilityMode,
     ) -> CompanyTradingMultiples:
         price = self._latest_price(market_data, as_of)
         annual = [
@@ -213,7 +225,12 @@ class LtmMultiplesService:
             and item.fiscal_period == FiscalPeriod.FY
             and (
                 as_of is None
-                or self._is_available(item, as_of, point_in_time=point_in_time)
+                or self._availability_service.is_available(
+                    item,
+                    as_of=as_of,
+                    mode=availability_mode,
+                    snapshot_retrieved_at=financials.retrieved_at,
+                )
             )
         ]
         revenue_periods = [
@@ -344,7 +361,9 @@ class LtmMultiplesService:
         financials: NormalizedCompanyFinancials,
         as_of: datetime.date | None = None,
         *,
-        point_in_time: bool = False,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.CURRENT_SNAPSHOT
+        ),
     ) -> dict[PeriodKey, dict[FinancialConcept, FinancialObservation]]:
         by_period: dict[PeriodKey, dict[FinancialConcept, FinancialObservation]] = {}
         for observation in financials.observations:
@@ -353,8 +372,11 @@ class LtmMultiplesService:
                 or observation.fiscal_period == FiscalPeriod.FY
                 or (
                     as_of is not None
-                    and not cls._is_available(
-                        observation, as_of, point_in_time=point_in_time
+                    and not cls._availability_service.is_available(
+                        observation,
+                        as_of=as_of,
+                        mode=availability_mode,
+                        snapshot_retrieved_at=financials.retrieved_at,
                     )
                 )
             ):
@@ -376,27 +398,10 @@ class LtmMultiplesService:
         conservative, provider-wide publication lag instead of pretending the
         period-end values were public on the balance-sheet date.
         """
-        if observation.filed is not None:
-            return observation.filed
-        if observation.provider.casefold() == "yahoo":
-            lag_days = 90 if observation.granularity == Granularity.ANNUAL else 45
-            return observation.period_end + datetime.timedelta(days=lag_days)
-        return observation.period_end
-
-    @classmethod
-    def _is_available(
-        cls,
-        observation: FinancialObservation,
-        as_of: datetime.date,
-        *,
-        point_in_time: bool,
-    ) -> bool:
-        available_on = (
-            cls.availability_date(observation)
-            if point_in_time or observation.filed is not None
-            else observation.period_end
+        return LtmMultiplesService._availability_service.available_on(
+            observation,
+            mode=ObservationAvailabilityMode.POINT_IN_TIME,
         )
-        return available_on <= as_of
 
     @classmethod
     def _latest_ltm_keys(

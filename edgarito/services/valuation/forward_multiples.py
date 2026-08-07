@@ -3,6 +3,9 @@ import math
 from decimal import Decimal
 from statistics import median
 
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import FcffForecastParameters
 from edgarito.services.valuation.historical_multiples import HistoricalMultiplesService
@@ -63,6 +66,8 @@ class ForwardPeerMultiplesService:
                 forecast = self._forecast_service.forecast(
                     financials,
                     FcffForecastParameters(forecast_years=forecast_years),
+                    as_of=valuation_date,
+                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
                 metric = MultipleResolver._forecast_metric_at_date(
                     basis, forecast, target_date

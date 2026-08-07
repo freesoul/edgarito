@@ -155,6 +155,7 @@ class YahooFinanceClient:
                 if info.get("marketCap") is not None
                 else None
             ),
+            retrieved_at=datetime.datetime.now(datetime.timezone.utc),
             **{
                 name: self._dataframe_to_reports(table)
                 for name, table in statement_tables.items()

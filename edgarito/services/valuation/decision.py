@@ -6,6 +6,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
     FcffForecast,
@@ -72,6 +75,9 @@ class IntrinsicDecisionContext:
     multistage_configuration: MultistageValuationConfiguration
     use_multistage: bool
     valuation_date: datetime.date
+    availability_mode: ObservationAvailabilityMode = (
+        ObservationAvailabilityMode.POINT_IN_TIME
+    )
     normalized_tax_rate: Decimal | None = None
     share_repurchase_parameters: ShareRepurchaseParameters | None = None
     flexible_revenue_growth: bool = True
@@ -170,6 +176,7 @@ class IntrinsicDecisionEngine:
             context.financials,
             parameters,
             as_of=context.valuation_date,
+            availability_mode=context.availability_mode,
         )
         if context.use_multistage:
             configuration = context.multistage_configuration.model_copy(
@@ -194,6 +201,7 @@ class IntrinsicDecisionEngine:
                 normalized_tax_rate=context.normalized_tax_rate,
                 fixed_plan=fixed_plan,
                 as_of=context.valuation_date,
+                availability_mode=context.availability_mode,
             )
         else:
             plan = None

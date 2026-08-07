@@ -583,6 +583,17 @@ YTD-annualized fallback is used only when four consecutive quarters are missing.
 Non-calendar fiscal-year ends are preserved. Missing quarterly inputs fall back
 to the latest complete FY and are labeled as such.
 
+Observation availability is explicit. A normal valuation run uses
+`current_snapshot`: an ended Yahoo period present in the retrieved snapshot is
+available now even when Yahoo omits the filing date. Historical multiples,
+backtests, and other point-in-time reconstructions use `point_in_time`; actual
+filing dates take precedence, otherwise Yahoo periods remain subject to the
+conservative 45-day quarterly and 90-day annual publication lags. A current
+snapshot retrieved after a backdated valuation date is never evidence that an
+undated observation existed on that earlier date. Quarterly forecast seeds still
+require a complete, coherent FCFF dataset; a partial current quarter is skipped
+with a warning rather than filled from older periods.
+
 Debt, cash, investments, and the point-in-time share count come from the latest
 coherent period available by the valuation date, preferring a quarterly balance
 sheet. The output reports separate dates and source concepts. Current shares
@@ -641,6 +652,13 @@ shows the same valuation audit and also enables debug logging. Historical cost
 of debt and book debt as a market-debt proxy are estimates, so override `--wacc`
 or the component fields in a company-specific profile when the issuer's
 economics make them unsuitable.
+
+Yahoo financial snapshots retain their UTC retrieval timestamp in both the raw
+cache payload and normalized provenance. Current valuation reports show that
+timestamp and warn when the snapshot is older than 24 hours; configure the
+warning threshold with `--financial-snapshot-max-age-hours` or use `--refresh`
+to bypass the cached snapshot. This freshness check is scoped to valuation
+reporting and does not impose a hidden TTL on the generic filesystem cache.
 
 When final explicit FCFF growth remains at least one percentage point away from
 perpetual growth, the valuation also warns that the terminal transition is

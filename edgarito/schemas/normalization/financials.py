@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -165,7 +165,17 @@ class NormalizedCompanyFinancials(BaseModel):
     company_name: str
     ticker: Optional[str] = None
     identifiers: Optional[SecurityIdentifiers] = None
+    retrieved_at: Optional[datetime.datetime] = None
     observations: list[FinancialObservation] = Field(default_factory=list)
+
+    @field_validator("retrieved_at")
+    @classmethod
+    def require_timezone(
+        cls, value: Optional[datetime.datetime]
+    ) -> Optional[datetime.datetime]:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("retrieved_at must include a timezone")
+        return value
 
     def filtered(
         self,

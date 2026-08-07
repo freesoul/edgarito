@@ -139,6 +139,8 @@ def test_yahoo_financial_client_caches_serializable_statement_snapshots(tmp_path
     assert first.sector == "Technology"
     assert first.industry == "Software Infrastructure"
     assert first.beta == Decimal("1.15")
+    assert first.retrieved_at is not None
+    assert first.retrieved_at.tzinfo is not None
     assert first.annual_income_statements[0].values["TotalRevenue"] == Decimal("1000.0")
     assert len(factory.instances) == 1
     assert (tmp_path / "providers/yahoo/SAP.DE/financials.json").is_file()
@@ -162,6 +164,7 @@ def test_yahoo_normalizer_maps_extended_financial_concepts_and_periods(tmp_path)
     }
 
     assert normalized.provider == "yahoo"
+    assert normalized.retrieved_at == source.retrieved_at
     assert annual[FinancialConcept.REVENUE].value == Decimal("1000.0")
     assert annual[FinancialConcept.REVENUE].source_concept == "TotalRevenue"
     assert annual[FinancialConcept.CAPITAL_EXPENDITURES].value == Decimal("60.0")

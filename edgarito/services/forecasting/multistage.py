@@ -1,6 +1,9 @@
 from decimal import ROUND_CEILING, Decimal
 
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
 from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
@@ -28,6 +31,9 @@ class AdaptiveMultistageFcffForecastService:
         normalized_tax_rate: Decimal | None = None,
         fixed_plan: AdaptiveMultistagePlan | None = None,
         as_of=None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
     ) -> tuple[FcffForecast, AdaptiveMultistagePlan]:
         if not seed_forecast.observations:
             raise ValueError("Adaptive multistage forecasting requires a seed forecast")
@@ -84,10 +90,16 @@ class AdaptiveMultistageFcffForecastService:
                 plan,
                 configuration,
                 as_of,
+                availability_mode,
             )
 
         parameters = FcffForecastParameters.model_validate(values)
-        forecast = self._base_service.forecast(financials, parameters, as_of=as_of)
+        forecast = self._base_service.forecast(
+            financials,
+            parameters,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
         forecast.method = "adaptive_multistage_fcff"
         forecast.assumption_sources[FcffForecastDriver.REVENUE_GROWTH] = (
             ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
@@ -117,6 +129,7 @@ class AdaptiveMultistageFcffForecastService:
         plan,
         configuration,
         as_of,
+        availability_mode,
     ):
         terminal_roic = configuration.terminal_return_on_invested_capital
         if terminal_roic is None:
@@ -141,12 +154,22 @@ class AdaptiveMultistageFcffForecastService:
                 and requested_parameters.depreciation_to_revenue is None
             ):
                 provisional = FcffForecastParameters.model_validate(values)
-                seed = self._base_service.forecast(financials, provisional, as_of=as_of)
+                seed = self._base_service.forecast(
+                    financials,
+                    provisional,
+                    as_of=as_of,
+                    availability_mode=availability_mode,
+                )
                 values["depreciation_to_revenue"] = self._depreciation_rollforward(
                     seed, life
                 )
             provisional = FcffForecastParameters.model_validate(values)
-            forecast = self._base_service.forecast(financials, provisional, as_of=as_of)
+            forecast = self._base_service.forecast(
+                financials,
+                provisional,
+                as_of=as_of,
+                availability_mode=availability_mode,
+            )
             final = forecast.observations[-1]
             required_net_reinvestment = final.nopat * reinvestment_rate
             target_capex = (

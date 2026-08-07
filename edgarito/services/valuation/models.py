@@ -1048,6 +1048,9 @@ class FcffDcfResult(BaseModel):
     forecast_seed_type: str = "FY"
     forecast_seed_methodology: str = "Latest complete fiscal year"
     forecast_seed_period_end: Optional[datetime.date] = None
+    forecast_actual_quarters: int = Field(default=0, ge=0, le=4)
+    financial_snapshot_retrieved_at: Optional[datetime.datetime] = None
+    observation_availability_mode: Optional[str] = None
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult
