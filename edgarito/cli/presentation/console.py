@@ -13,6 +13,8 @@ from edgarito.cli.presentation.valuation import (
     ValuationSelectionConsolePresenter,
 )
 from edgarito.cli.presentation.valuation_report import (
+    IndependentValuationModelsConsolePresenter,
+    ProviderNeutralRelativeValuationConsolePresenter,
     ValuationReportConsolePresenter,
 )
 
@@ -25,6 +27,8 @@ __all__ = [
     "FinancialsConsolePresenter",
     "ForecastConsolePresenter",
     "MetricsConsolePresenter",
+    "IndependentValuationModelsConsolePresenter",
+    "ProviderNeutralRelativeValuationConsolePresenter",
     "SpecializedExtractionConsolePresenter",
     "ValuationSelectionConsolePresenter",
     "ValuationReportConsolePresenter",

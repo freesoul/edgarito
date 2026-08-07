@@ -19,12 +19,18 @@ from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
+    IndependentValuationModelsConsolePresenter,
     MetricsConsolePresenter,
     SpecializedExtractionConsolePresenter,
     ValuationReportConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
-from edgarito.config.valuation import ForecastMethod, ValuationProfileLoader
+from edgarito.config.valuation import (
+    ForecastMethod,
+    ForecastValuationProfile,
+    ValuationProfileLoader,
+)
+from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
@@ -35,6 +41,20 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.valuation.assumptions import ValuationAssumptionKind
+from edgarito.schemas.valuation.intrinsic import (
+    DividendDiscountInput,
+    DividendForecastPeriod,
+    FcfeDcfInput,
+    FcfeForecastPeriod,
+    IntrinsicValuationContext,
+    ResidualIncomeInput,
+    SotpValuationInput,
+    ValuationConfidence,
+)
+from edgarito.schemas.valuation.relative import (
+    ForwardValuationMetric,
+    RelativeNumeratorBasis,
+)
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.forecasting import (
@@ -88,6 +108,27 @@ from edgarito.services.valuation import (
     ValuationModelSelector,
     ValuationProfileBuilder,
     ValuationProfileOverrides,
+)
+from edgarito.services.valuation.assumptions import CostOfEquityResolver
+from edgarito.services.valuation.execution import ValuationExecutor
+from edgarito.services.valuation.intrinsic import (
+    DividendDiscountService,
+    FcfeDcfService,
+    PipelineRnpvAdapter,
+    PropertyNavAdapter,
+    ReitAffoAdapter,
+    ResidualIncomeService,
+    ResourceNavAdapter,
+    SotpValuationService,
+)
+from edgarito.services.valuation.models import (
+    MultipleConfidence,
+    ResolvedMultiple,
+    ValuationModel,
+)
+from edgarito.services.valuation.relative import (
+    EQUITY_RELATIVE_BASES,
+    ProviderNeutralRelativeValuationService,
 )
 from edgarito.settings import (
     ALPHAVANTAGE_API_KEY,
@@ -198,6 +239,780 @@ async def _run_forecast(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_profile_intrinsic_valuation(
+    args: argparse.Namespace,
+    profile: ForecastValuationProfile,
+    selected_model: str,
+) -> int:
+    """Execute a profile-backed equity or asset model without an FCFF bridge."""
+    concepts = ValuationProfileBuilder.required_concepts() | {
+        FinancialConcept.NET_INCOME_COMMON,
+        FinancialConcept.COMMON_EQUITY,
+        FinancialConcept.DIVIDENDS_PAID,
+        FinancialConcept.GOODWILL,
+        FinancialConcept.INTANGIBLE_ASSETS_NET,
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+        FinancialConcept.CAPITAL_EXPENDITURES,
+    }
+    financials = await _retrieve_financials(args, Granularity.ANNUAL, concepts)
+    valuation_date = datetime.date.today()
+    annual = [
+        item
+        for item in financials.observations
+        if item.granularity == Granularity.ANNUAL
+        and item.fiscal_period == FiscalPeriod.FY
+    ]
+    if not annual:
+        raise ValueError("Intrinsic equity models require annual normalized history")
+    latest_by_concept = {}
+    for item in sorted(annual, key=lambda value: value.period_end):
+        latest_by_concept[item.concept] = item
+    monetary = next(
+        (
+            item
+            for item in sorted(annual, key=lambda value: value.period_end, reverse=True)
+            if item.unit != "shares" and "/shares" not in item.unit
+        ),
+        None,
+    )
+    if monetary is None:
+        raise ValueError("Could not resolve a reporting currency for valuation")
+    currency = monetary.unit
+    bridge = profile.valuation.capital_bridge
+    share_observation = latest_by_concept.get(
+        FinancialConcept.SHARES_OUTSTANDING
+    ) or latest_by_concept.get(FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES)
+    shares = (
+        args.shares
+        or bridge.diluted_shares
+        or (share_observation.value if share_observation is not None else None)
+    )
+    if shares is None or shares <= 0:
+        raise ValueError(
+            "Intrinsic equity valuation requires a positive diluted share count"
+        )
+
+    terminal_growth = (
+        args.terminal_growth
+        if args.terminal_growth is not None
+        else profile.valuation.terminal_value.perpetual_growth_rate
+    )
+    discount_configuration = profile.valuation.discount_rates
+    archetype = profile.model_selection.business_archetype
+    needs_equity_rate = selected_model in {
+        "fcfe-dcf",
+        "reit-affo",
+        "ddm",
+        "residual-income",
+    } or (
+        selected_model == "auto-specialized"
+        and archetype
+        in {
+            BusinessArchetype.FINANCIAL_INTERMEDIARY,
+            BusinessArchetype.REIT_PROPERTY,
+        }
+    )
+    needs_terminal_growth = selected_model in {
+        "fcfe-dcf",
+        "reit-affo",
+        "ddm",
+    } or (
+        selected_model == "auto-specialized"
+        and archetype
+        in {
+            BusinessArchetype.FINANCIAL_INTERMEDIARY,
+            BusinessArchetype.REIT_PROPERTY,
+        }
+    )
+    needs_cost = needs_equity_rate and (
+        args.cost_of_equity is None and discount_configuration.cost_of_equity is None
+    )
+    automatic = await _retrieve_automatic_assumption_inputs(
+        args,
+        financials,
+        currency,
+        needs_wacc=needs_cost,
+        needs_terminal=needs_terminal_growth and terminal_growth is None,
+        sector_override=profile.model_selection.sector,
+        industry_override=profile.model_selection.industry,
+    )
+    resolved_equity = (
+        CostOfEquityResolver().resolve(
+            configuration=discount_configuration,
+            valuation_date=valuation_date,
+            currency=currency,
+            company_id=financials.company_id,
+            classification=automatic.get("classification"),
+            risk_free_series=automatic.get("risk_free_series"),
+            country_snapshot=automatic.get("country_snapshot"),
+            industry_snapshot=automatic.get("industry_snapshot"),
+            company_beta=automatic.get("company_beta"),
+            cost_of_equity_override=args.cost_of_equity,
+        )
+        if needs_equity_rate
+        else None
+    )
+    if needs_terminal_growth and terminal_growth is None:
+        assert resolved_equity is not None
+        terminal_growth, _ = ValuationAssumptionResolver()._derive_terminal_growth(
+            wacc=resolved_equity.cost_of_equity,
+            selected_on=valuation_date,
+            currency=currency,
+            company_id=financials.company_id,
+            inflation_series=automatic.get("inflation_series"),
+            risk_free_series=automatic.get("risk_free_series"),
+        )
+    if terminal_growth is None:
+        terminal_growth = Decimal(0)
+
+    available_inputs = set(profile.configured_valuation_inputs)
+    available_inputs.add(ValuationInput.DILUTED_SHARES)
+    if needs_equity_rate:
+        available_inputs.add(ValuationInput.COST_OF_EQUITY)
+    if needs_terminal_growth:
+        available_inputs.add(ValuationInput.TERMINAL_GROWTH)
+    if selected_model in {"fcfe-dcf", "reit-affo"}:
+        available_inputs.add(ValuationInput.EQUITY_CASH_FLOW_FORECAST)
+    elif selected_model == "ddm":
+        available_inputs.update(
+            {ValuationInput.DIVIDEND_FORECAST, ValuationInput.PAYOUT_POLICY}
+        )
+    elif selected_model == "residual-income":
+        available_inputs.add(ValuationInput.FORECAST_ROE)
+    elif selected_model in {
+        "nav",
+        "property-nav",
+        "resource-nav",
+        "pipeline-rnpv",
+    }:
+        available_inputs.add(ValuationInput.ASSET_LEVEL_VALUES)
+        if selected_model == "nav":
+            available_inputs.add(ValuationInput.SEGMENT_VALUES)
+    if selected_model == "resource-nav":
+        available_inputs.add(ValuationInput.RESERVE_DATA)
+    if selected_model == "pipeline-rnpv":
+        available_inputs.add(ValuationInput.PIPELINE_DATA)
+    overrides = ValuationProfileOverrides(
+        sector=profile.model_selection.sector,
+        industry=profile.model_selection.industry,
+        business_archetype=profile.model_selection.business_archetype,
+        financial_institution_kind=(
+            profile.model_selection.financial_institution_kind
+            or profile.valuation.financial_institution.kind
+        ),
+        actuarial_detail_supplied=(
+            profile.valuation.financial_institution.actuarial_detail_supplied
+        ),
+        regulatory_capital_constraints_supplied=bool(
+            profile.valuation.financial_institution.regulatory_capital_constraints
+        ),
+        lifecycle=profile.model_selection.lifecycle,
+        cyclicality=profile.model_selection.cyclicality,
+        economic_traits=set(profile.model_selection.economic_traits),
+        available_inputs=available_inputs,
+        peer_count=profile.model_selection.peer_count,
+    )
+    economic_profile = ValuationProfileBuilder().build(
+        financials, automatic.get("classification"), overrides
+    )
+    selection = ValuationModelSelector().select(economic_profile)
+    context = IntrinsicValuationContext(
+        company_id=financials.company_id,
+        company_name=financials.company_name,
+        ticker=financials.ticker or args.ticker,
+        valuation_date=valuation_date,
+        currency=currency,
+        diluted_shares=shares,
+        confidence=ValuationConfidence.MEDIUM,
+    )
+    terminal_roe_override = args.terminal_roe
+    equity_rate = (
+        resolved_equity.cost_of_equity if resolved_equity is not None else Decimal(0)
+    )
+    requested_models = None
+    runners = {}
+    if selected_model == "auto-specialized":
+        candidates = {
+            BusinessArchetype.FINANCIAL_INTERMEDIARY: (
+                "residual-income",
+                "fcfe-dcf",
+                "ddm",
+            ),
+            BusinessArchetype.REIT_PROPERTY: (
+                "property-nav",
+                "reit-affo",
+                "ddm",
+            ),
+            BusinessArchetype.RESOURCE_PRODUCER: ("resource-nav",),
+            BusinessArchetype.PROJECT_PIPELINE: ("pipeline-rnpv",),
+            BusinessArchetype.HOLDING_COMPANY: ("nav",),
+            BusinessArchetype.CONGLOMERATE: ("nav",),
+        }.get(economic_profile.business_archetype, ())
+        for candidate in candidates:
+            try:
+                model, runner = _profile_model_runner(
+                    selected_model=candidate,
+                    profile=profile,
+                    context=context,
+                    annual=annual,
+                    cost_of_equity=equity_rate,
+                    terminal_growth=terminal_growth,
+                    terminal_roe_override=terminal_roe_override,
+                    args=args,
+                )
+            except ValueError:
+                continue
+            runners.setdefault(model, runner)
+    else:
+        try:
+            model, runner = _profile_model_runner(
+                selected_model=selected_model,
+                profile=profile,
+                context=context,
+                annual=annual,
+                cost_of_equity=equity_rate,
+                terminal_growth=terminal_growth,
+                terminal_roe_override=terminal_roe_override,
+                args=args,
+            )
+        except ValueError as exc:
+            model = {
+                "fcfe-dcf": ValuationModel.EQUITY_DCF,
+                "reit-affo": ValuationModel.EQUITY_DCF,
+                "ddm": ValuationModel.DIVIDEND_DISCOUNT,
+                "residual-income": ValuationModel.RESIDUAL_INCOME,
+                "nav": ValuationModel.NAV_SOTP,
+                "property-nav": ValuationModel.NAV_SOTP,
+                "resource-nav": ValuationModel.NAV_SOTP,
+                "pipeline-rnpv": ValuationModel.NAV_SOTP,
+            }[selected_model]
+            message = str(exc)
+
+            def runner(message=message):
+                raise ValueError(message)
+
+        runners[model] = runner
+        requested_models = {model}
+    run = ValuationExecutor().execute(
+        selection=selection,
+        runners=runners,
+        requested_models=requested_models,
+    )
+    print(
+        IndependentValuationModelsConsolePresenter().render(
+            run, verbose=args.verbose or args.audit
+        )
+    )
+    return 0
+
+
+def _profile_model_runner(
+    *,
+    selected_model: str,
+    profile: ForecastValuationProfile,
+    context: IntrinsicValuationContext,
+    annual,
+    cost_of_equity: Decimal,
+    terminal_growth: Decimal,
+    terminal_roe_override: Decimal | None,
+    args: argparse.Namespace,
+):
+    valuation = profile.valuation
+    latest = {}
+    by_year = {}
+    for item in sorted(annual, key=lambda value: value.period_end):
+        latest[item.concept] = item
+        by_year.setdefault(item.fiscal_year, {})[item.concept] = item
+
+    if selected_model in {"fcfe-dcf", "reit-affo"}:
+        configured_fcfe = valuation.fcfe
+        regulated_financial = False
+        if selected_model == "reit-affo":
+            configured = valuation.reit
+            values = configured.affo_forecast
+            if not values:
+                values = (
+                    ReitAffoAdapter.derive_affo(
+                        ffo=configured.ffo,
+                        recurring_adjustments=configured.recurring_affo_adjustments,
+                    ),
+                )
+        else:
+            values = tuple(args.fcfe or configured_fcfe.explicit_fcfe)
+        terminal_roe = (
+            terminal_roe_override
+            or valuation.fcfe.terminal_return_on_equity
+            or valuation.dividend_discount.terminal_return_on_equity
+        )
+        if terminal_roe is None:
+            raise ValueError("FCFE DCF requires terminal ROE")
+        retention = terminal_growth / terminal_roe
+        if retention >= 1:
+            raise ValueError("Terminal growth must be below terminal ROE")
+        if values:
+            terminal_income = values[-1] / (Decimal(1) - retention)
+            periods = tuple(
+                FcfeForecastPeriod(
+                    label=f"Year {index}",
+                    period=Decimal(index),
+                    fcfe=value,
+                    explicit_fcfe=True,
+                )
+                for index, value in enumerate(values, 1)
+            )
+        else:
+            net_income = configured_fcfe.net_income
+            required_equity = (
+                configured_fcfe.required_common_equity_changes
+                or valuation.financial_institution.required_common_equity_changes
+            )
+            if net_income and len(net_income) == len(required_equity):
+                regulated_financial = True
+                periods = tuple(
+                    FcfeDcfService.regulated_period(
+                        label=f"Year {index}",
+                        period=Decimal(index),
+                        net_income=income,
+                        required_common_equity_change=required_equity[index - 1],
+                    )
+                    for index, income in enumerate(net_income, 1)
+                )
+            else:
+                paths = (
+                    net_income,
+                    configured_fcfe.depreciation_and_amortization,
+                    configured_fcfe.capital_expenditures,
+                    configured_fcfe.working_capital_changes,
+                )
+                if not net_income or any(
+                    len(path) != len(net_income) for path in paths
+                ):
+                    raise ValueError(
+                        "FCFE requires an explicit path or complete net-income, D&A, "
+                        "capex, and working-capital paths"
+                    )
+                borrowing = tuple(args.net_borrowing or configured_fcfe.net_borrowing)
+                debt_ratio = (
+                    args.debt_financing_ratio
+                    if args.debt_financing_ratio is not None
+                    else configured_fcfe.debt_financing_ratio
+                )
+                if not borrowing and debt_ratio is None:
+                    raise ValueError(
+                        "Corporate FCFE requires net borrowing or a debt-financing ratio"
+                    )
+                if borrowing and len(borrowing) != len(net_income):
+                    raise ValueError(
+                        "Net borrowing must have one value per FCFE period"
+                    )
+                built = []
+                for index, income in enumerate(net_income, 1):
+                    if borrowing:
+                        da = paths[1][index - 1]
+                        capex = paths[2][index - 1]
+                        working_capital = paths[3][index - 1]
+                        debt = borrowing[index - 1]
+                        built.append(
+                            FcfeForecastPeriod(
+                                label=f"Year {index}",
+                                period=Decimal(index),
+                                net_income=income,
+                                depreciation_and_amortization=da,
+                                capital_expenditures=capex,
+                                working_capital_change=working_capital,
+                                net_borrowing=debt,
+                                fcfe=income + da - capex - working_capital + debt,
+                            )
+                        )
+                    else:
+                        built.append(
+                            FcfeDcfService.corporate_period(
+                                label=f"Year {index}",
+                                period=Decimal(index),
+                                net_income=income,
+                                depreciation_and_amortization=paths[1][index - 1],
+                                capital_expenditures=paths[2][index - 1],
+                                working_capital_change=paths[3][index - 1],
+                                debt_financing_ratio=debt_ratio,
+                            )
+                        )
+                periods = tuple(built)
+            terminal_income = net_income[-1]
+
+        def run_fcfe():
+            result = FcfeDcfService().value(
+                FcfeDcfInput(
+                    context=context,
+                    periods=periods,
+                    cost_of_equity=cost_of_equity,
+                    terminal_growth_rate=terminal_growth,
+                    terminal_return_on_equity=terminal_roe,
+                    terminal_net_income=terminal_income,
+                    regulated_financial=regulated_financial,
+                )
+            )
+            if selected_model == "reit-affo":
+                return result.model_copy(update={"adapter": "REIT discounted AFFO"})
+            return result
+
+        return ValuationModel.EQUITY_DCF, run_fcfe
+
+    if selected_model == "ddm":
+        configured = valuation.dividend_discount
+        mode = configured.mode
+        dividends = tuple(args.dividend or configured.dividends)
+        earnings = configured.earnings
+        payout_path = tuple(args.payout_ratio or configured.payout_ratios)
+        if not dividends and earnings and len(earnings) == len(payout_path):
+            dividends = tuple(
+                earning * payout
+                for earning, payout in zip(earnings, payout_path, strict=True)
+            )
+        if not dividends:
+            historical_dividends = [
+                values[FinancialConcept.DIVIDENDS_PAID]
+                for _, values in sorted(by_year.items())
+                if FinancialConcept.DIVIDENDS_PAID in values
+                and values[FinancialConcept.DIVIDENDS_PAID].value > 0
+            ]
+            if historical_dividends:
+                dividends = (
+                    historical_dividends[-1].value
+                    * (Decimal(1) + terminal_growth / Decimal(100)),
+                )
+                mode = "gordon"
+        if not dividends:
+            raise ValueError("DDM requires dividends or earnings multiplied by payout")
+        periods = tuple(
+            DividendForecastPeriod(
+                label=f"Year {index}",
+                period=Decimal(index),
+                earnings=(
+                    earnings[index - 1] if len(earnings) == len(dividends) else None
+                ),
+                dividends=dividend,
+                payout_ratio=(
+                    payout_path[index - 1]
+                    if len(payout_path) == len(dividends)
+                    and len(earnings) == len(dividends)
+                    and dividend == earnings[index - 1] * payout_path[index - 1]
+                    else None
+                ),
+            )
+            for index, dividend in enumerate(dividends, 1)
+        )
+        terminal_roe = terminal_roe_override or configured.terminal_return_on_equity
+        payout = payout_path[-1] if payout_path else configured.terminal_payout_ratio
+        if payout is None:
+            historical_payouts = []
+            for _, values in sorted(by_year.items()):
+                income = values.get(FinancialConcept.NET_INCOME_COMMON) or values.get(
+                    FinancialConcept.NET_INCOME
+                )
+                dividend = values.get(FinancialConcept.DIVIDENDS_PAID)
+                if (
+                    income is not None
+                    and dividend is not None
+                    and income.value > 0
+                    and income.unit == dividend.unit
+                ):
+                    historical_payouts.append(dividend.value / income.value)
+            if len(historical_payouts) >= 3:
+                payout = sorted(historical_payouts[-3:])[1]
+
+        def run_ddm():
+            return DividendDiscountService().value(
+                DividendDiscountInput(
+                    context=context,
+                    mode=mode,
+                    cost_of_equity=cost_of_equity,
+                    terminal_growth_rate=terminal_growth,
+                    terminal_return_on_equity=terminal_roe,
+                    terminal_payout_ratio=payout,
+                    periods=periods if mode == "multistage" else (),
+                    next_dividend=dividends[0] if mode == "gordon" else None,
+                    terminal_earnings=earnings[-1] if earnings else None,
+                )
+            )
+
+        return ValuationModel.DIVIDEND_DISCOUNT, run_ddm
+
+    if selected_model == "residual-income":
+        configured = valuation.residual_income
+        book = configured.starting_book_value
+        basis = configured.book_value_basis
+        if book is None:
+            common = latest.get(FinancialConcept.COMMON_EQUITY) or latest.get(
+                FinancialConcept.STOCKHOLDERS_EQUITY
+            )
+            if common is None:
+                raise ValueError("Residual income requires positive common equity")
+            book = common.value
+            if basis == "tangible_common_equity":
+                book -= sum(
+                    (
+                        latest[concept].value
+                        for concept in (
+                            FinancialConcept.GOODWILL,
+                            FinancialConcept.INTANGIBLE_ASSETS_NET,
+                        )
+                        if concept in latest and latest[concept].unit == common.unit
+                    ),
+                    Decimal(0),
+                )
+        roe_path = tuple(args.forecast_roe or configured.return_on_equity_path)
+        payout_path = tuple(args.payout_ratio or configured.payout_ratio_path)
+        if not roe_path or not payout_path:
+            inferred = []
+            for year in sorted(by_year):
+                values = by_year[year]
+                income = values.get(FinancialConcept.NET_INCOME_COMMON) or values.get(
+                    FinancialConcept.NET_INCOME
+                )
+                equity = values.get(FinancialConcept.COMMON_EQUITY) or values.get(
+                    FinancialConcept.STOCKHOLDERS_EQUITY
+                )
+                dividends = values.get(FinancialConcept.DIVIDENDS_PAID)
+                if (
+                    income is not None
+                    and equity is not None
+                    and dividends is not None
+                    and income.value > 0
+                    and equity.value > 0
+                    and income.unit == equity.unit == dividends.unit
+                ):
+                    inferred.append(
+                        (
+                            year,
+                            income.value / equity.value * Decimal(100),
+                            dividends.value / income.value,
+                        )
+                    )
+            normalized_roe, normalized_payout, _ = ResidualIncomeService.infer_policy(
+                tuple(inferred[-3:])
+            )
+            roe_path = roe_path or (normalized_roe,) * 5
+            payout_path = payout_path or (normalized_payout,) * len(roe_path)
+        persistence = (
+            args.excess_return_persistence
+            if args.excess_return_persistence is not None
+            else configured.excess_return_persistence
+        )
+
+        def run_residual():
+            return ResidualIncomeService().value(
+                ResidualIncomeInput(
+                    context=context,
+                    starting_book_value=book,
+                    book_value_basis=basis,
+                    return_on_equity_path=roe_path,
+                    payout_ratio_path=payout_path,
+                    cost_of_equity=cost_of_equity,
+                    excess_return_persistence=persistence,
+                )
+            )
+
+        return ValuationModel.RESIDUAL_INCOME, run_residual
+
+    components = valuation.sotp.components
+    adjustments = valuation.sotp.adjustments
+    adapter = "generic SOTP"
+    if selected_model == "property-nav":
+        components = PropertyNavAdapter().to_components(
+            valuation.reit.properties, valuation_date=context.valuation_date
+        )
+        adapter = "property NOI / cap-rate NAV"
+    elif selected_model == "resource-nav":
+        scenario_components = ResourceNavAdapter().to_scenarios(
+            valuation.resources.projects, valuation_date=context.valuation_date
+        )
+
+        def run_resource_scenarios():
+            return tuple(
+                SotpValuationService().value(
+                    SotpValuationInput(
+                        context=context,
+                        components=scenario_values,
+                        adjustments=adjustments,
+                        holding_company_discount=(
+                            valuation.sotp.holding_company_discount
+                        ),
+                        adapter=f"finite resource project NAV [{scenario}]",
+                    )
+                )
+                for scenario, scenario_values in scenario_components.items()
+            )
+
+        return ValuationModel.NAV_SOTP, run_resource_scenarios
+    elif selected_model == "pipeline-rnpv":
+        components = PipelineRnpvAdapter().to_components(
+            valuation.pipelines.projects, valuation_date=context.valuation_date
+        )
+        adapter = "pipeline probability-adjusted rNPV"
+    elif selected_model != "nav":
+        raise ValueError(f"Unsupported intrinsic model: {selected_model}")
+
+    def run_sotp():
+        return SotpValuationService().value(
+            SotpValuationInput(
+                context=context,
+                components=components,
+                adjustments=adjustments,
+                holding_company_discount=valuation.sotp.holding_company_discount,
+                adapter=adapter,
+            )
+        )
+
+    return ValuationModel.NAV_SOTP, run_sotp
+
+
+def _equity_relative_valuation(
+    *,
+    basis: RelativeValuationBasis,
+    report,
+    profile: ForecastValuationProfile,
+    intrinsic,
+    valuation_date: datetime.date,
+    horizon_years: Decimal,
+    discount_rate: Decimal,
+):
+    fundamentals = report.target.fundamentals
+    metric = None
+    label = ""
+    if basis == RelativeValuationBasis.PE:
+        earnings = profile.valuation.dividend_discount.earnings
+        metric = earnings[0] if earnings else fundamentals.net_income
+        label = (
+            "forward common earnings" if earnings else "LTM common earnings fallback"
+        )
+    elif basis == RelativeValuationBasis.PRICE_TO_BOOK:
+        metric = (
+            profile.valuation.residual_income.starting_book_value
+            or fundamentals.book_equity
+        )
+        label = "common book equity"
+    elif basis == RelativeValuationBasis.PRICE_TO_TANGIBLE_BOOK:
+        metric = fundamentals.tangible_book_equity
+        label = "tangible common equity"
+    elif basis == RelativeValuationBasis.PRICE_TO_AFFO:
+        affo = profile.valuation.reit.affo_forecast
+        if affo:
+            metric = affo[0]
+            label = "forward AFFO"
+        else:
+            metric = ReitAffoAdapter.derive_affo(
+                ffo=profile.valuation.reit.ffo,
+                recurring_adjustments=(
+                    profile.valuation.reit.recurring_affo_adjustments
+                ),
+            )
+            label = "current AFFO"
+    elif basis == RelativeValuationBasis.PRICE_TO_NAV:
+        components = profile.valuation.sotp.components
+        if not components and profile.valuation.reit.properties:
+            components = PropertyNavAdapter().to_components(
+                profile.valuation.reit.properties,
+                valuation_date=valuation_date,
+            )
+        nav = SotpValuationService().value(
+            SotpValuationInput(
+                context=IntrinsicValuationContext(
+                    company_id=report.target.company_id,
+                    company_name=report.target.company_name,
+                    ticker=report.target.ticker,
+                    valuation_date=valuation_date,
+                    currency=report.target.currency,
+                    diluted_shares=report.target.fundamentals.shares,
+                ),
+                components=components,
+                adjustments=profile.valuation.sotp.adjustments,
+                holding_company_discount=(
+                    profile.valuation.sotp.holding_company_discount
+                ),
+            )
+        )
+        metric = nav.equity_value
+        label = "profile NAV"
+    if metric is None or metric <= 0:
+        raise ValueError(f"positive target denominator unavailable for {basis.value}")
+    summary = next((item for item in report.summaries if item.basis == basis), None)
+    if summary is None:
+        raise ValueError(f"peer denominator unavailable for {basis.value}")
+    policy = profile.relative_valuation.multiple_resolution
+    if summary.sample_size < policy.minimum_peer_sample:
+        raise ValueError(
+            f"only {summary.sample_size} usable peer denominators; "
+            f"policy requires {policy.minimum_peer_sample}"
+        )
+    fundamental = intrinsic.equity_value / metric
+    point = summary.median
+    lower = min(summary.percentile_25 or summary.minimum, fundamental, point)
+    upper = max(summary.percentile_75 or summary.maximum, fundamental, point)
+    confidence = (
+        MultipleConfidence.HIGH
+        if summary.sample_size >= 8
+        else MultipleConfidence.MEDIUM
+        if summary.sample_size >= policy.minimum_peer_sample
+        else MultipleConfidence.LOW
+    )
+    market_cap = report.target.market_capitalization
+    current_anchor = market_cap / metric if market_cap is not None else None
+    resolved_multiple = ResolvedMultiple(
+        basis=basis,
+        point_estimate=point,
+        lower_bound=max(Decimal("0.01"), lower),
+        upper_bound=upper,
+        fundamental_anchor=fundamental,
+        peer_anchor=summary.median,
+        peer_anchor_source="current peer denominator evidence",
+        peer_anchor_percentile_25=summary.percentile_25,
+        peer_anchor_percentile_75=summary.percentile_75,
+        current_target_anchor=current_anchor,
+        market_anchor=summary.median,
+        observed_premium=(
+            current_anchor / summary.median - Decimal(1)
+            if current_anchor is not None
+            else None
+        ),
+        resolved_premium=Decimal(0),
+        historical_persistence=Decimal(0),
+        fundamental_support=Decimal(1),
+        horizon_retention=Decimal(1),
+        persistence_factor=Decimal(0),
+        sample_size=summary.sample_size,
+        peer_confidence=confidence,
+        confidence=confidence,
+        methodology=(
+            "Independent peer median with DCF-implied equity multiple retained "
+            "inside the evidence range"
+        ),
+        warnings=(
+            ("Target denominator uses current/LTM fallback rather than a forecast",)
+            if "fallback" in label
+            else ()
+        ),
+    )
+    target_date = valuation_date + datetime.timedelta(
+        days=int(horizon_years * Decimal(365))
+    )
+    return ProviderNeutralRelativeValuationService().value(
+        valuation_date=valuation_date,
+        horizon_years=horizon_years,
+        metric=ForwardValuationMetric(
+            basis=basis,
+            amount=metric,
+            label=label,
+            target_date=target_date,
+            currency=report.target.currency,
+            numerator_basis=RelativeNumeratorBasis.EQUITY_VALUE,
+        ),
+        diluted_shares=report.target.fundamentals.shares,
+        discount_rate=discount_rate,
+        resolved_multiple=resolved_multiple,
+        current_price=report.target.price,
+    )
+
+
 async def _run_valuation(args: argparse.Namespace) -> int:
     generated_profile_path = None
     should_generate_profile = False
@@ -210,9 +1025,42 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         )
     else:
         profile = ValuationProfileLoader.load(args.profile)
-    selected_model = args.model or (
-        "both" if profile.relative_valuation.enabled else "fcff-dcf"
-    )
+    selected_model = args.model
+    if selected_model == "auto":
+        archetype = profile.model_selection.business_archetype
+        if archetype is None:
+            try:
+                classification = await _retrieve_classification(
+                    args, provider=None, crosscheck=False
+                )
+                sector = profile.model_selection.sector or classification.sector
+                industry = profile.model_selection.industry or classification.industry
+                archetype = ValuationProfileBuilder._archetype(
+                    sector, ValuationProfileBuilder._key(industry)
+                )
+            except (RuntimeError, ValueError):
+                archetype = None
+        if archetype is not None and profile.model_selection.business_archetype is None:
+            profile = profile.model_copy(
+                update={
+                    "model_selection": profile.model_selection.model_copy(
+                        update={"business_archetype": archetype}
+                    )
+                }
+            )
+        selected_model = {
+            BusinessArchetype.FINANCIAL_INTERMEDIARY: "auto-specialized",
+            BusinessArchetype.REIT_PROPERTY: "auto-specialized",
+            BusinessArchetype.RESOURCE_PRODUCER: "auto-specialized",
+            BusinessArchetype.PROJECT_PIPELINE: "auto-specialized",
+            BusinessArchetype.HOLDING_COMPANY: "auto-specialized",
+            BusinessArchetype.CONGLOMERATE: "auto-specialized",
+        }.get(
+            archetype,
+            "both" if profile.relative_valuation.enabled else "fcff-dcf",
+        )
+    if selected_model not in {"fcff-dcf", "comparables", "both"}:
+        return await _run_profile_intrinsic_valuation(args, profile, selected_model)
     forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
     terminal_configuration = profile.valuation.terminal_value
     terminal_method = (
@@ -317,6 +1165,13 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             sector=profile.model_selection.sector,
             industry=profile.model_selection.industry,
             business_archetype=profile.model_selection.business_archetype,
+            financial_institution_kind=profile.model_selection.financial_institution_kind,
+            actuarial_detail_supplied=(
+                profile.valuation.financial_institution.actuarial_detail_supplied
+            ),
+            regulatory_capital_constraints_supplied=bool(
+                profile.valuation.financial_institution.regulatory_capital_constraints
+            ),
             lifecycle=profile.model_selection.lifecycle,
             cyclicality=profile.model_selection.cyclicality,
             economic_traits=set(profile.model_selection.economic_traits),
@@ -325,6 +1180,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     comparable_bundle = None
     comparable_error = None
     relative_result = None
+    provider_relative_result = None
     if selected_model in {"comparables", "both"}:
         provider_symbols = _parse_provider_symbols(args.provider_symbol)
         fallback_symbol = args.ticker or financials.ticker
@@ -575,19 +1431,20 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             comparable_financials = comparable_bundle.target_financials
             comparable_market = comparable_bundle.target_market
             comparable_peer_sources = comparable_bundle.peer_sources
-            report = ForwardPeerMultiplesService().build(
-                report,
-                {
-                    symbol: financials
-                    for symbol, (
-                        financials,
-                        _market,
-                    ) in comparable_peer_sources.items()
-                },
-                basis,
-                valuation_date,
-                horizon_years,
-            )
+            if basis not in EQUITY_RELATIVE_BASES:
+                report = ForwardPeerMultiplesService().build(
+                    report,
+                    {
+                        symbol: financials
+                        for symbol, (
+                            financials,
+                            _market,
+                        ) in comparable_peer_sources.items()
+                    },
+                    basis,
+                    valuation_date,
+                    horizon_years,
+                )
             peer_report = report
             relative_ready = True
             if report.universe.discovery_confidence == "low":
@@ -605,7 +1462,29 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     f"{relative_configuration.multiple_resolution.minimum_peer_sample}"
                 )
                 relative_ready = False
-            if relative_ready:
+            if relative_ready and basis in EQUITY_RELATIVE_BASES:
+                try:
+                    provider_relative_result = _equity_relative_valuation(
+                        basis=basis,
+                        report=report,
+                        profile=profile,
+                        intrinsic=result,
+                        valuation_date=valuation_date,
+                        horizon_years=horizon_years,
+                        discount_rate=(
+                            resolved.assumption_set.find(
+                                ValuationAssumptionKind.COST_OF_EQUITY
+                            ).value
+                            if resolved.assumption_set.find(
+                                ValuationAssumptionKind.COST_OF_EQUITY
+                            )
+                            is not None
+                            else resolved.wacc
+                        ),
+                    )
+                except ValueError as exc:
+                    additional_warnings.append(f"Relative valuation skipped: {exc}")
+            if relative_ready and basis not in EQUITY_RELATIVE_BASES:
                 target_history = HistoricalMultiplesService().compute(
                     comparable_financials,
                     comparable_market,
@@ -651,6 +1530,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     current_price = (
         relative_result.current_price if relative_result is not None else None
     )
+    if current_price is None and provider_relative_result is not None:
+        current_price = provider_relative_result.current_price
     if current_price is None and comparable_bundle is not None:
         current_price = comparable_bundle.report.target.price
     market_data = automatic_inputs.get("market_data")
@@ -705,7 +1586,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             decision_result = DecisionValuationService(decision_policy).build(
                 decision_context,
                 current_price,
-                relative_result,
+                relative_result or provider_relative_result,
             )
         except ValueError as exc:
             additional_warnings.append(f"Decision analysis unavailable: {exc}")
@@ -717,6 +1598,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         intrinsic=result if selected_model in {"fcff-dcf", "both"} else None,
         peer_report=peer_report,
         relative=relative_result,
+        provider_relative=provider_relative_result,
         decision=decision_result,
         profile_name=profile.name,
         show_scenarios=args.scenarios,
@@ -754,6 +1636,13 @@ async def _run_valuation_models(args: argparse.Namespace) -> int:
             BusinessArchetype(args.business_type)
             if args.business_type
             else configuration.business_archetype
+        ),
+        financial_institution_kind=configuration.financial_institution_kind,
+        actuarial_detail_supplied=(
+            valuation_profile.valuation.financial_institution.actuarial_detail_supplied
+        ),
+        regulatory_capital_constraints_supplied=bool(
+            valuation_profile.valuation.financial_institution.regulatory_capital_constraints
         ),
         lifecycle=(
             CompanyLifecycle(args.lifecycle)

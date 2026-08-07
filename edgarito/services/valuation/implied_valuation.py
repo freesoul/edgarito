@@ -138,4 +138,3 @@ class ComparableImpliedValuationService:
             implied_value_per_share=value_per_share,
             present_value_per_share=present_value,
         )
-

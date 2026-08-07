@@ -18,6 +18,7 @@ def _decimal_close(left: Decimal, right: Decimal) -> bool:
 class ValuationModel(str, Enum):
     FCFF_DCF = "fcff_dcf"
     EQUITY_DCF = "equity_dcf"
+    DIVIDEND_DISCOUNT = "dividend_discount"
     RESIDUAL_INCOME = "residual_income"
     NAV_SOTP = "nav_sotp"
     COMPARABLE_MULTIPLES = "comparable_multiples"
@@ -26,7 +27,8 @@ class ValuationModel(str, Enum):
     def label(self) -> str:
         return {
             ValuationModel.FCFF_DCF: "FCFF DCF",
-            ValuationModel.EQUITY_DCF: "Equity DCF / DDM",
+            ValuationModel.EQUITY_DCF: "FCFE / Equity DCF",
+            ValuationModel.DIVIDEND_DISCOUNT: "Dividend Discount Model",
             ValuationModel.RESIDUAL_INCOME: "Residual Income",
             ValuationModel.NAV_SOTP: "NAV / Sum-of-the-Parts",
             ValuationModel.COMPARABLE_MULTIPLES: "Comparable Multiples",
@@ -43,6 +45,12 @@ class BusinessArchetype(str, Enum):
     PROJECT_PIPELINE = "project_pipeline"
     HOLDING_COMPANY = "holding_company"
     CONGLOMERATE = "conglomerate"
+
+
+class FinancialInstitutionKind(str, Enum):
+    BANK = "bank"
+    INSURER = "insurer"
+    OTHER = "other"
 
 
 class CompanyLifecycle(str, Enum):
@@ -104,7 +112,9 @@ class ValuationInput(str, Enum):
     REVENUE_HISTORY = "revenue_history"
     FCF_HISTORY = "fcf_history"
     EARNINGS_HISTORY = "earnings_history"
+    DIVIDEND_HISTORY = "dividend_history"
     BOOK_EQUITY = "book_equity"
+    COMMON_EQUITY = "common_equity"
     BALANCE_SHEET = "balance_sheet"
 
     FCFF_FORECAST = "fcff_forecast"
@@ -117,6 +127,7 @@ class ValuationInput(str, Enum):
     NET_DEBT = "net_debt"
     DILUTED_SHARES = "diluted_shares"
     TANGIBLE_BOOK_EQUITY = "tangible_book_equity"
+    PAYOUT_POLICY = "payout_policy"
 
     ASSET_LEVEL_VALUES = "asset_level_values"
     SEGMENT_VALUES = "segment_values"
@@ -152,6 +163,9 @@ class ValuationProfileOverrides(BaseModel):
     sector: Optional[Sector] = None
     industry: Optional[str] = None
     business_archetype: Optional[BusinessArchetype] = None
+    financial_institution_kind: Optional[FinancialInstitutionKind] = None
+    actuarial_detail_supplied: bool = False
+    regulatory_capital_constraints_supplied: bool = False
     lifecycle: Optional[CompanyLifecycle] = None
     cyclicality: Optional[Cyclicality] = None
     economic_traits: set[EconomicTrait] = Field(default_factory=set)
@@ -172,6 +186,11 @@ class ValuationProfile(BaseModel):
     latest_revenue: Optional[Decimal] = None
 
     business_archetype: BusinessArchetype
+    financial_institution_kind: FinancialInstitutionKind = (
+        FinancialInstitutionKind.OTHER
+    )
+    actuarial_detail_supplied: bool = False
+    regulatory_capital_constraints_supplied: bool = False
     lifecycle: CompanyLifecycle
     cyclicality: Cyclicality
     economic_traits: set[EconomicTrait] = Field(default_factory=set)

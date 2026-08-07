@@ -48,4 +48,3 @@ class SpecializedExtractionConsolePresenter:
             lines.extend(["", "LIMITATIONS"])
             lines.extend(f"- {item}" for item in extraction.limitations)
         return "\n".join(lines)
-

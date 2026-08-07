@@ -23,7 +23,10 @@ class FcffDcfConsolePresenter:
             result.capital_bridge.net_debt,
             result.capital_bridge.non_operating_assets,
             result.terminal_value.terminal_value,
-            *(item.amount for item in result.explicit_forecast_present_value.cash_flows),
+            *(
+                item.amount
+                for item in result.explicit_forecast_present_value.cash_flows
+            ),
         ]
         if result.share_repurchases is not None:
             values.extend(
@@ -98,7 +101,11 @@ class FcffDcfConsolePresenter:
                 f"{result.terminal_value_percentage:>16,.1f}%"
             )
         if result.share_repurchases is not None:
-            lines.extend(self._repurchase_details(result, scale, share_scale, amount_unit, share_suffix))
+            lines.extend(
+                self._repurchase_details(
+                    result, scale, share_scale, amount_unit, share_suffix
+                )
+            )
         if include_warnings and result.warnings:
             lines.extend(["", *subsection("WARNINGS")])
             lines.extend(f"- {warning}" for warning in result.warnings)
@@ -168,9 +175,13 @@ class FcffDcfConsolePresenter:
                     f"of NOPAT at {plan.terminal_return_on_invested_capital:,.2f}% ROIC"
                 )
                 if plan.terminal_capex_to_revenue is not None:
-                    details += f" | capex/revenue {plan.terminal_capex_to_revenue:,.2f}%"
+                    details += (
+                        f" | capex/revenue {plan.terminal_capex_to_revenue:,.2f}%"
+                    )
                 if plan.depreciable_asset_life_years is not None:
-                    details += f" | asset life {plan.depreciable_asset_life_years} years"
+                    details += (
+                        f" | asset life {plan.depreciable_asset_life_years} years"
+                    )
                 lines.append(details)
         if result.assumptions is not None:
             lines.append("Resolved assumptions:")

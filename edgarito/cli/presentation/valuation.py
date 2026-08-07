@@ -34,7 +34,9 @@ class ValuationSelectionConsolePresenter:
         if profile.economic_traits:
             traits = ", ".join(
                 self._label(trait.value)
-                for trait in sorted(profile.economic_traits, key=lambda item: item.value)
+                for trait in sorted(
+                    profile.economic_traits, key=lambda item: item.value
+                )
             )
             lines.append(f"Economic traits: {traits}")
         if profile.annual_fiscal_years:
@@ -67,7 +69,9 @@ class ValuationSelectionConsolePresenter:
                 f"  Forecast profile: {self._label(model.forecast_profile.value)}"
             )
         if model.relative_bases:
-            bases = ", ".join(self._label(basis.value) for basis in model.relative_bases)
+            bases = ", ".join(
+                self._label(basis.value) for basis in model.relative_bases
+            )
             lines.append(f"  Suggested bases: {bases}")
         for reason in model.reasons:
             lines.append(f"  + {reason}")
@@ -132,9 +136,7 @@ class ComparableMultiplesConsolePresenter:
         ]
         for candidate in default_candidates:
             evidence = ", ".join(self._evidence_tags(candidate.reasons)) or "selected"
-            lines.append(
-                f"{candidate.ticker:<10}{candidate.score:>7}/100   {evidence}"
-            )
+            lines.append(f"{candidate.ticker:<10}{candidate.score:>7}/100   {evidence}")
         if not default_candidates:
             lines.append("No peers selected")
         if verbose:
@@ -170,7 +172,9 @@ class ComparableMultiplesConsolePresenter:
             target_multiple = target_multiples.get(basis)
             summary = summaries.get(basis)
             target_value = (
-                self._format_trading_multiple(target_multiple.value, target_multiple.unit)
+                self._format_trading_multiple(
+                    target_multiple.value, target_multiple.unit
+                )
                 if target_multiple
                 and target_multiple.status == MultipleStatus.COMPUTED
                 and target_multiple.value is not None

@@ -10,6 +10,13 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edgarito.schemas.normalization.classification import Sector
+from edgarito.schemas.valuation.intrinsic import (
+    PipelineProject,
+    PropertyAsset,
+    ResourceProject,
+    SotpAdjustment,
+    SotpComponent,
+)
 from edgarito.services.forecasting.models import (
     FcffForecastParameters,
     SimplifiedFcfForecastParameters,
@@ -20,6 +27,7 @@ from edgarito.services.valuation.models import (
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    FinancialInstitutionKind,
     RelativeValuationBasis,
     TerminalMetric,
     TerminalValueMethod,
@@ -306,6 +314,65 @@ class DecisionAnalysisConfiguration(_ProfileModel):
         return value
 
 
+class FcfeConfiguration(_ProfileModel):
+    explicit_fcfe: tuple[Decimal, ...] = ()
+    net_income: tuple[Decimal, ...] = ()
+    depreciation_and_amortization: tuple[Decimal, ...] = ()
+    capital_expenditures: tuple[Decimal, ...] = ()
+    working_capital_changes: tuple[Decimal, ...] = ()
+    net_borrowing: tuple[Decimal, ...] = ()
+    debt_financing_ratio: Optional[Decimal] = Field(default=None, ge=0, le=1)
+    required_common_equity_changes: tuple[Decimal, ...] = ()
+    terminal_return_on_equity: Optional[Decimal] = None
+
+
+class DividendDiscountConfiguration(_ProfileModel):
+    mode: Literal["gordon", "multistage"] = "multistage"
+    dividends: tuple[Decimal, ...] = ()
+    earnings: tuple[Decimal, ...] = ()
+    payout_ratios: tuple[Decimal, ...] = ()
+    terminal_return_on_equity: Optional[Decimal] = None
+    terminal_payout_ratio: Optional[Decimal] = Field(default=None, ge=0, le=1)
+
+
+class ResidualIncomeConfiguration(_ProfileModel):
+    starting_book_value: Optional[Decimal] = Field(default=None, gt=0)
+    book_value_basis: Literal["common_equity", "tangible_common_equity"] = (
+        "common_equity"
+    )
+    return_on_equity_path: tuple[Decimal, ...] = ()
+    payout_ratio_path: tuple[Decimal, ...] = ()
+    excess_return_persistence: Decimal = Field(default=Decimal("0.75"), ge=0, le=1)
+
+
+class SotpConfiguration(_ProfileModel):
+    components: tuple[SotpComponent, ...] = ()
+    adjustments: tuple[SotpAdjustment, ...] = ()
+    holding_company_discount: Decimal = Field(default=Decimal(0), ge=0, lt=1)
+
+
+class ReitConfiguration(_ProfileModel):
+    ffo: Optional[Decimal] = None
+    recurring_affo_adjustments: tuple[Decimal, ...] = ()
+    affo_forecast: tuple[Decimal, ...] = ()
+    properties: tuple[PropertyAsset, ...] = ()
+
+
+class FinancialInstitutionConfiguration(_ProfileModel):
+    kind: FinancialInstitutionKind = FinancialInstitutionKind.OTHER
+    required_common_equity_changes: tuple[Decimal, ...] = ()
+    regulatory_capital_constraints: tuple[str, ...] = ()
+    actuarial_detail_supplied: bool = False
+
+
+class ResourceConfiguration(_ProfileModel):
+    projects: tuple[ResourceProject, ...] = ()
+
+
+class PipelineConfiguration(_ProfileModel):
+    projects: tuple[PipelineProject, ...] = ()
+
+
 class ValuationCalculationConfiguration(_ProfileModel):
     cash_flow_timing: CashFlowTiming = CashFlowTiming.END_OF_PERIOD
     discount_rates: DiscountRateConfiguration = Field(
@@ -326,12 +393,27 @@ class ValuationCalculationConfiguration(_ProfileModel):
     decision_analysis: DecisionAnalysisConfiguration = Field(
         default_factory=DecisionAnalysisConfiguration
     )
+    fcfe: FcfeConfiguration = Field(default_factory=FcfeConfiguration)
+    dividend_discount: DividendDiscountConfiguration = Field(
+        default_factory=DividendDiscountConfiguration
+    )
+    residual_income: ResidualIncomeConfiguration = Field(
+        default_factory=ResidualIncomeConfiguration
+    )
+    sotp: SotpConfiguration = Field(default_factory=SotpConfiguration)
+    reit: ReitConfiguration = Field(default_factory=ReitConfiguration)
+    financial_institution: FinancialInstitutionConfiguration = Field(
+        default_factory=FinancialInstitutionConfiguration
+    )
+    resources: ResourceConfiguration = Field(default_factory=ResourceConfiguration)
+    pipelines: PipelineConfiguration = Field(default_factory=PipelineConfiguration)
 
 
 class ModelSelectionConfiguration(_ProfileModel):
     sector: Optional[Sector] = None
     industry: Optional[str] = None
     business_archetype: Optional[BusinessArchetype] = None
+    financial_institution_kind: Optional[FinancialInstitutionKind] = None
     lifecycle: Optional[CompanyLifecycle] = None
     cyclicality: Optional[Cyclicality] = None
     economic_traits: frozenset[EconomicTrait] = frozenset()
@@ -436,7 +518,7 @@ class SpecializedInputConfiguration(_ProfileModel):
 class ForecastValuationProfile(_ProfileModel):
     """Versioned parameters shared by forecast and valuation CLI workflows."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     name: str = Field(default="default", min_length=1)
     description: Optional[str] = None
     forecast: ForecastConfiguration = Field(default_factory=ForecastConfiguration)
@@ -476,6 +558,38 @@ class ForecastValuationProfile(_ProfileModel):
             configured.add(ValuationInput.WACC)
         if self.valuation.terminal_value.perpetual_growth_rate is not None:
             configured.add(ValuationInput.TERMINAL_GROWTH)
+        if self.valuation.fcfe.explicit_fcfe:
+            configured.add(ValuationInput.EQUITY_CASH_FLOW_FORECAST)
+        if self.valuation.dividend_discount.dividends:
+            configured.add(ValuationInput.DIVIDEND_FORECAST)
+        if (
+            sum(
+                value is not None
+                for value in (
+                    self.valuation.dividend_discount.terminal_return_on_equity,
+                    self.valuation.dividend_discount.terminal_payout_ratio,
+                    self.valuation.terminal_value.perpetual_growth_rate,
+                )
+            )
+            >= 2
+        ):
+            configured.add(ValuationInput.PAYOUT_POLICY)
+        if self.valuation.residual_income.return_on_equity_path:
+            configured.add(ValuationInput.FORECAST_ROE)
+        if self.valuation.sotp.components:
+            configured.add(ValuationInput.SEGMENT_VALUES)
+        if self.valuation.reit.properties:
+            configured.add(ValuationInput.ASSET_LEVEL_VALUES)
+        if self.valuation.reit.affo_forecast:
+            configured.add(ValuationInput.AFFO)
+        if self.valuation.resources.projects:
+            configured.update(
+                {ValuationInput.ASSET_LEVEL_VALUES, ValuationInput.RESERVE_DATA}
+            )
+        if self.valuation.pipelines.projects:
+            configured.update(
+                {ValuationInput.ASSET_LEVEL_VALUES, ValuationInput.PIPELINE_DATA}
+            )
         return frozenset(configured)
 
 
@@ -623,6 +737,10 @@ class ValuationProfileLoader:
                 "business_archetype": (
                     configured.business_archetype or inferred_profile.business_archetype
                 ),
+                "financial_institution_kind": (
+                    configured.financial_institution_kind
+                    or inferred_profile.financial_institution_kind
+                ),
                 "lifecycle": configured.lifecycle or inferred_profile.lifecycle,
                 "cyclicality": configured.cyclicality or inferred_profile.cyclicality,
                 "economic_traits": frozenset(
@@ -669,6 +787,9 @@ __all__ = [
     "ComparableSelectionConfiguration",
     "DEFAULT_VALUATION_PROFILE_PATH",
     "DiscountRateConfiguration",
+    "DividendDiscountConfiguration",
+    "FcfeConfiguration",
+    "FinancialInstitutionConfiguration",
     "ForecastConfiguration",
     "ForecastMethod",
     "ForecastValuationProfile",
@@ -676,6 +797,11 @@ __all__ = [
     "MultipleResolutionConfiguration",
     "MultistageValuationConfiguration",
     "RelativeValuationConfiguration",
+    "ReitConfiguration",
+    "ResidualIncomeConfiguration",
+    "ResourceConfiguration",
+    "PipelineConfiguration",
+    "SotpConfiguration",
     "SpecializedInputConfiguration",
     "TerminalValueConfiguration",
     "ValuationCalculationConfiguration",

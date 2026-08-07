@@ -81,7 +81,11 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
             if len(candidates) >= max_candidates:
                 break
         confidence = (
-            "high" if len(candidates) >= 8 else "medium" if len(candidates) >= 5 else "low"
+            "high"
+            if len(candidates) >= 8
+            else "medium"
+            if len(candidates) >= 5
+            else "low"
         )
         warnings = ()
         if confidence == "low":
@@ -352,8 +356,7 @@ class YahooScreenerPeerDiscoveryProvider:
                 0
                 if target_region and candidate_region == target_region
                 else 1
-                if region_group
-                and self._region_group(candidate_region) == region_group
+                if region_group and self._region_group(candidate_region) == region_group
                 else 2
             )
             primary_symbol = symbol.split(".", maxsplit=1)[0]
@@ -488,7 +491,9 @@ class YahooScreenerPeerDiscoveryProvider:
     def _quote_region(cls, quote, symbol):
         region = str(quote.get("region") or "").strip().casefold()
         if region:
-            return cls._COUNTRY_REGIONS.get(region, region if len(region) == 2 else None)
+            return cls._COUNTRY_REGIONS.get(
+                region, region if len(region) == 2 else None
+            )
         return next(
             (
                 value

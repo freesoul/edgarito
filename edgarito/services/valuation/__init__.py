@@ -1,4 +1,8 @@
+from importlib import import_module
+
 from edgarito.services.valuation.assumptions import (
+    CostOfEquityResolver,
+    ResolvedCostOfEquityAssumptions,
     ResolvedDcfAssumptions,
     ValuationAssumptionResolver,
 )
@@ -61,6 +65,7 @@ from edgarito.services.valuation.models import (
     FcffDcfCapitalBridge,
     FcffDcfParameters,
     FcffDcfResult,
+    FinancialInstitutionKind,
     ForecastProfile,
     HistoricalMultipleObservation,
     HistoricalMultipleSummary,
@@ -127,8 +132,10 @@ __all__ = [
     "ComparableImpliedValuationService",
     "ComparableMultiplesReport",
     "ComparableMultiplesService",
+    "CostOfEquityResolver",
     "CostOfEquityMethod",
     "CostOfEquityResult",
+    "DividendDiscountService",
     "CompanyLifecycle",
     "Cyclicality",
     "DataReadiness",
@@ -141,6 +148,7 @@ __all__ = [
     "EconomicTrait",
     "EcbMarketDataCurrencyConverter",
     "ForecastProfile",
+    "FinancialInstitutionKind",
     "HistoricalMultipleObservation",
     "HistoricalMultipleSummary",
     "IntrinsicDecisionContext",
@@ -151,6 +159,7 @@ __all__ = [
     "FcffDcfParameters",
     "FcffDcfResult",
     "FcffDcfService",
+    "FcfeDcfService",
     "ForwardPeerMultiplesService",
     "ModelRole",
     "ModelSuitability",
@@ -172,6 +181,10 @@ __all__ = [
     "YahooScreenerPeerDiscoveryProvider",
     "PresentValueResult",
     "PresentValueService",
+    "PipelineRnpvAdapter",
+    "PropertyNavAdapter",
+    "ProviderNeutralForwardMultiplesService",
+    "ProviderNeutralRelativeValuationService",
     "RelativeValuationBasis",
     "ResolvedMultiple",
     "RelativeScenarioCase",
@@ -188,9 +201,14 @@ __all__ = [
     "ShareRepurchasePeriod",
     "ShareRepurchaseResult",
     "ResolvedDcfAssumptions",
+    "ResolvedCostOfEquityAssumptions",
+    "ResidualIncomeService",
+    "ReitAffoAdapter",
     "ReitInputExtractor",
     "ResourceInputExtractor",
+    "ResourceNavAdapter",
     "SotpInputExtractor",
+    "SotpValuationService",
     "SpecializedValuationExtractor",
     "TerminalMetric",
     "TerminalRoicResolution",
@@ -202,6 +220,8 @@ __all__ = [
     "ValuationAssumptionResolver",
     "ValuationAssessment",
     "ValuationAssessmentBand",
+    "ValuationExecutor",
+    "ValuationInputCatalog",
     "ValuationModel",
     "ValuationModelSelector",
     "ValuationProfile",
@@ -210,4 +230,59 @@ __all__ = [
     "ValuationSelection",
     "WaccResult",
     "TradingMultiple",
+    "wrap_fcff_result",
 ]
+
+
+_LAZY_EXPORTS = {
+    "DividendDiscountService": (
+        "edgarito.services.valuation.intrinsic",
+        "DividendDiscountService",
+    ),
+    "FcfeDcfService": ("edgarito.services.valuation.intrinsic", "FcfeDcfService"),
+    "PipelineRnpvAdapter": (
+        "edgarito.services.valuation.intrinsic",
+        "PipelineRnpvAdapter",
+    ),
+    "PropertyNavAdapter": (
+        "edgarito.services.valuation.intrinsic",
+        "PropertyNavAdapter",
+    ),
+    "ReitAffoAdapter": ("edgarito.services.valuation.intrinsic", "ReitAffoAdapter"),
+    "ResidualIncomeService": (
+        "edgarito.services.valuation.intrinsic",
+        "ResidualIncomeService",
+    ),
+    "ResourceNavAdapter": (
+        "edgarito.services.valuation.intrinsic",
+        "ResourceNavAdapter",
+    ),
+    "SotpValuationService": (
+        "edgarito.services.valuation.intrinsic",
+        "SotpValuationService",
+    ),
+    "ValuationExecutor": ("edgarito.services.valuation.execution", "ValuationExecutor"),
+    "ValuationInputCatalog": (
+        "edgarito.services.valuation.execution",
+        "ValuationInputCatalog",
+    ),
+    "wrap_fcff_result": ("edgarito.services.valuation.execution", "wrap_fcff_result"),
+    "ProviderNeutralForwardMultiplesService": (
+        "edgarito.services.valuation.relative",
+        "ProviderNeutralForwardMultiplesService",
+    ),
+    "ProviderNeutralRelativeValuationService": (
+        "edgarito.services.valuation.relative",
+        "ProviderNeutralRelativeValuationService",
+    ),
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

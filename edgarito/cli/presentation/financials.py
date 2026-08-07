@@ -25,6 +25,7 @@ STATEMENT_LABELS = {
 }
 METRIC_ORDER = {metric: index for index, metric in enumerate(FinancialMetric)}
 
+
 class ClassificationConsolePresenter:
     def render(self, classification: NormalizedCompanyClassification) -> str:
         lines = [
@@ -275,4 +276,3 @@ class MetricsConsolePresenter:
         value = observation.value / scale
         suffix = "%" if observation.unit == "%" else ""
         return f"{value:,.1f}{suffix}"
-

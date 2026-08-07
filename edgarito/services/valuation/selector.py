@@ -6,6 +6,7 @@ from edgarito.services.valuation.models import (
     Cyclicality,
     DataReadiness,
     EconomicTrait,
+    FinancialInstitutionKind,
     ForecastProfile,
     ModelRole,
     ModelSuitability,
@@ -36,6 +37,7 @@ class ValuationModelSelector:
         BusinessArchetype.UNRESOLVED: {
             ValuationModel.FCFF_DCF: 60,
             ValuationModel.EQUITY_DCF: 60,
+            ValuationModel.DIVIDEND_DISCOUNT: 50,
             ValuationModel.RESIDUAL_INCOME: 60,
             ValuationModel.NAV_SOTP: 60,
             ValuationModel.COMPARABLE_MULTIPLES: 60,
@@ -43,6 +45,7 @@ class ValuationModelSelector:
         BusinessArchetype.GENERAL_OPERATING: {
             ValuationModel.FCFF_DCF: 90,
             ValuationModel.EQUITY_DCF: 45,
+            ValuationModel.DIVIDEND_DISCOUNT: 35,
             ValuationModel.RESIDUAL_INCOME: 30,
             ValuationModel.NAV_SOTP: 20,
             ValuationModel.COMPARABLE_MULTIPLES: 70,
@@ -50,6 +53,7 @@ class ValuationModelSelector:
         BusinessArchetype.FINANCIAL_INTERMEDIARY: {
             ValuationModel.FCFF_DCF: 0,
             ValuationModel.EQUITY_DCF: 75,
+            ValuationModel.DIVIDEND_DISCOUNT: 70,
             ValuationModel.RESIDUAL_INCOME: 95,
             ValuationModel.NAV_SOTP: 30,
             ValuationModel.COMPARABLE_MULTIPLES: 80,
@@ -57,6 +61,7 @@ class ValuationModelSelector:
         BusinessArchetype.ASSET_MANAGER: {
             ValuationModel.FCFF_DCF: 45,
             ValuationModel.EQUITY_DCF: 85,
+            ValuationModel.DIVIDEND_DISCOUNT: 55,
             ValuationModel.RESIDUAL_INCOME: 60,
             ValuationModel.NAV_SOTP: 35,
             ValuationModel.COMPARABLE_MULTIPLES: 80,
@@ -64,6 +69,7 @@ class ValuationModelSelector:
         BusinessArchetype.REIT_PROPERTY: {
             ValuationModel.FCFF_DCF: 25,
             ValuationModel.EQUITY_DCF: 60,
+            ValuationModel.DIVIDEND_DISCOUNT: 70,
             ValuationModel.RESIDUAL_INCOME: 20,
             ValuationModel.NAV_SOTP: 95,
             ValuationModel.COMPARABLE_MULTIPLES: 85,
@@ -71,6 +77,7 @@ class ValuationModelSelector:
         BusinessArchetype.RESOURCE_PRODUCER: {
             ValuationModel.FCFF_DCF: 55,
             ValuationModel.EQUITY_DCF: 30,
+            ValuationModel.DIVIDEND_DISCOUNT: 25,
             ValuationModel.RESIDUAL_INCOME: 25,
             ValuationModel.NAV_SOTP: 95,
             ValuationModel.COMPARABLE_MULTIPLES: 75,
@@ -78,6 +85,7 @@ class ValuationModelSelector:
         BusinessArchetype.PROJECT_PIPELINE: {
             ValuationModel.FCFF_DCF: 35,
             ValuationModel.EQUITY_DCF: 20,
+            ValuationModel.DIVIDEND_DISCOUNT: 10,
             ValuationModel.RESIDUAL_INCOME: 20,
             ValuationModel.NAV_SOTP: 85,
             ValuationModel.COMPARABLE_MULTIPLES: 60,
@@ -85,6 +93,7 @@ class ValuationModelSelector:
         BusinessArchetype.HOLDING_COMPANY: {
             ValuationModel.FCFF_DCF: 20,
             ValuationModel.EQUITY_DCF: 45,
+            ValuationModel.DIVIDEND_DISCOUNT: 35,
             ValuationModel.RESIDUAL_INCOME: 35,
             ValuationModel.NAV_SOTP: 95,
             ValuationModel.COMPARABLE_MULTIPLES: 55,
@@ -92,6 +101,7 @@ class ValuationModelSelector:
         BusinessArchetype.CONGLOMERATE: {
             ValuationModel.FCFF_DCF: 50,
             ValuationModel.EQUITY_DCF: 30,
+            ValuationModel.DIVIDEND_DISCOUNT: 25,
             ValuationModel.RESIDUAL_INCOME: 25,
             ValuationModel.NAV_SOTP: 95,
             ValuationModel.COMPARABLE_MULTIPLES: 60,
@@ -108,6 +118,7 @@ class ValuationModelSelector:
         }
         self._assess_fcff(profile, assessments[ValuationModel.FCFF_DCF])
         self._assess_equity_dcf(profile, assessments[ValuationModel.EQUITY_DCF])
+        self._assess_ddm(profile, assessments[ValuationModel.DIVIDEND_DISCOUNT])
         self._assess_residual_income(
             profile, assessments[ValuationModel.RESIDUAL_INCOME]
         )
@@ -254,6 +265,38 @@ class ValuationModelSelector:
             assessment.reasons.append("Payout policy is identified as stable")
 
     @staticmethod
+    def _assess_ddm(profile: ValuationProfile, assessment: _Assessment) -> None:
+        assessment.forecast_profile = ForecastProfile.DIVIDEND_OR_FCFE
+        assessment.required_inputs.update(
+            {
+                ValuationInput.DIVIDEND_FORECAST,
+                ValuationInput.COST_OF_EQUITY,
+                ValuationInput.TERMINAL_GROWTH,
+                ValuationInput.DILUTED_SHARES,
+                ValuationInput.PAYOUT_POLICY,
+            }
+        )
+        if EconomicTrait.DIVIDEND_PAYER not in profile.economic_traits:
+            assessment.hard_rejections.append(
+                "DDM requires an established positive distribution policy"
+            )
+            return
+        if EconomicTrait.STABLE_PAYOUT in profile.economic_traits:
+            assessment.score += 15
+            assessment.reasons.append(
+                "At least three annual observations support a stable payout policy"
+            )
+        else:
+            assessment.limitations.append(
+                "Automatic DDM requires three positive annual payouts and stable payout evidence"
+            )
+        if profile.business_archetype == BusinessArchetype.FINANCIAL_INTERMEDIARY:
+            kind = profile.financial_institution_kind
+            assessment.reasons.append(
+                f"Dividends are an observable regulated-equity distribution for {kind.value} firms"
+            )
+
+    @staticmethod
     def _assess_residual_income(
         profile: ValuationProfile, assessment: _Assessment
     ) -> None:
@@ -274,6 +317,14 @@ class ValuationModelSelector:
                 assessment.limitations.append(
                     "Tangible common equity is preferred for bank and insurer analysis"
                 )
+            if (
+                profile.financial_institution_kind == FinancialInstitutionKind.INSURER
+                and not profile.actuarial_detail_supplied
+            ):
+                assessment.limitations.append(
+                    "Actuarial detail is unavailable; residual income is limited "
+                    "to book value and ROE"
+                )
         if profile.latest_book_equity is not None and profile.latest_book_equity <= 0:
             assessment.hard_rejections.append(
                 "Residual income requires economically meaningful positive book equity"
@@ -289,7 +340,6 @@ class ValuationModelSelector:
         assessment.required_inputs.update(
             {
                 ValuationInput.ASSET_LEVEL_VALUES,
-                ValuationInput.NET_DEBT,
                 ValuationInput.DILUTED_SHARES,
             }
         )

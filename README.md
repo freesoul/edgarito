@@ -369,7 +369,7 @@ strings to preserve their exact value:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "growth",
   "forecast": {
     "fcff": {
@@ -789,10 +789,11 @@ scenario is calibrated to the market price or an analyst target.
 ## Select suitable valuation models
 
 Before calculating a valuation, `valuation-models` builds an economic profile and
-ranks the minimal supported model families:
+ranks the supported model families:
 
 - FCFF DCF
-- Equity DCF / Dividend Discount
+- FCFE / Equity DCF
+- Dividend Discount Model
 - Residual Income
 - NAV / Sum-of-the-Parts
 - Comparable Multiples
@@ -867,6 +868,42 @@ are deliberately not marked as FCFF. `valuation-models` assesses readiness but
 does not execute the forecast; enterprise DCF becomes ready only when the
 driver-based FCFF result and the remaining valuation inputs are supplied.
 
+## Execute equity, asset, and project valuation models
+
+`valuation --model auto` is the default. It keeps model results independent:
+ordinary operating companies use FCFF as the primary model, banks and insurers
+use residual income, REITs use property NAV, resource producers use finite
+project NAV, pipeline companies use probability-adjusted rNPV, and holdings use
+SOTP. Conditional models run only when their input catalog is ready. Results are
+never averaged; blocked and inappropriate models remain visible with their
+missing inputs and skip reasons.
+
+Explicit selectors are `fcff-dcf`, `fcfe-dcf`, `ddm`, `residual-income`, `nav`,
+`reit-affo`, `property-nav`, `resource-nav`, `pipeline-rnpv`, and `comparables`.
+`both` remains a compatibility alias for FCFF plus comparables. Examples:
+
+```bash
+uv run edgarito valuation --ticker JPM --model residual-income \
+  --cost-of-equity 10 --forecast-roe 14 --payout-ratio 0.45
+uv run edgarito valuation --ticker PLD --model property-nav \
+  --profile configs/valuation/pld.json
+uv run edgarito valuation --ticker MRNA --model pipeline-rnpv \
+  --profile configs/valuation/mrna.json --audit
+```
+
+Profile schema v2 adds typed `valuation.fcfe`, `dividend_discount`,
+`residual_income`, `sotp`, `reit`, `financial_institution`, `resources`, and
+`pipelines` sections. Components and projects retain dated provenance. FCFE and
+DDM discount equity cash flows at cost of equity and do not apply an EV/net-debt
+bridge. Residual income fades excess ROE to the cost of equity; it never
+perpetuates excess returns. Resource schedules are finite and reserve-constrained.
+Pipeline success probabilities must be explicit and provenance-bearing.
+
+The provider-neutral relative layer supports enterprise bases (EV/revenue,
+EV/EBIT, EV/EBITDA, and EV/FCF) and equity bases (P/E, P/B, P/TBV, P/AFFO, and
+P/NAV). An EV bridge is applied only to enterprise bases. Reports label
+target-date value separately from its present-value equivalent.
+
 ## Select peers and compute LTM multiples
 
 `comparables` discovers a broad candidate universe and computes target and peer
@@ -928,9 +965,10 @@ LTM FCF                 = LTM operating cash flow - LTM capex
 The report includes P/E, P/B, P/tangible book, EV/revenue, EV/EBIT,
 EV/EBITDA, EV/FCF, and dividend yield, plus peer medians, ranges, and sample
 sizes. Negative denominators are marked not meaningful; missing inputs remain
-unavailable. Market and reporting currencies must match unless an FX alignment
-is supplied in a future valuation layer. REIT AFFO, resource NAV, biotech
-pipeline, and SOTP denominators remain part of the later specialized extractors.
+unavailable. Market and reporting currencies must match unless dated,
+provenance-bearing FX alignment is supplied. P/AFFO and P/NAV require the
+corresponding target and peer profile denominators; they are not inferred from
+an FFO proxy or book assets.
 
 Programmatically, use `PeerUniverseSelector`, `LtmMultiplesService`, and
 `ComparableMultiplesService` from `edgarito.services.valuation`.
@@ -971,7 +1009,10 @@ currently provide:
 These limitations are structural: SEC Company Facts generally omits the custom
 taxonomy and dimensional members contained in filing tables and narrative. Each
 report therefore returns `partial` or `blocked` readiness until those inputs are
-supplied by a future filing-table extractor or an explicit supplemental dataset.
+supplied by a filing-table extractor or the typed profile sections. Property
+dimensions and cap rates, reserve and mine schedules, actuarial detail, named
+segments, and pipeline success probabilities remain profile-dependent in this
+milestone.
 
 Programmatic entry points are `ReitInputExtractor`, `ResourceInputExtractor`,
 `BiotechInputExtractor`, `SotpInputExtractor`, and

@@ -363,9 +363,7 @@ def test_consolidated_warning_output_deduplicates_shortens_and_adds_severity():
         [message, message, "Enterprise value does not cover reported net debt"],
         verbose=False,
     )
-    audit = ValuationReportConsolePresenter._render_warnings(
-        [message], verbose=True
-    )
+    audit = ValuationReportConsolePresenter._render_warnings([message], verbose=True)
 
     assert rendered.count("Projected net debt") == 1
     assert "[HIGH] Enterprise value does not cover reported net debt." in rendered

@@ -19,6 +19,7 @@ from edgarito.services.valuation.models import (
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    FinancialInstitutionKind,
     ValuationInput,
     ValuationProfile,
     ValuationProfileOverrides,
@@ -31,6 +32,8 @@ class ValuationProfileBuilder:
     _BANK_OR_INSURER = re.compile(
         r"\b(banks?|banking|insurance|insurer|reinsurance|thrifts?|mortgage finance)\b"
     )
+    _BANK = re.compile(r"\b(banks?|banking|thrifts?|mortgage finance)\b")
+    _INSURER = re.compile(r"\b(insurance|insurer|reinsurance)\b")
     _ASSET_MANAGER = re.compile(
         r"\b(asset management|investment management|wealth management|fund manager)\b"
     )
@@ -60,9 +63,12 @@ class ValuationProfileBuilder:
         concepts = {
             FinancialConcept.REVENUE,
             FinancialConcept.NET_INCOME,
+            FinancialConcept.NET_INCOME_COMMON,
             FinancialConcept.OPERATING_CASH_FLOW,
             FinancialConcept.CAPITAL_EXPENDITURES,
             FinancialConcept.STOCKHOLDERS_EQUITY,
+            FinancialConcept.COMMON_EQUITY,
+            FinancialConcept.DIVIDENDS_PAID,
             FinancialConcept.TOTAL_ASSETS,
             FinancialConcept.TOTAL_LIABILITIES,
             FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
@@ -95,6 +101,10 @@ class ValuationProfileBuilder:
 
         inferred_archetype = self._archetype(sector, industry_key)
         archetype = overrides.business_archetype or inferred_archetype
+        institution_kind = (
+            overrides.financial_institution_kind
+            or self._institution_kind(industry_key, archetype)
+        )
         notes.append(
             f"Business archetype {'overridden' if overrides.business_archetype else 'inferred'} "
             f"as {archetype.value}"
@@ -132,6 +142,8 @@ class ValuationProfileBuilder:
         )
 
         traits = self._traits(sector, industry_key, archetype)
+        dividend_traits = self._dividend_traits(annual)
+        traits.update(dividend_traits)
         traits.update(overrides.economic_traits)
         valuation_metrics = FinancialMetricsService().calculate(
             financials,
@@ -169,6 +181,11 @@ class ValuationProfileBuilder:
             reporting_currency=latest_revenue.unit if latest_revenue else None,
             latest_revenue=latest_revenue.value if latest_revenue else None,
             business_archetype=archetype,
+            financial_institution_kind=institution_kind,
+            actuarial_detail_supplied=overrides.actuarial_detail_supplied,
+            regulatory_capital_constraints_supplied=(
+                overrides.regulatory_capital_constraints_supplied
+            ),
             lifecycle=lifecycle,
             cyclicality=cyclicality,
             economic_traits=traits,
@@ -285,6 +302,51 @@ class ValuationProfileBuilder:
         return BusinessArchetype.GENERAL_OPERATING
 
     @classmethod
+    def _institution_kind(
+        cls, industry_key: str, archetype: BusinessArchetype
+    ) -> FinancialInstitutionKind:
+        if archetype != BusinessArchetype.FINANCIAL_INTERMEDIARY:
+            return FinancialInstitutionKind.OTHER
+        if cls._BANK.search(industry_key):
+            return FinancialInstitutionKind.BANK
+        if cls._INSURER.search(industry_key):
+            return FinancialInstitutionKind.INSURER
+        return FinancialInstitutionKind.OTHER
+
+    @staticmethod
+    def _dividend_traits(
+        annual: dict[int, dict[FinancialConcept, FinancialObservation]],
+    ) -> set[EconomicTrait]:
+        positive: list[tuple[int, Decimal]] = []
+        payouts: list[Decimal] = []
+        for year, observations in sorted(annual.items()):
+            dividend = observations.get(FinancialConcept.DIVIDENDS_PAID)
+            income = observations.get(
+                FinancialConcept.NET_INCOME_COMMON
+            ) or observations.get(FinancialConcept.NET_INCOME)
+            if dividend is None or dividend.value <= 0:
+                continue
+            positive.append((year, dividend.value))
+            if income is not None and income.value > 0 and income.unit == dividend.unit:
+                payouts.append(dividend.value / income.value)
+        traits: set[EconomicTrait] = set()
+        if positive:
+            traits.add(EconomicTrait.DIVIDEND_PAYER)
+        if len(positive) >= 3:
+            recent = positive[-3:]
+            consecutive = tuple(item[0] for item in recent) == tuple(
+                range(recent[0][0], recent[0][0] + 3)
+            )
+            recent_payouts = payouts[-3:]
+            if (
+                consecutive
+                and len(recent_payouts) == 3
+                and max(recent_payouts) - min(recent_payouts) <= Decimal("0.20")
+            ):
+                traits.add(EconomicTrait.STABLE_PAYOUT)
+        return traits
+
+    @classmethod
     def _cyclicality(cls, sector: Optional[Sector], industry_key: str) -> Cyclicality:
         if cls._HIGH_CYCLICAL.search(industry_key):
             return Cyclicality.HIGH
@@ -391,8 +453,60 @@ class ValuationProfileBuilder:
             inputs.add(ValuationInput.FCF_HISTORY)
         if earnings:
             inputs.add(ValuationInput.EARNINGS_HISTORY)
+        dividend_years = [
+            year
+            for year, values in sorted(annual.items())
+            if (dividend := values.get(FinancialConcept.DIVIDENDS_PAID)) is not None
+            and dividend.value > 0
+        ]
+        if dividend_years:
+            inputs.add(ValuationInput.DIVIDEND_HISTORY)
+        if len(dividend_years) >= 3 and dividend_years[-3:] == list(
+            range(dividend_years[-3], dividend_years[-3] + 3)
+        ):
+            clean_payouts = []
+            for year in dividend_years[-3:]:
+                values = annual[year]
+                income = values.get(FinancialConcept.NET_INCOME_COMMON) or values.get(
+                    FinancialConcept.NET_INCOME
+                )
+                dividend = values[FinancialConcept.DIVIDENDS_PAID]
+                if (
+                    income is not None
+                    and income.value > 0
+                    and income.unit == dividend.unit
+                ):
+                    clean_payouts.append(dividend.value / income.value)
+            if len(clean_payouts) == 3 and max(clean_payouts) - min(
+                clean_payouts
+            ) <= Decimal("0.20"):
+                inputs.update(
+                    {ValuationInput.PAYOUT_POLICY, ValuationInput.DIVIDEND_FORECAST}
+                )
         if equities:
             inputs.add(ValuationInput.BOOK_EQUITY)
+        clean_roe_years = []
+        for year, values in sorted(annual.items()):
+            income = values.get(FinancialConcept.NET_INCOME_COMMON) or values.get(
+                FinancialConcept.NET_INCOME
+            )
+            equity = values.get(FinancialConcept.COMMON_EQUITY) or values.get(
+                FinancialConcept.STOCKHOLDERS_EQUITY
+            )
+            if (
+                income is not None
+                and equity is not None
+                and income.value > 0
+                and equity.value > 0
+                and income.unit == equity.unit
+            ):
+                clean_roe_years.append(year)
+        if len(clean_roe_years) >= 3 and clean_roe_years[-3:] == list(
+            range(clean_roe_years[-3], clean_roe_years[-3] + 3)
+        ):
+            inputs.add(ValuationInput.FORECAST_ROE)
+        if any(FinancialConcept.COMMON_EQUITY in values for values in annual.values()):
+            inputs.add(ValuationInput.COMMON_EQUITY)
         latest = annual[max(annual)] if annual else {}
         diluted_shares = latest.get(FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES)
         if diluted_shares is not None and diluted_shares.unit == "shares":

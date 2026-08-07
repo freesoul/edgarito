@@ -288,4 +288,3 @@ class ForecastConsolePresenter:
             )
         )
         return values
-

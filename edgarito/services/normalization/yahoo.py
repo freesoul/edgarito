@@ -46,6 +46,11 @@ CONCEPT_DEFINITIONS = (
         FinancialConcept.NET_INCOME, "income_statements", ("NetIncome",)
     ),
     YahooConceptDefinition(
+        FinancialConcept.NET_INCOME_COMMON,
+        "income_statements",
+        ("NetIncomeCommonStockholders", "NetIncomeContinuousOperations"),
+    ),
+    YahooConceptDefinition(
         FinancialConcept.INTEREST_EXPENSE,
         "income_statements",
         ("InterestExpense", "InterestExpenseNonOperating"),
@@ -127,6 +132,11 @@ CONCEPT_DEFINITIONS = (
         ("StockholdersEquity", "CommonStockEquity"),
     ),
     YahooConceptDefinition(
+        FinancialConcept.COMMON_EQUITY,
+        "balance_sheets",
+        ("CommonStockEquity",),
+    ),
+    YahooConceptDefinition(
         FinancialConcept.CASH_AND_EQUIVALENTS,
         "balance_sheets",
         ("CashAndCashEquivalents", "CashFinancial"),
@@ -173,6 +183,18 @@ CONCEPT_DEFINITIONS = (
         FinancialConcept.DIVIDENDS_PAID,
         "cash_flow_statements",
         ("CashDividendsPaid", "CommonStockDividendPaid"),
+        absolute_value=True,
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.DEBT_ISSUANCE,
+        "cash_flow_statements",
+        ("IssuanceOfDebt",),
+        absolute_value=True,
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.DEBT_REPAYMENT,
+        "cash_flow_statements",
+        ("RepaymentOfDebt",),
         absolute_value=True,
     ),
 )

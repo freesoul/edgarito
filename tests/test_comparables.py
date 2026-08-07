@@ -639,9 +639,7 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert implied.analyst_target_implied_multiple == Decimal("1.76")
     assert implied.current_price_implied_multiple == Decimal("1.6")
     rendered = ComparableImpliedValuationConsolePresenter().render(implied)
-    audit = ComparableImpliedValuationConsolePresenter().render(
-        implied, verbose=True
-    )
+    audit = ComparableImpliedValuationConsolePresenter().render(implied, verbose=True)
     assert "Analyst target-date value" in rendered
     assert "Present-value equivalent today" in rendered
     assert "Evidence range" in rendered

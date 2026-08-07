@@ -43,6 +43,190 @@ class ResolvedDcfAssumptions:
     assumption_set: ValuationAssumptionSet
 
 
+@dataclass(frozen=True)
+class ResolvedCostOfEquityAssumptions:
+    cost_of_equity: Decimal
+    levered_beta: Decimal | None
+    source: str
+    assumption_set: ValuationAssumptionSet
+
+
+class CostOfEquityResolver:
+    """Resolve equity discount rates without requiring debt or a WACC bridge."""
+
+    def resolve(
+        self,
+        *,
+        configuration,
+        valuation_date: datetime.date,
+        currency: str,
+        company_id: str,
+        classification: Optional[NormalizedCompanyClassification] = None,
+        risk_free_series: Optional[ReferenceMarketSeries] = None,
+        country_snapshot: Optional[CountryRiskPremiumSnapshot] = None,
+        industry_snapshot: Optional[IndustryBetaSnapshot] = None,
+        company_beta: Optional[Decimal] = None,
+        cost_of_equity_override: Optional[Decimal] = None,
+        beta_override: Optional[Decimal] = None,
+    ) -> ResolvedCostOfEquityAssumptions:
+        resolver = ValuationAssumptionResolver()
+        if (
+            cost_of_equity_override is not None
+            or configuration.cost_of_equity is not None
+        ):
+            value = (
+                cost_of_equity_override
+                if cost_of_equity_override is not None
+                else configuration.cost_of_equity
+            )
+            provider = (
+                "cli" if cost_of_equity_override is not None else "valuation-profile"
+            )
+            assumption = resolver._explicit_assumption(
+                ValuationAssumptionKind.COST_OF_EQUITY,
+                value,
+                valuation_date,
+                currency,
+                company_id,
+                provider=provider,
+            )
+            return ResolvedCostOfEquityAssumptions(
+                cost_of_equity=value,
+                levered_beta=None,
+                source=f"explicit {provider}",
+                assumption_set=ValuationAssumptionSet(
+                    valuation_date=valuation_date,
+                    currency=currency,
+                    name="resolved-cost-of-equity",
+                    assumptions=(assumption,),
+                ),
+            )
+
+        country = classification.country if classification else None
+        industry = classification.industry if classification else None
+        country_row = resolver._country_row(country_snapshot, country)
+        industry_row = resolver._industry_row(industry_snapshot, industry)
+        risk_free, risk_free_assumption = resolver._configured_or_market_rate(
+            configuration.risk_free_rate,
+            ValuationAssumptionKind.RISK_FREE_RATE,
+            risk_free_series,
+            valuation_date,
+            currency,
+            company_id,
+        )
+        beta = beta_override
+        beta_provider = "cli"
+        if beta is None:
+            beta = configuration.levered_beta
+            beta_provider = "valuation-profile"
+        if beta is None:
+            beta = company_beta
+            beta_provider = "company market data"
+        if beta is None and industry_row is not None:
+            beta = industry_row.levered_beta
+            beta_provider = f"Damodaran industry: {industry_row.industry}"
+        if beta is None or not beta.is_finite() or beta <= 0:
+            raise ValueError(
+                "Cost of equity requires a positive levered beta from CLI, profile, "
+                "company market data, or the Damodaran industry dataset"
+            )
+        beta_origin = (
+            AssumptionOrigin.REFERENCE_DATASET
+            if beta_provider.startswith("Damodaran")
+            else AssumptionOrigin.MARKET_OBSERVATION
+            if beta_provider == "company market data"
+            else AssumptionOrigin.EXPLICIT
+        )
+        beta_assumption = ValuationAssumption(
+            kind=ValuationAssumptionKind.LEVERED_BETA,
+            value=beta,
+            unit=AssumptionUnit.MULTIPLE,
+            selected_on=valuation_date,
+            currency=currency,
+            company_id=company_id,
+            provenance=AssumptionProvenance(
+                origin=beta_origin,
+                provider=beta_provider,
+                methodology="Levered beta used directly; no corporate debt treatment required",
+            ),
+        )
+        erp = configuration.equity_risk_premium
+        country_premium = configuration.country_risk_premium
+        if erp is None:
+            if country_row is None or country_snapshot is None:
+                raise ValueError("Cost of equity requires an equity risk premium")
+            erp = country_row.equity_risk_premium - country_row.country_risk_premium
+            erp_assumption = resolver._reference_assumption(
+                ValuationAssumptionKind.EQUITY_RISK_PREMIUM,
+                erp,
+                valuation_date,
+                currency,
+                company_id,
+                country_snapshot,
+                country=country,
+                methodology="Mature-market ERP",
+            )
+        else:
+            erp_assumption = resolver._explicit_assumption(
+                ValuationAssumptionKind.EQUITY_RISK_PREMIUM,
+                erp,
+                valuation_date,
+                currency,
+                company_id,
+                provider="valuation-profile",
+            )
+        if country_premium is None:
+            country_premium = (
+                Decimal(0)
+                if country_row is None or resolver._is_mature_market_base(country)
+                else country_row.country_risk_premium
+            )
+        country_assumption = resolver._explicit_assumption(
+            ValuationAssumptionKind.COUNTRY_RISK_PREMIUM,
+            country_premium,
+            valuation_date,
+            currency,
+            company_id,
+            provider="valuation-profile"
+            if configuration.country_risk_premium is not None
+            else "resolved reference",
+        )
+        result = DiscountRateService.cost_of_equity(
+            risk_free, beta, erp, country_premium
+        )
+        cost_assumption = ValuationAssumption(
+            kind=ValuationAssumptionKind.COST_OF_EQUITY,
+            value=result.cost_of_equity,
+            unit=AssumptionUnit.PERCENTAGE_POINTS,
+            selected_on=valuation_date,
+            currency=currency,
+            company_id=company_id,
+            provenance=AssumptionProvenance(
+                origin=AssumptionOrigin.DERIVED,
+                provider="edgarito",
+                methodology=result.formula,
+            ),
+        )
+        assumptions = (
+            risk_free_assumption,
+            beta_assumption,
+            erp_assumption,
+            country_assumption,
+            cost_assumption,
+        )
+        return ResolvedCostOfEquityAssumptions(
+            cost_of_equity=result.cost_of_equity,
+            levered_beta=beta,
+            source=f"CAPM using {beta_provider}",
+            assumption_set=ValuationAssumptionSet(
+                valuation_date=valuation_date,
+                currency=currency,
+                name="resolved-cost-of-equity",
+                assumptions=assumptions,
+            ),
+        )
+
+
 class ValuationAssumptionResolver:
     """Resolve FCFF DCF assumptions with explicit values taking precedence."""
 

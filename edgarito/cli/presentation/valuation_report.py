@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from edgarito.cli.presentation._valuation_format import (
+    format_currency,
     section,
     short_warning,
     unique_warnings,
@@ -12,6 +13,8 @@ from edgarito.cli.presentation.valuation import (
     ComparableImpliedValuationConsolePresenter,
     ComparableMultiplesConsolePresenter,
 )
+from edgarito.schemas.valuation.intrinsic import ValuationRunResult
+from edgarito.schemas.valuation.relative import ProviderNeutralRelativeValuation
 from edgarito.services.valuation import (
     ComparableImpliedValuation,
     ComparableMultiplesReport,
@@ -35,6 +38,7 @@ class ValuationReportConsolePresenter:
         show_sensitivity: bool,
         show_reverse_dcf: bool,
         verbose: bool,
+        provider_relative: ProviderNeutralRelativeValuation | None = None,
         additional_warnings: tuple[str, ...] = (),
     ) -> str:
         blocks: list[str] = []
@@ -63,6 +67,12 @@ class ValuationReportConsolePresenter:
                     include_warnings=False,
                 )
             )
+        if provider_relative is not None:
+            blocks.append(
+                ProviderNeutralRelativeValuationConsolePresenter().render(
+                    provider_relative
+                )
+            )
         decision_presenter = DecisionValuationConsolePresenter()
         if decision is not None:
             details = decision_presenter.render_details(
@@ -82,6 +92,8 @@ class ValuationReportConsolePresenter:
             warnings.extend(ComparableMultiplesConsolePresenter.warnings(peer_report))
         if relative is not None:
             warnings.extend(relative.warnings)
+        if provider_relative is not None:
+            warnings.extend(provider_relative.warnings)
         if decision is not None:
             warnings.extend(decision.warnings)
         rendered_warnings = self._render_warnings(warnings, verbose=verbose)
@@ -109,4 +121,134 @@ class ValuationReportConsolePresenter:
         return "\n".join(lines)
 
 
-__all__ = ["ValuationReportConsolePresenter"]
+class IndependentValuationModelsConsolePresenter:
+    """Render independent intrinsic models and finish with a non-blended summary."""
+
+    def render(self, run: ValuationRunResult, *, verbose: bool = False) -> str:
+        profile = run.economic_profile
+        blocks = [
+            "\n".join(
+                [
+                    *section("VALUATION SETUP"),
+                    f"Company             {profile.company_name}",
+                    f"Ticker              {profile.ticker or 'unavailable'}",
+                    f"Economic profile    {profile.business_archetype.value}",
+                    "Policy              Independent model outputs; no blended value",
+                ]
+            )
+        ]
+        warnings: list[tuple[str, str]] = []
+        for execution in run.executed_models:
+            result = execution.result
+            lines = [
+                *section(result.model.label),
+                f"Method               {result.adapter}",
+                f"Role                 {execution.role.value}",
+                f"Confidence           {result.confidence.value}",
+                f"Equity value         {format_currency(result.equity_value, result.currency)}",
+                f"Diluted shares       {result.diluted_shares:,.2f}",
+                f"Intrinsic value      {format_currency(result.value_per_share, result.currency)}/share",
+            ]
+            if result.forecast_summary:
+                lines.extend(("", "Forecast summary"))
+                for point in result.forecast_summary:
+                    present = (
+                        f" | PV {format_currency(point.present_value, point.unit)}"
+                        if point.present_value is not None
+                        else ""
+                    )
+                    lines.append(
+                        f"  {point.label:<16} {format_currency(point.amount, point.unit)}{present}"
+                    )
+            if verbose and result.assumptions:
+                lines.extend(("", "Resolved assumptions"))
+                for assumption in result.assumptions:
+                    unit = f" {assumption.unit}" if assumption.unit else ""
+                    lines.append(
+                        f"  {assumption.name:<24} {assumption.value}{unit} [{assumption.source}]"
+                    )
+            blocks.append("\n".join(lines))
+            warnings.extend(
+                (warning.severity.value.upper(), warning.detail or warning.summary)
+                for warning in result.warnings
+            )
+
+        if run.skipped_models:
+            lines = [*section("MODEL READINESS / SKIPS")]
+            for skipped in run.skipped_models:
+                missing = (
+                    f" | missing: {', '.join(sorted(skipped.missing_inputs))}"
+                    if skipped.missing_inputs
+                    else ""
+                )
+                reason = (
+                    skipped.reasons[0] if skipped.reasons else "No executable inputs"
+                )
+                lines.append(
+                    f"{skipped.model.label:<28} {skipped.readiness.value:<14}{missing}"
+                )
+                lines.append(f"  {reason}")
+                if verbose:
+                    lines.extend(f"  {item}" for item in skipped.reasons[1:])
+            blocks.append("\n".join(lines))
+
+        if warnings:
+            lines = [*section("CONSOLIDATED WARNINGS")]
+            seen: set[str] = set()
+            for severity, message in warnings:
+                key = message.casefold().rstrip(".")
+                if key not in seen:
+                    seen.add(key)
+                    lines.append(f"[{severity}] {message}")
+            blocks.append("\n".join(lines))
+
+        summary = [
+            *section("VALUATION MODEL SUMMARY"),
+            "Independent model results (not averaged)",
+            "",
+        ]
+        if run.executed_models:
+            for execution in run.executed_models:
+                result = execution.result
+                summary.append(
+                    f"{result.model.label:<28} {format_currency(result.value_per_share, result.currency)}/share  "
+                    f"[{execution.role.value}, {result.confidence.value}]"
+                )
+        else:
+            summary.append("No intrinsic model was data-ready.")
+        blocks.append("\n".join(summary))
+        return "\n\n".join(blocks)
+
+
+class ProviderNeutralRelativeValuationConsolePresenter:
+    def render(self, result: ProviderNeutralRelativeValuation) -> str:
+        lines = [
+            *section("RELATIVE VALUATION"),
+            f"Basis: {result.metric.basis.value} | Metric: {result.metric.label}",
+            f"Target date: {result.target_date.isoformat()} | Confidence: {result.confidence.value}",
+            "",
+            "Case            Multiple       Target-date value    Present-value equivalent today",
+            "-" * 82,
+        ]
+        for case in (result.lower_case, result.point_case, result.upper_case):
+            lines.append(
+                f"{case.label:<14} {case.multiple:>9.2f}x"
+                f" {format_currency(case.target_date_value_per_share, result.currency):>23}"
+                f" {format_currency(case.present_value_per_share, result.currency):>33}"
+            )
+        if result.current_price is not None:
+            lines.extend(
+                (
+                    "",
+                    f"Current price: {format_currency(result.current_price, result.currency)}",
+                    f"Current-price implied multiple: {result.current_price_implied_multiple:.2f}x",
+                )
+            )
+        return "\n".join(lines)
+
+
+__all__ = [
+    "IndependentValuationModelsConsolePresenter",
+    "ProviderNeutralRelativeValuationConsolePresenter",
+    "ValuationReportConsolePresenter",
+]

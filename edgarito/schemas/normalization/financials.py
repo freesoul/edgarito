@@ -28,6 +28,7 @@ class FinancialConcept(str, Enum):
     PRETAX_INCOME = "pretax_income"
     INCOME_TAX_EXPENSE = "income_tax_expense"
     NET_INCOME = "net_income"
+    NET_INCOME_COMMON = "net_income_common"
     INTEREST_EXPENSE = "interest_expense"
     TOTAL_ASSETS = "total_assets"
     CURRENT_ASSETS = "current_assets"
@@ -43,6 +44,7 @@ class FinancialConcept(str, Enum):
     LONG_TERM_DEBT_CURRENT = "long_term_debt_current"
     LONG_TERM_DEBT_NONCURRENT = "long_term_debt_noncurrent"
     STOCKHOLDERS_EQUITY = "stockholders_equity"
+    COMMON_EQUITY = "common_equity"
     CASH_AND_EQUIVALENTS = "cash_and_equivalents"
     SHORT_TERM_INVESTMENTS = "short_term_investments"
     NONCURRENT_INVESTMENTS = "noncurrent_investments"
@@ -52,6 +54,8 @@ class FinancialConcept(str, Enum):
     DEPRECIATION_AND_AMORTIZATION = "depreciation_and_amortization"
     CAPITAL_EXPENDITURES = "capital_expenditures"
     DIVIDENDS_PAID = "dividends_paid"
+    DEBT_ISSUANCE = "debt_issuance"
+    DEBT_REPAYMENT = "debt_repayment"
     DIVIDENDS_PER_SHARE = "dividends_per_share"
     SHARES_OUTSTANDING = "shares_outstanding"
     WEIGHTED_AVERAGE_BASIC_SHARES = "weighted_average_basic_shares"
@@ -72,6 +76,7 @@ CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.PRETAX_INCOME: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.INCOME_TAX_EXPENSE: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.NET_INCOME: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.NET_INCOME_COMMON: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.INTEREST_EXPENSE: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.TOTAL_ASSETS: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.CURRENT_ASSETS: FinancialStatement.BALANCE_SHEET,
@@ -89,6 +94,7 @@ CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.LONG_TERM_DEBT_CURRENT: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.LONG_TERM_DEBT_NONCURRENT: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.STOCKHOLDERS_EQUITY: FinancialStatement.BALANCE_SHEET,
+    FinancialConcept.COMMON_EQUITY: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.CASH_AND_EQUIVALENTS: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.SHORT_TERM_INVESTMENTS: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.NONCURRENT_INVESTMENTS: FinancialStatement.BALANCE_SHEET,
@@ -98,6 +104,8 @@ CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.DEPRECIATION_AND_AMORTIZATION: FinancialStatement.CASH_FLOW,
     FinancialConcept.CAPITAL_EXPENDITURES: FinancialStatement.CASH_FLOW,
     FinancialConcept.DIVIDENDS_PAID: FinancialStatement.CASH_FLOW,
+    FinancialConcept.DEBT_ISSUANCE: FinancialStatement.CASH_FLOW,
+    FinancialConcept.DEBT_REPAYMENT: FinancialStatement.CASH_FLOW,
     FinancialConcept.DIVIDENDS_PER_SHARE: FinancialStatement.CASH_FLOW,
     FinancialConcept.SHARES_OUTSTANDING: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.WEIGHTED_AVERAGE_BASIC_SHARES: (

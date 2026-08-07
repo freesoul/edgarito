@@ -144,4 +144,3 @@ class HistoricalMultiplesService:
         upper = min(lower + 1, len(values) - 1)
         weight = position - Decimal(lower)
         return values[lower] + (values[upper] - values[lower]) * weight
-

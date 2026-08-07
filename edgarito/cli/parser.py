@@ -157,10 +157,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     valuation.add_argument(
         "--model",
-        choices=("fcff-dcf", "comparables", "both"),
+        choices=(
+            "auto",
+            "fcff-dcf",
+            "fcfe-dcf",
+            "ddm",
+            "residual-income",
+            "nav",
+            "reit-affo",
+            "property-nav",
+            "resource-nav",
+            "pipeline-rnpv",
+            "comparables",
+            "both",
+        ),
+        default="auto",
         help=(
-            "Valuation output: intrinsic DCF, independent market-relative "
-            "valuation, or both; the profile policy may enable both"
+            "Valuation model; auto executes every ready suitable model independently. "
+            "both remains an alias for FCFF plus comparables"
         ),
     )
     valuation.add_argument(
@@ -178,7 +192,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     valuation.add_argument(
         "--relative-basis",
-        choices=("ev_to_ebitda", "ev_to_ebit", "ev_to_revenue", "ev_to_fcf"),
+        choices=(
+            "ev_to_ebitda",
+            "ev_to_ebit",
+            "ev_to_revenue",
+            "ev_to_fcf",
+            "price_to_earnings",
+            "price_to_book",
+            "price_to_tangible_book",
+            "price_to_affo",
+            "price_to_nav",
+        ),
         help="Forward multiple basis; overrides the relative-valuation policy",
     )
     valuation.add_argument(
@@ -253,6 +277,65 @@ def build_parser() -> argparse.ArgumentParser:
         type=_percentage,
         metavar="PERCENT",
         help="WACC in percentage points; overrides the selected profile",
+    )
+    valuation.add_argument(
+        "--cost-of-equity",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Equity discount rate; overrides profile and CAPM resolution",
+    )
+    valuation.add_argument(
+        "--fcfe",
+        type=_decimal_value,
+        action="append",
+        metavar="AMOUNT",
+        help="Explicit annual FCFE; repeat once per forecast year",
+    )
+    valuation.add_argument(
+        "--net-borrowing",
+        type=_decimal_value,
+        action="append",
+        metavar="AMOUNT",
+        help="Explicit annual net borrowing for a reconciled FCFE path",
+    )
+    valuation.add_argument(
+        "--debt-financing-ratio",
+        type=_decimal_value,
+        metavar="RATIO",
+        help="Share of reinvestment financed with debt, from 0 to 1",
+    )
+    valuation.add_argument(
+        "--dividend",
+        type=_decimal_value,
+        action="append",
+        metavar="AMOUNT",
+        help="Explicit annual total common dividends; repeat per forecast year",
+    )
+    valuation.add_argument(
+        "--forecast-roe",
+        type=_percentage,
+        action="append",
+        metavar="PERCENT",
+        help="Forecast ROE in percentage points; repeat per forecast year",
+    )
+    valuation.add_argument(
+        "--payout-ratio",
+        type=_decimal_value,
+        action="append",
+        metavar="RATIO",
+        help="Dividend payout ratio from 0 to 1; repeat per forecast year",
+    )
+    valuation.add_argument(
+        "--terminal-roe",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Sustainable terminal return on equity",
+    )
+    valuation.add_argument(
+        "--excess-return-persistence",
+        type=_decimal_value,
+        metavar="RATIO",
+        help="Annual persistence of residual excess ROE, from 0 to 1",
     )
     valuation.add_argument(
         "--cash-flow-timing",
@@ -548,8 +631,7 @@ def _add_retrieval_arguments(
         "--verbose",
         action="store_true",
         help=(
-            "Enable debug logging; valuation also shows full diagnostics and "
-            "provenance"
+            "Enable debug logging; valuation also shows full diagnostics and provenance"
         ),
     )
 

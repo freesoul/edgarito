@@ -79,6 +79,13 @@ CONCEPT_DEFINITIONS = (
         ("NetIncomeLoss",),
     ),
     ConceptDefinition(
+        FinancialConcept.NET_INCOME_COMMON,
+        (
+            "NetIncomeLossAvailableToCommonStockholdersBasic",
+            "NetIncomeLossAvailableToCommonStockholdersDiluted",
+        ),
+    ),
+    ConceptDefinition(
         FinancialConcept.INTEREST_EXPENSE,
         (
             "InterestExpenseNonoperating",
@@ -180,6 +187,11 @@ CONCEPT_DEFINITIONS = (
         instant=True,
     ),
     ConceptDefinition(
+        FinancialConcept.COMMON_EQUITY,
+        ("StockholdersEquity",),
+        instant=True,
+    ),
+    ConceptDefinition(
         FinancialConcept.CASH_AND_EQUIVALENTS,
         (
             "CashAndCashEquivalentsAtCarryingValue",
@@ -237,6 +249,20 @@ CONCEPT_DEFINITIONS = (
     ConceptDefinition(
         FinancialConcept.DIVIDENDS_PAID,
         ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
+    ),
+    ConceptDefinition(
+        FinancialConcept.DEBT_ISSUANCE,
+        (
+            "ProceedsFromIssuanceOfLongTermDebt",
+            "ProceedsFromIssuanceOfDebt",
+        ),
+    ),
+    ConceptDefinition(
+        FinancialConcept.DEBT_REPAYMENT,
+        (
+            "RepaymentsOfLongTermDebt",
+            "RepaymentsOfDebt",
+        ),
     ),
     ConceptDefinition(
         FinancialConcept.DIVIDENDS_PER_SHARE,

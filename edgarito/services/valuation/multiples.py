@@ -544,9 +544,7 @@ class LtmMultiplesService:
             and income_tax_expense is not None
             and income_tax_expense >= 0
         ):
-            tax_rate = min(
-                Decimal("0.5"), income_tax_expense / pretax_income
-            )
+            tax_rate = min(Decimal("0.5"), income_tax_expense / pretax_income)
         else:
             return None
         nopat = operating_income * (Decimal(1) - tax_rate)
