@@ -195,3 +195,54 @@ def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_p
     assert massive.calls == 0
     assert len(screen_calls) == 1
     assert "Non-U.S. issuer bypassed" in result.methodology
+
+
+def test_yahoo_discovery_excludes_target_cross_listing_by_issuer_identity(tmp_path):
+    response = {
+        "quotes": [
+            {
+                "symbol": "ASML.AS",
+                "quoteType": "EQUITY",
+                "longName": "ASML Holding NV",
+                "marketCap": 1000,
+                "exchange": "AMS",
+                "region": "nl",
+            },
+            {
+                "symbol": "BESI.AS",
+                "quoteType": "EQUITY",
+                "longName": "BE Semiconductor Industries NV",
+                "marketCap": 1000,
+                "exchange": "AMS",
+                "region": "nl",
+            },
+            {
+                "symbol": "ASM.AS",
+                "quoteType": "EQUITY",
+                "longName": "ASM International NV",
+                "marketCap": 1100,
+                "exchange": "AMS",
+                "region": "nl",
+            },
+        ]
+    }
+
+    provider = YahooScreenerPeerDiscoveryProvider(
+        FileSystemCache(tmp_path),
+        screen=lambda *_args, **_kwargs: response,
+        use_cache=False,
+        make_cache=False,
+    )
+    target = YahooCompanyFinancials(
+        symbol="ASML",
+        company_name="ASML Holding N.V.",
+        currency="EUR",
+        industry="Semiconductors",
+        country="Netherlands",
+        market_capitalization=Decimal("1000"),
+    )
+
+    result = asyncio.run(provider.discover(target, max_candidates=2))
+
+    assert "ASML.AS" not in result.candidate_tickers
+    assert result.candidate_tickers == ("BESI.AS", "ASM.AS")

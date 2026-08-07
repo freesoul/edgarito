@@ -2,6 +2,10 @@ import re
 from decimal import Decimal
 from statistics import median
 
+from edgarito.services.valuation.issuer_identity import (
+    issuer_identity_keys,
+    normalize_issuer_name,
+)
 from edgarito.services.valuation.models import (
     BusinessArchetype,
     CompanyTradingMultiples,
@@ -40,6 +44,10 @@ class PeerUniverseSelector:
             raise ValueError("Peer selection requires a target ticker")
 
         candidate_multiples = candidate_multiples or {}
+        candidates_by_ticker = {
+            candidate.ticker or candidate.company_id: candidate
+            for candidate in candidates
+        }
         assessments = [
             self._assess(
                 target,
@@ -54,9 +62,19 @@ class PeerUniverseSelector:
         seen_entities: dict[str, str] = {}
         deduplicated = []
         for item in assessments:
-            entity_key = self._entity_key(item.company_name)
-            representative = seen_entities.get(entity_key)
-            if entity_key and representative is not None:
+            candidate = candidates_by_ticker.get(item.ticker)
+            entity_keys = (
+                self._issuer_keys(candidate) if candidate is not None else frozenset()
+            )
+            representative = next(
+                (
+                    seen_entities[entity_key]
+                    for entity_key in entity_keys
+                    if entity_key in seen_entities
+                ),
+                None,
+            )
+            if representative is not None:
                 item = item.model_copy(
                     update={
                         "exclusions": [
@@ -65,8 +83,9 @@ class PeerUniverseSelector:
                         ]
                     }
                 )
-            elif entity_key:
-                seen_entities[entity_key] = item.ticker
+            else:
+                for entity_key in entity_keys:
+                    seen_entities[entity_key] = item.ticker
             deduplicated.append(item)
         assessments = deduplicated
         eligible = [
@@ -75,10 +94,6 @@ class PeerUniverseSelector:
             if not item.exclusions and item.score >= parameters.minimum_score
         ]
         if len(eligible) < parameters.preferred_minimum:
-            candidates_by_ticker = {
-                candidate.ticker or candidate.company_id: candidate
-                for candidate in candidates
-            }
             relaxed = []
             for item in assessments:
                 candidate = candidates_by_ticker.get(item.ticker)
@@ -181,7 +196,9 @@ class PeerUniverseSelector:
         exclusions = []
         reasons = []
         if self._same_company(target, candidate):
-            exclusions.append("Candidate is the target company")
+            exclusions.append(
+                "Candidate is the target company/issuer (cross-listing or ADR excluded)"
+            )
         if (
             parameters.require_same_sector
             and target.sector is not None
@@ -437,47 +454,23 @@ class PeerUniverseSelector:
 
     @staticmethod
     def _same_company(target: ValuationProfile, candidate: ValuationProfile) -> bool:
-        if target.company_id.isdigit() and candidate.company_id.isdigit():
-            return int(target.company_id) == int(candidate.company_id)
-        same_ticker = bool(
-            target.ticker
-            and candidate.ticker
-            and target.ticker.casefold() == candidate.ticker.casefold()
+        return bool(
+            PeerUniverseSelector._issuer_keys(target)
+            & PeerUniverseSelector._issuer_keys(candidate)
         )
-        same_name = PeerUniverseSelector._entity_key(
-            target.company_name
-        ) == PeerUniverseSelector._entity_key(candidate.company_name)
-        return same_ticker or same_name
 
     @staticmethod
-    def _entity_key(name: str) -> str:
-        noise = {
-            "a",
-            "adr",
-            "ag",
-            "b",
-            "cdr",
-            "cedear",
-            "class",
-            "common",
-            "corp",
-            "corporation",
-            "depositary",
-            "inc",
-            "limited",
-            "ltd",
-            "nv",
-            "ord",
-            "ordinary",
-            "plc",
-            "receipt",
-            "sa",
-            "se",
-            "spa",
-            "stock",
-        }
-        tokens = re.findall(r"[a-z0-9]+", name.casefold())
-        return "".join(token for token in tokens if token not in noise)
+    def _issuer_keys(profile: ValuationProfile) -> frozenset[str]:
+        return issuer_identity_keys(
+            company_id=profile.company_id,
+            company_name=profile.company_name,
+            ticker=profile.ticker,
+            identifiers=profile.identifiers,
+        )
+
+    @staticmethod
+    def _entity_key(name: str, ticker: str | None = None) -> str:
+        return normalize_issuer_name(name, ticker=ticker)
 
     @classmethod
     def _industry_score(cls, target: str | None, candidate: str | None) -> int:

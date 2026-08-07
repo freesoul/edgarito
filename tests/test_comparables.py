@@ -103,6 +103,34 @@ def test_peer_selector_ranks_economic_fit_and_excludes_sector_mismatch():
     assert "Sector differs from the target" in bank_assessment.exclusions
 
 
+def test_peer_selector_excludes_target_cross_listings_at_issuer_level():
+    target = _profile("ASML").model_copy(
+        update={
+            "company_name": "ASML Holding N.V.",
+            "identifiers": SecurityIdentifiers(ticker="ASML", cik=937966),
+        }
+    )
+    alternate_listing = _profile("2330.TW").model_copy(
+        update={
+            "company_name": "ASML Holding NV Sponsored ADR",
+            "identifiers": SecurityIdentifiers(ticker="2330.TW"),
+        }
+    )
+    unrelated = _profile("BESI")
+
+    result = PeerUniverseSelector().select(
+        target,
+        [alternate_listing, unrelated],
+        PeerSelectionParameters(max_peers=2, preferred_minimum=1, minimum_score=0),
+    )
+
+    assert result.selected_tickers == ("BESI",)
+    excluded = next(
+        item for item in result.candidates if item.ticker == "2330.TW"
+    )
+    assert any("target company/issuer" in reason for reason in excluded.exclusions)
+
+
 def _observation(
     concept: FinancialConcept,
     value: str,

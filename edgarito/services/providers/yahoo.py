@@ -7,6 +7,7 @@ from typing import Callable, Optional
 import pandas as pd
 import yfinance as yf
 
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.providers.yahoo.fundamentals import (
     YahooCompanyFinancials,
     YahooFinancialReport,
@@ -141,9 +142,16 @@ class YahooFinanceClient:
             raise ValueError("Yahoo did not identify the reporting currency")
         company_name = info.get("longName") or info.get("shortName") or symbol
         exchange = info.get("fullExchangeName") or info.get("exchange")
+        resolved_symbol = str(info.get("symbol") or symbol).upper()
+        cik = self._parse_cik(info.get("cik"))
         return YahooCompanyFinancials(
-            symbol=str(info.get("symbol") or symbol).upper(),
+            symbol=resolved_symbol,
             company_name=str(company_name),
+            identifiers=(
+                SecurityIdentifiers(ticker=resolved_symbol, cik=cik)
+                if cik is not None
+                else None
+            ),
             currency=str(currency).upper(),
             exchange=str(exchange) if exchange else None,
             sector=str(info["sector"]) if info.get("sector") else None,
@@ -255,6 +263,11 @@ class YahooFinanceClient:
     @staticmethod
     def _positive(value: Optional[Decimal]) -> Optional[Decimal]:
         return value if value is not None and value > 0 else None
+
+    @staticmethod
+    def _parse_cik(value) -> Optional[int]:
+        normalized = str(value).strip() if value is not None else ""
+        return int(normalized) if normalized.isdigit() and int(normalized) > 0 else None
 
     @classmethod
     def _normalize_symbol(cls, symbol: str) -> str:

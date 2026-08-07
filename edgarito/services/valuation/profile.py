@@ -186,6 +186,9 @@ class ValuationProfileBuilder:
             company_id=financials.company_id,
             company_name=financials.company_name,
             ticker=financials.ticker,
+            identifiers=(financials.identifiers or classification.identifiers)
+            if classification is not None
+            else financials.identifiers,
             sector=sector,
             industry=industry,
             country=classification.country if classification else None,

@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
 from edgarito.services.forecasting.models import AdaptiveMultistagePlan
@@ -178,6 +179,7 @@ class ValuationProfile(BaseModel):
     company_id: str
     company_name: str
     ticker: Optional[str] = None
+    identifiers: Optional[SecurityIdentifiers] = None
     sector: Optional[Sector] = None
     industry: Optional[str] = None
     country: Optional[str] = None

@@ -11,6 +11,7 @@ import yfinance as yf
 
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.valuation.issuer_identity import issuer_identity_keys
 from edgarito.services.valuation.models import PeerDiscoveryResult
 
 
@@ -67,16 +68,30 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
         if not isinstance(results, list):
             raise RuntimeError("Massive related companies returned an invalid response")
         candidates = []
-        seen = {symbol}
+        seen = set(
+            issuer_identity_keys(
+                company_id=target.symbol,
+                company_name=target.company_name,
+                ticker=target.symbol,
+                identifiers=target.identifiers,
+            )
+        )
         for item in results:
             candidate = (
                 str(item.get("ticker") or "").strip().upper()
                 if isinstance(item, dict)
                 else ""
             )
-            if not self._SYMBOL.fullmatch(candidate) or candidate in seen:
+            candidate_keys = issuer_identity_keys(
+                company_id=candidate,
+                ticker=candidate,
+            )
+            if (
+                not self._SYMBOL.fullmatch(candidate)
+                or candidate_keys & seen
+            ):
                 continue
-            seen.add(candidate)
+            seen.update(candidate_keys)
             candidates.append(candidate)
             if len(candidates) >= max_candidates:
                 break
@@ -312,7 +327,13 @@ class YahooScreenerPeerDiscoveryProvider:
 
         target_cap = target.market_capitalization
         preferred_exchanges = self._preferred_exchanges(target.exchange)
-        ranked_by_issuer = {}
+        target_issuer_keys = issuer_identity_keys(
+            company_id=target.symbol,
+            company_name=target.company_name,
+            ticker=target.symbol,
+            identifiers=target.identifiers,
+        )
+        ranked_candidates = []
         primary_names = {
             str(quote.get("symbol") or "").strip().upper(): quote.get("longName")
             for quote in quotes
@@ -366,16 +387,25 @@ class YahooScreenerPeerDiscoveryProvider:
                 or quote.get("shortName")
                 or symbol
             ).casefold()
-            issuer_key = re.sub(r"[^a-z0-9]", "", name)
+            candidate_issuer_keys = issuer_identity_keys(
+                company_id=symbol,
+                company_name=name,
+                ticker=symbol,
+            )
+            if target_issuer_keys & candidate_issuer_keys:
+                continue
             rank = (geography_rank, exchange_rank, distance, symbol)
-            if (
-                issuer_key not in ranked_by_issuer
-                or rank < ranked_by_issuer[issuer_key]
-            ):
-                ranked_by_issuer[issuer_key] = rank
-        symbols = tuple(
-            item[-1] for item in sorted(ranked_by_issuer.values())[:max_candidates]
-        )
+            ranked_candidates.append((rank, symbol, candidate_issuer_keys))
+        symbols = []
+        seen_issuer_keys = set()
+        for _rank, symbol, candidate_issuer_keys in sorted(ranked_candidates):
+            if candidate_issuer_keys & seen_issuer_keys:
+                continue
+            seen_issuer_keys.update(candidate_issuer_keys)
+            symbols.append(symbol)
+            if len(symbols) >= max_candidates:
+                break
+        symbols = tuple(symbols)
         confidence = (
             "high" if len(symbols) >= 15 else "medium" if len(symbols) >= 5 else "low"
         )
@@ -574,7 +604,7 @@ class MarketAwarePeerDiscoveryProvider:
                 *(massive.candidate_tickers if massive is not None else ()),
                 *yahoo.candidate_tickers,
             ),
-            target.symbol,
+            target,
             max_candidates,
         )
         fallback_warnings.extend(yahoo.warnings)
@@ -600,13 +630,35 @@ class MarketAwarePeerDiscoveryProvider:
 
     @staticmethod
     def _deduplicate(candidates, target, maximum):
-        seen = {target.strip().upper()}
+        target_symbol = (
+            target.symbol if isinstance(target, YahooCompanyFinancials) else str(target)
+        )
+        seen = set(
+            issuer_identity_keys(
+                company_id=target_symbol,
+                company_name=(
+                    target.company_name
+                    if isinstance(target, YahooCompanyFinancials)
+                    else None
+                ),
+                ticker=target_symbol,
+                identifiers=(
+                    target.identifiers
+                    if isinstance(target, YahooCompanyFinancials)
+                    else None
+                ),
+            )
+        )
         selected = []
         for value in candidates:
             symbol = value.strip().upper()
-            if not symbol or symbol in seen:
+            candidate_keys = issuer_identity_keys(
+                company_id=symbol,
+                ticker=symbol,
+            )
+            if not symbol or candidate_keys & seen:
                 continue
-            seen.add(symbol)
+            seen.update(candidate_keys)
             selected.append(symbol)
             if len(selected) >= maximum:
                 break

@@ -87,6 +87,7 @@ class _FakeTicker:
         return {
             "symbol": self.symbol,
             "longName": "SAP SE",
+            "cik": "0001326801",
             "financialCurrency": "EUR",
             "fullExchangeName": "XETRA",
             "sector": "Technology",
@@ -135,6 +136,8 @@ def test_yahoo_financial_client_caches_serializable_statement_snapshots(tmp_path
 
     assert first == second
     assert first.company_name == "SAP SE"
+    assert first.identifiers is not None
+    assert first.identifiers.cik == 1326801
     assert first.currency == "EUR"
     assert first.sector == "Technology"
     assert first.industry == "Software Infrastructure"
@@ -164,6 +167,7 @@ def test_yahoo_normalizer_maps_extended_financial_concepts_and_periods(tmp_path)
     }
 
     assert normalized.provider == "yahoo"
+    assert normalized.identifiers == source.identifiers
     assert normalized.retrieved_at == source.retrieved_at
     assert annual[FinancialConcept.REVENUE].value == Decimal("1000.0")
     assert annual[FinancialConcept.REVENUE].source_concept == "TotalRevenue"

@@ -239,6 +239,7 @@ class YahooFinancialsNormalizer:
             company_id=company_financials.symbol,
             company_name=company_financials.company_name,
             ticker=company_financials.symbol,
+            identifiers=company_financials.identifiers,
             retrieved_at=company_financials.retrieved_at,
             observations=sorted(observations.values(), key=self._sort_key),
         )

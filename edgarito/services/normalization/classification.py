@@ -1,6 +1,7 @@
 import re
 from typing import Optional
 
+from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.classification import (
     NormalizedCompanyClassification,
     Sector,
@@ -72,6 +73,7 @@ class CompanyClassificationNormalizer:
             industry=financials.industry,
             country=financials.country,
             exchange=financials.exchange,
+            identifiers=financials.identifiers,
         )
 
     def _normalize(
@@ -85,6 +87,7 @@ class CompanyClassificationNormalizer:
         industry: Optional[str],
         country: Optional[str],
         exchange: Optional[str],
+        identifiers: Optional[SecurityIdentifiers] = None,
     ) -> NormalizedCompanyClassification:
         source_sector = self._clean(sector)
         source_industry = self._clean(industry)
@@ -93,6 +96,7 @@ class CompanyClassificationNormalizer:
             company_id=self._company_id(cik, symbol),
             company_name=company_name,
             ticker=symbol.upper(),
+            identifiers=identifiers,
             sector=self._sector(source_sector),
             industry=self._display_label(source_industry),
             source_sector=source_sector,

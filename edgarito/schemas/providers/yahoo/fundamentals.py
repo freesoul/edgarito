@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from edgarito.schemas.identifiers import SecurityIdentifiers
+
 
 class YahooFinancialReport(BaseModel):
     """One Yahoo statement column with its original line-item names."""
@@ -21,6 +23,7 @@ class YahooCompanyFinancials(BaseModel):
 
     symbol: str
     company_name: str
+    identifiers: Optional[SecurityIdentifiers] = None
     currency: str
     exchange: Optional[str] = None
     sector: Optional[str] = None
