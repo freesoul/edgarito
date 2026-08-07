@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import datetime
 import logging
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
@@ -72,18 +73,21 @@ from edgarito.services.valuation import (
     HistoricalMultiplesService,
     LtmMultiplesService,
     MultipleResolver,
+    PeerDiscoveryResult,
     PeerSelectionParameters,
     PeerUniverseSelector,
     RelativeValuationBasis,
     ShareRepurchaseParameters,
     SpecializedValuationExtractor,
     TerminalMetric,
+    TerminalRoicResolver,
     TerminalValueMethod,
     ValuationAssumptionResolver,
     ValuationInput,
     ValuationModelSelector,
     ValuationProfileBuilder,
     ValuationProfileOverrides,
+    YahooScreenerPeerDiscoveryProvider,
 )
 from edgarito.settings import (
     ALPHAVANTAGE_API_KEY,
@@ -346,6 +350,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Perpetual growth in percentage points",
     )
     valuation.add_argument(
+        "--terminal-roic",
+        type=_percentage,
+        metavar="PERCENT",
+        help="Sustainable terminal ROIC; overrides automatic resolution and profile",
+    )
+    valuation.add_argument(
         "--exit-multiple",
         type=_decimal_value,
         metavar="MULTIPLE",
@@ -476,8 +486,10 @@ def build_parser() -> argparse.ArgumentParser:
     comparables.add_argument(
         "--peer",
         action="append",
-        required=True,
-        help="Candidate Yahoo symbol; repeat to supply the candidate universe",
+        help=(
+            "Candidate Yahoo symbol; repeat to override automatic provider-backed "
+            "discovery"
+        ),
     )
     comparables.add_argument("--max-peers", type=int, help="Maximum selected peers")
     comparables.add_argument(
@@ -724,13 +736,8 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 async def _run_valuation(args: argparse.Namespace) -> int:
     profile = ValuationProfileLoader.load(args.profile)
     selected_model = args.model or (
-        "both" if profile.relative_valuation.enabled and args.peer else "fcff-dcf"
+        "both" if profile.relative_valuation.enabled else "fcff-dcf"
     )
-    if selected_model in {"comparables", "both"} and not args.peer:
-        raise ValueError(
-            "Relative valuation requires an explicit candidate universe; repeat "
-            "--peer for each candidate"
-        )
     forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
     terminal_configuration = profile.valuation.terminal_value
     terminal_method = (
@@ -748,14 +755,20 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     required_concepts = (
         forecast_service.required_concepts()
         | bridge_resolver.required_concepts()
-        | {FinancialConcept.INTEREST_EXPENSE}
+        | {
+            FinancialConcept.INTEREST_EXPENSE,
+            FinancialConcept.STOCKHOLDERS_EQUITY,
+        }
     )
     financials = await _retrieve_financials(
         args,
-        Granularity.ANNUAL,
+        None,
         required_concepts,
     )
-    forecast = forecast_service.forecast(financials, forecast_parameters)
+    valuation_date = datetime.date.today()
+    forecast = forecast_service.forecast(
+        financials, forecast_parameters, as_of=valuation_date
+    )
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
         value is not None for value in (args.net_debt, args.gross_debt, args.cash)
@@ -786,6 +799,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             if args.non_operating_assets is not None
             else bridge_configuration.non_operating_assets
         ),
+        valuation_date=valuation_date,
     )
     discount_configuration = profile.valuation.discount_rates
     needs_automatic_wacc = (
@@ -807,7 +821,6 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         sector_override=profile.model_selection.sector,
         industry_override=profile.model_selection.industry,
     )
-    valuation_date = datetime.date.today()
     resolved = ValuationAssumptionResolver().resolve(
         financials=financials,
         capital_bridge=capital_bridge,
@@ -821,8 +834,55 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         terminal_growth_override=args.terminal_growth,
         **automatic_inputs,
     )
+    profile_context = ValuationProfileBuilder().build(
+        financials,
+        automatic_inputs.get("classification"),
+        ValuationProfileOverrides(
+            lifecycle=profile.model_selection.lifecycle,
+            cyclicality=profile.model_selection.cyclicality,
+        ),
+    )
+    configured_terminal_roic = (
+        args.terminal_roic
+        if args.terminal_roic is not None
+        else profile.valuation.multistage.terminal_return_on_invested_capital
+    )
+    terminal_roic = TerminalRoicResolver().resolve(
+        financials,
+        wacc=resolved.wacc,
+        terminal_growth=(
+            resolved.perpetual_growth_rate
+            if resolved.perpetual_growth_rate is not None
+            else profile.valuation.multistage.stable_growth_rate or Decimal(0)
+        ),
+        valuation_date=valuation_date,
+        currency=forecast.unit,
+        explicit_roic=configured_terminal_roic,
+        explicit_source=(
+            "explicit CLI override"
+            if args.terminal_roic is not None
+            else "explicit valuation profile"
+        ),
+        lifecycle=profile_context.lifecycle,
+        cyclicality=profile_context.cyclicality,
+    )
+    resolved = replace(
+        resolved,
+        assumption_set=resolved.assumption_set.model_copy(
+            update={
+                "assumptions": (
+                    *resolved.assumption_set.assumptions,
+                    terminal_roic.assumption,
+                )
+            }
+        ),
+    )
     multistage_plan = None
-    multistage_configuration = profile.valuation.multistage
+    multistage_configuration = profile.valuation.multistage.model_copy(
+        update={
+            "terminal_return_on_invested_capital": terminal_roic.value,
+        }
+    )
     use_multistage = args.projection_method == "adaptive" or (
         args.projection_method is None
         and multistage_configuration.enabled
@@ -856,6 +916,15 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             normalized_tax_rate=(
                 tax_assumption.value if tax_assumption is not None else None
             ),
+            as_of=valuation_date,
+        )
+        multistage_plan = multistage_plan.model_copy(
+            update={
+                "terminal_roic_source": terminal_roic.source,
+                "terminal_roic_methodology": terminal_roic.methodology,
+                "terminal_roic_confidence": terminal_roic.confidence,
+                "terminal_roic_warnings": terminal_roic.warnings,
+            }
         )
     parameters = FcffDcfParameters(
         wacc=resolved.wacc,
@@ -931,6 +1000,14 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         valuation_date,
         share_repurchase_parameters,
     )
+    if terminal_roic.warnings:
+        result = result.model_copy(
+            update={
+                "warnings": tuple(
+                    dict.fromkeys([*result.warnings, *terminal_roic.warnings])
+                )
+            }
+        )
     if selected_model in {"fcff-dcf", "both"}:
         print(FcffDcfConsolePresenter().render(result, profile_name=profile.name))
     if selected_model in {"comparables", "both"}:
@@ -955,7 +1032,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             provider_symbols.get(ProviderName.YAHOO, args.ticker).strip().upper()
         )
         peer_symbols = list(
-            dict.fromkeys(symbol.strip().upper() for symbol in args.peer)
+            dict.fromkeys(symbol.strip().upper() for symbol in (args.peer or []))
         )
         (
             report,
@@ -979,6 +1056,18 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             valuation_date,
             horizon_years,
         )
+        if selected_model == "both":
+            print("\n" + "=" * 84 + "\n")
+        print(ComparableMultiplesConsolePresenter().render(report))
+        if len(report.universe.selected_tickers) < (
+            relative_configuration.multiple_resolution.minimum_peer_sample
+        ):
+            print(
+                "\nRelative valuation skipped: peer evidence is below the configured "
+                f"minimum sample of "
+                f"{relative_configuration.multiple_resolution.minimum_peer_sample}."
+            )
+            return 0
         target_history = HistoricalMultiplesService().compute(
             comparable_financials,
             comparable_market,
@@ -1019,8 +1108,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             analyst_target_price=args.analyst_target_price,
             intrinsic_value_per_share=result.value_per_share,
         )
-        if selected_model == "both":
-            print("\n" + "=" * 84 + "\n")
+        print("\n" + "=" * 84 + "\n")
         print(ComparableImpliedValuationConsolePresenter().render(relative_result))
     return 0
 
@@ -1096,7 +1184,9 @@ async def _run_classification(args: argparse.Namespace) -> int:
 async def _run_comparables(args: argparse.Namespace) -> int:
     valuation_profile = ValuationProfileLoader.load(args.profile)
     target_symbol = args.ticker.strip().upper()
-    peer_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in args.peer))
+    peer_symbols = list(
+        dict.fromkeys(symbol.strip().upper() for symbol in (args.peer or []))
+    )
     report, _, _, _ = await _build_comparable_report(
         args,
         valuation_profile,
@@ -1140,8 +1230,40 @@ async def _build_comparable_report(
             else configuration.require_same_sector
         ),
     )
-    symbols = [target_symbol, *peer_symbols]
+    discovery = None
     cache = FileSystemCache(Path(args.cache_dir))
+    if not peer_symbols:
+        async with YahooFinanceClient(cache) as client:
+            try:
+                target_source = await client.get_company_financials(
+                    target_symbol,
+                    use_cache=not args.refresh,
+                    make_cache=True,
+                )
+                if target_source.market_capitalization is None:
+                    target_source = await client.get_company_financials(
+                        target_symbol,
+                        use_cache=False,
+                        make_cache=True,
+                    )
+                discovery = await YahooScreenerPeerDiscoveryProvider(
+                    cache,
+                    use_cache=not args.refresh,
+                    make_cache=True,
+                ).discover(
+                    target_source,
+                    max_candidates=max(12, parameters.max_peers * 3),
+                )
+                peer_symbols = list(discovery.candidate_tickers)
+            except (RuntimeError, ValueError) as exc:
+                discovery = PeerDiscoveryResult(
+                    provider="yahoo-screener",
+                    target_ticker=target_symbol,
+                    methodology="Provider-backed discovery failed",
+                    confidence="low",
+                    warnings=(f"Automatic peer discovery failed: {exc}",),
+                )
+    symbols = [target_symbol, *peer_symbols]
     async with YahooFinanceClient(cache) as client:
         results = await asyncio.gather(
             *(
@@ -1228,6 +1350,7 @@ async def _build_comparable_report(
             for symbol in peer_symbols
             if symbol in bundles and bundles[symbol][1] is not None
         },
+        discovery=discovery,
     )
     peer_multiples = [
         bundles[symbol][1]

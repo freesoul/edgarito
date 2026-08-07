@@ -282,7 +282,9 @@ def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
     financials = _fcff_financials()
     base_service = FcffForecastService()
     adaptive = AdaptiveMultistageFcffForecastService(base_service)
-    configuration = MultistageValuationConfiguration()
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15")
+    )
 
     forecasts = []
     plans = []

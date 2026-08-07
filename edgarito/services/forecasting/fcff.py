@@ -16,6 +16,7 @@ from edgarito.services.forecasting.models import (
     FcffForecastObservation,
     FcffForecastParameters,
     ForecastAssumptionSource,
+    ForecastSeedType,
 )
 from edgarito.services.metrics.calculator import (
     OPERATING_WORKING_CAPITAL_CONCEPTS,
@@ -37,6 +38,21 @@ class _HistoricalDrivers:
     depreciation_and_amortization: Decimal
     capital_expenditures: Decimal
     operating_working_capital: Decimal
+    fiscal_period: FiscalPeriod = FiscalPeriod.FY
+
+
+@dataclass(frozen=True)
+class _ForecastContext:
+    base: _HistoricalDrivers
+    latest_annual: _HistoricalDrivers
+    path_periods: tuple[_HistoricalDrivers, ...]
+    seed_type: ForecastSeedType
+    seed_methodology: str
+    seed_period_end: datetime.date
+    current_fiscal_year: int | None = None
+    actual_ytd: _HistoricalDrivers | None = None
+    actual_quarters: int = 0
+    fiscal_year_end: datetime.date | None = None
 
 
 class FcffForecastService:
@@ -62,16 +78,33 @@ class FcffForecastService:
         self,
         financials: NormalizedCompanyFinancials,
         parameters: Optional[FcffForecastParameters] = None,
+        *,
+        as_of: datetime.date | None = None,
     ) -> FcffForecast:
         parameters = parameters or FcffForecastParameters()
+        if as_of is not None:
+            financials = financials.model_copy(
+                update={
+                    "observations": [
+                        item
+                        for item in financials.observations
+                        if self._available_on(item) <= as_of
+                    ]
+                }
+            )
         periods = self._complete_annual_periods(financials)
         if not periods:
             self._raise_missing_inputs(financials)
 
+        context = self._forecast_context(financials, periods, parameters)
         historical_periods = periods[-parameters.historical_window :]
-        paths, sources = self._driver_paths(parameters, historical_periods)
-        base = periods[-1]
-        previous = periods[-2] if len(periods) > 1 else None
+        paths, sources = self._driver_paths(parameters, list(context.path_periods))
+        base = context.base
+        previous = (
+            periods[-2]
+            if len(periods) > 1 and context.seed_type == ForecastSeedType.FISCAL_YEAR
+            else None
+        )
         base_tax_rate = self._effective_tax_rate(base)
         if base_tax_rate is None:
             base_tax_rate = paths[FcffForecastDriver.TAX_RATE][0]
@@ -93,11 +126,55 @@ class FcffForecastService:
                 FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE
             ][index]
 
-            projected_revenue *= Decimal(1) + growth / PERCENT
-            operating_income = projected_revenue * operating_margin / PERCENT
-            nopat = operating_income * (Decimal(1) - tax_rate / PERCENT)
-            depreciation = projected_revenue * depreciation_ratio / PERCENT
-            capital_expenditures = projected_revenue * capex_ratio / PERCENT
+            if index == 0 and context.actual_ytd is not None:
+                actual = context.actual_ytd
+                projected_revenue = max(
+                    actual.revenue,
+                    context.latest_annual.revenue * (Decimal(1) + growth / PERCENT),
+                )
+                remaining_revenue = projected_revenue - actual.revenue
+                operating_income = (
+                    actual.operating_income
+                    + remaining_revenue * operating_margin / PERCENT
+                )
+                actual_tax_rate = self._effective_tax_rate(actual)
+                actual_nopat = actual.operating_income * (
+                    Decimal(1)
+                    - (actual_tax_rate if actual_tax_rate is not None else tax_rate)
+                    / PERCENT
+                )
+                projected_nopat = (
+                    remaining_revenue
+                    * operating_margin
+                    / PERCENT
+                    * (Decimal(1) - tax_rate / PERCENT)
+                )
+                nopat = actual_nopat + projected_nopat
+                depreciation = (
+                    actual.depreciation_and_amortization
+                    + remaining_revenue * depreciation_ratio / PERCENT
+                )
+                capital_expenditures = (
+                    actual.capital_expenditures
+                    + remaining_revenue * capex_ratio / PERCENT
+                )
+                operating_margin = operating_income / projected_revenue * PERCENT
+                tax_rate = (
+                    (Decimal(1) - nopat / operating_income) * PERCENT
+                    if operating_income > 0
+                    else tax_rate
+                )
+                depreciation_ratio = depreciation / projected_revenue * PERCENT
+                capex_ratio = capital_expenditures / projected_revenue * PERCENT
+                growth = (
+                    projected_revenue / context.latest_annual.revenue - Decimal(1)
+                ) * PERCENT
+            else:
+                projected_revenue *= Decimal(1) + growth / PERCENT
+                operating_income = projected_revenue * operating_margin / PERCENT
+                nopat = operating_income * (Decimal(1) - tax_rate / PERCENT)
+                depreciation = projected_revenue * depreciation_ratio / PERCENT
+                capital_expenditures = projected_revenue * capex_ratio / PERCENT
             operating_working_capital = (
                 projected_revenue * working_capital_ratio / PERCENT
             )
@@ -108,11 +185,20 @@ class FcffForecastService:
                 nopat + depreciation - capital_expenditures - change_in_working_capital
             )
             forecast_year = index + 1
+            first_fiscal_year = (
+                context.current_fiscal_year
+                if context.current_fiscal_year is not None
+                else base.fiscal_year + 1
+            )
+            fiscal_year = first_fiscal_year + index
+            first_period_end = context.fiscal_year_end or self._future_date(
+                context.latest_annual.period_end, 1
+            )
             observations.append(
                 FcffForecastObservation(
                     forecast_year=forecast_year,
-                    fiscal_year=base.fiscal_year + forecast_year,
-                    period_end=self._future_date(base.period_end, forecast_year),
+                    fiscal_year=fiscal_year,
+                    period_end=self._future_date(first_period_end, index),
                     revenue_growth=growth,
                     revenue=projected_revenue,
                     operating_margin=operating_margin,
@@ -138,8 +224,13 @@ class FcffForecastService:
             company_name=financials.company_name,
             ticker=financials.ticker,
             identifiers=financials.identifiers,
+            seed_type=context.seed_type,
+            seed_methodology=context.seed_methodology,
+            seed_period_end=context.seed_period_end,
+            current_fiscal_year=context.current_fiscal_year,
+            actual_quarters=context.actual_quarters,
             base_fiscal_year=base.fiscal_year,
-            base_period_end=base.period_end,
+            base_period_end=context.seed_period_end,
             base_revenue=base.revenue,
             base_operating_income=base.operating_income,
             base_tax_rate=base_tax_rate,
@@ -156,6 +247,187 @@ class FcffForecastService:
             assumption_sources=sources,
             observations=observations,
         )
+
+    def _forecast_context(self, financials, annual_periods, parameters):
+        latest_annual = annual_periods[-1]
+        quarterly = self._complete_quarterly_periods(financials)
+        newer = [
+            item for item in quarterly if item.period_end > latest_annual.period_end
+        ]
+        if not newer:
+            selected = tuple(annual_periods[-parameters.historical_window :])
+            return _ForecastContext(
+                base=latest_annual,
+                latest_annual=latest_annual,
+                path_periods=selected,
+                seed_type=ForecastSeedType.FISCAL_YEAR,
+                seed_methodology=(
+                    f"Latest complete FY{latest_annual.fiscal_year}; no newer complete "
+                    "quarterly operating context was available"
+                ),
+                seed_period_end=latest_annual.period_end,
+            )
+
+        latest = newer[-1]
+        current = [item for item in newer if item.fiscal_year == latest.fiscal_year]
+        current.sort(key=lambda item: item.period_end)
+        latest_four = quarterly[-4:]
+        has_ltm = len(latest_four) == 4 and all(
+            self._quarter_index(right) == self._quarter_index(left) + 1
+            for left, right in zip(latest_four, latest_four[1:], strict=False)
+        )
+        ltm = self._aggregate_quarters(latest_four) if has_ltm else None
+        path_periods = list(annual_periods[-parameters.historical_window :])
+        if ltm is not None:
+            path_periods.append(
+                _HistoricalDrivers(
+                    **{
+                        **ltm.__dict__,
+                        "fiscal_year": latest_annual.fiscal_year + 1,
+                    }
+                )
+            )
+
+        if latest.fiscal_period != FiscalPeriod.Q4:
+            actual_ytd = self._aggregate_quarters(current)
+            fiscal_end = self._fiscal_year_end(
+                latest.fiscal_year, latest_annual.period_end
+            )
+            base = (
+                _HistoricalDrivers(
+                    **{**ltm.__dict__, "fiscal_year": latest_annual.fiscal_year}
+                )
+                if ltm is not None
+                else latest_annual
+            )
+            return _ForecastContext(
+                base=base,
+                latest_annual=latest_annual,
+                path_periods=tuple(path_periods),
+                seed_type=ForecastSeedType.YTD_PLUS_FORECAST,
+                seed_methodology=(
+                    f"FY{latest.fiscal_year} estimate uses {len(current)} actual fiscal "
+                    f"quarter(s) through {latest.period_end.isoformat()} plus a driver-"
+                    "based forecast of the remaining period"
+                    + (
+                        "; latest-four-quarter metrics seed normalization"
+                        if has_ltm
+                        else ""
+                    )
+                ),
+                seed_period_end=latest.period_end,
+                current_fiscal_year=latest.fiscal_year,
+                actual_ytd=actual_ytd,
+                actual_quarters=len(current),
+                fiscal_year_end=fiscal_end,
+            )
+
+        assert ltm is not None
+        return _ForecastContext(
+            base=ltm,
+            latest_annual=latest_annual,
+            path_periods=tuple(path_periods),
+            seed_type=ForecastSeedType.TTM,
+            seed_methodology=(
+                "Four consecutive fiscal quarters form a current run-rate; the TTM "
+                "is not inserted into completed annual history"
+            ),
+            seed_period_end=latest.period_end,
+            current_fiscal_year=latest.fiscal_year + 1,
+            actual_quarters=4,
+            fiscal_year_end=self._fiscal_year_end(
+                latest.fiscal_year + 1, latest_annual.period_end
+            ),
+        )
+
+    @classmethod
+    def _complete_quarterly_periods(cls, financials):
+        by_period: dict[tuple[int, FiscalPeriod], dict] = {}
+        for item in financials.observations:
+            if item.granularity == Granularity.QUARTERLY and item.fiscal_period in {
+                FiscalPeriod.Q1,
+                FiscalPeriod.Q2,
+                FiscalPeriod.Q3,
+                FiscalPeriod.Q4,
+            }:
+                by_period.setdefault(item.period_key, {}).setdefault(item.concept, item)
+        periods = []
+        for (fiscal_year, _fiscal_period), values in by_period.items():
+            if not cls._CORE_REQUIRED_CONCEPTS <= values.keys():
+                continue
+            owc = operating_working_capital_value(values)
+            if owc is None:
+                continue
+            units = {
+                values[concept].unit for concept in cls._CORE_REQUIRED_CONCEPTS
+            } | {owc.unit}
+            revenue = values[FinancialConcept.REVENUE]
+            if len(units) != 1 or revenue.value <= 0:
+                continue
+            periods.append(
+                _HistoricalDrivers(
+                    fiscal_year=fiscal_year,
+                    period_end=revenue.period_end,
+                    unit=revenue.unit,
+                    revenue=revenue.value,
+                    operating_income=values[FinancialConcept.OPERATING_INCOME].value,
+                    pretax_income=values[FinancialConcept.PRETAX_INCOME].value,
+                    income_tax_expense=values[
+                        FinancialConcept.INCOME_TAX_EXPENSE
+                    ].value,
+                    depreciation_and_amortization=values[
+                        FinancialConcept.DEPRECIATION_AND_AMORTIZATION
+                    ].value,
+                    capital_expenditures=abs(
+                        values[FinancialConcept.CAPITAL_EXPENDITURES].value
+                    ),
+                    operating_working_capital=owc.value,
+                    fiscal_period=_fiscal_period,
+                )
+            )
+        return sorted(periods, key=lambda item: item.period_end)
+
+    @staticmethod
+    def _aggregate_quarters(periods):
+        latest = periods[-1]
+        return _HistoricalDrivers(
+            fiscal_year=latest.fiscal_year,
+            period_end=latest.period_end,
+            unit=latest.unit,
+            revenue=sum((item.revenue for item in periods), Decimal(0)),
+            operating_income=sum(
+                (item.operating_income for item in periods), Decimal(0)
+            ),
+            pretax_income=sum((item.pretax_income for item in periods), Decimal(0)),
+            income_tax_expense=sum(
+                (item.income_tax_expense for item in periods), Decimal(0)
+            ),
+            depreciation_and_amortization=sum(
+                (item.depreciation_and_amortization for item in periods), Decimal(0)
+            ),
+            capital_expenditures=sum(
+                (item.capital_expenditures for item in periods), Decimal(0)
+            ),
+            operating_working_capital=latest.operating_working_capital,
+            fiscal_period=latest.fiscal_period,
+        )
+
+    @staticmethod
+    def _quarter_index(period):
+        quarter = {
+            FiscalPeriod.Q1: 0,
+            FiscalPeriod.Q2: 1,
+            FiscalPeriod.Q3: 2,
+            FiscalPeriod.Q4: 3,
+        }[period.fiscal_period]
+        return period.fiscal_year * 4 + quarter
+
+    @staticmethod
+    def _fiscal_year_end(fiscal_year, annual_end):
+        try:
+            return annual_end.replace(year=fiscal_year)
+        except ValueError:
+            return annual_end.replace(year=fiscal_year, day=28)
 
     def _driver_paths(
         self,
@@ -374,6 +646,15 @@ class FcffForecastService:
             return base_date.replace(year=base_date.year + years)
         except ValueError:
             return base_date.replace(year=base_date.year + years, day=28)
+
+    @staticmethod
+    def _available_on(observation: FinancialObservation) -> datetime.date:
+        if observation.filed is not None:
+            return observation.filed
+        if observation.provider.casefold() == "yahoo":
+            lag = 90 if observation.granularity == Granularity.ANNUAL else 45
+            return observation.period_end + datetime.timedelta(days=lag)
+        return observation.period_end
 
 
 # Preserve the old generic service import while changing its semantics to FCFF.

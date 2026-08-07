@@ -251,9 +251,10 @@ The default profile is the versioned JSON file at
 `configs/valuation/default.json`. It centralizes parameters for FCFF and
 simplified forecasts, discount rates, present-value timing, terminal value,
 model-selection overrides, comparable selection, and specialized input history.
-The default WACC and perpetual growth are `null`: for `valuation`, that means
-"resolve from provider and company data." A CLI or profile value always takes
-precedence over an automatically resolved value.
+The default WACC, perpetual growth, and terminal ROIC are `null`: for
+`valuation`, that means "resolve from provider and company data." Relative
+valuation is enabled when provider-backed peer evidence is sufficient. A CLI or
+profile value always takes precedence over an automatically resolved value.
 
 Profile-enabled commands use the root default unless `--profile` is supplied.
 Company profiles are explicit scenarios and are never silently selected from a
@@ -543,6 +544,29 @@ required to fund that reinvestment after D&A and working-capital changes. A
 profile may additionally set `depreciable_asset_life_years` to replace a static
 D&A/revenue ratio with an approximate asset roll-forward.
 
+When terminal ROIC is not explicit, the resolver estimates normalized annual
+NOPAT / invested capital, measures its stability and excess-return duration,
+then applies lifecycle and cyclicality evidence to the persistence of the spread
+over WACC. Temporary peaks are median-normalized rather than carried into
+perpetuity. The result, confidence, methodology, persistence evidence, bounds,
+and warnings are printed. `--terminal-roic` and a profile ROIC remain explicit
+overrides.
+
+The forecast seed is also explicit. Complete annual history remains the
+normalization base, while four current fiscal quarters provide a TTM run-rate.
+During Q1-Q3, the first forecast year combines actual YTD operating results with
+a forecast of the remaining fiscal period; TTM is not inserted as another
+completed fiscal year. Non-calendar fiscal-year ends are preserved. Missing
+quarterly inputs fall back to the latest complete FY and are labeled as such.
+
+Debt, cash, investments, and the point-in-time share count come from the latest
+coherent period available by the valuation date, preferring a quarterly balance
+sheet. The output reports separate dates and source concepts. Current shares
+outstanding are preferred for the equity claim count; period-average diluted
+shares are the documented fallback. Consolidated debt is retained with an
+explicit debt-scope label because captive-finance debt is not yet separately
+classified.
+
 Use `--projection-method constant` to retain the previous constant-driver
 projection. Multistage behavior can also be tuned or disabled in a profile:
 
@@ -557,7 +581,7 @@ projection. Multistage behavior can also be tuned or disabled in a profile:
       "maximum_high_growth_years": 3,
       "extend_to_stable": true,
       "fade_reinvestment_to_terminal": true,
-      "terminal_return_on_invested_capital": "15",
+      "terminal_return_on_invested_capital": null,
       "depreciable_asset_life_years": null
     }
   }
@@ -761,9 +785,9 @@ driver-based FCFF result and the remaining valuation inputs are supplied.
 
 ## Select peers and compute LTM multiples
 
-`comparables` ranks an explicit candidate universe and computes target and peer
-multiples from Yahoo's keyless company metadata, quarterly statements, and
-latest close:
+`comparables` discovers a broad candidate universe and computes target and peer
+multiples from Yahoo's keyless company metadata, screener, quarterly statements,
+and latest close. Repeated `--peer` options explicitly replace discovery:
 
 ```bash
 uv run edgarito comparables --ticker GOOG \
@@ -774,17 +798,22 @@ uv run edgarito comparables --ticker GOOG \
   --peer AAPL
 ```
 
-Candidate selection follows company economics rather than sector alone. The
-score considers normalized industry, sector, business archetype, lifecycle,
-cyclicality, country, exchange, and revenue scale. Cross-sector candidates are
-excluded by default; use `--allow-cross-sector` when a business-model peer sits
-in another official sector. `--minimum-score`, `--max-peers`, and
-`--preferred-minimum` control selection. Fewer than five selected peers is
-reported as a limitation, not silently accepted as a strong sample.
+Candidate discovery maps provider industry labels to a supported economic peer
+group when possible and falls back to a broad sector screen. It removes duplicate
+issuer listings before `PeerUniverseSelector` scores normalized industry,
+sector, business archetype, lifecycle, cyclicality, country, exchange, revenue
+scale, margins, cash conversion, leverage, capital intensity, and growth.
+Cross-sector candidates are allowed by the generic profile but still need enough
+economic evidence to pass the score. `--require-same-sector`, `--minimum-score`,
+`--max-peers`, and `--preferred-minimum` control selection. Fewer than the
+configured minimum selected peers disables relative valuation instead of
+creating a precise-looking result from weak evidence.
 
-The supplied symbols are the candidate universe, not guaranteed peers. Broad
-market discovery remains separate because the configured providers do not
-currently offer a reliable free full-market screener.
+Yahoo's screener is not a canonical full-market security master: coverage,
+industry labels, primary-listing identification, and currencies vary by market.
+Discovery therefore remains a provider abstraction, reports its source and
+confidence, and never invents symbols when the provider cannot return a usable
+universe. Manual symbols are candidate overrides, not guaranteed peers.
 
 LTM denominators require four consecutive fiscal quarters. The calculation
 uses:
@@ -1054,9 +1083,7 @@ from edgarito.services.providers import AlphaVantageClient
 
 async def market():
     cache = FileSystemCache(os.getenv("cache_path", "cache"))
-    async with AlphaVantageClient(
-        cache, os.environ["alphavantage_api_key"]
-    ) as client:
+    async with AlphaVantageClient(cache, os.environ["alphavantage_api_key"]) as client:
         daily = await client.get_daily_prices("AAPL")
         dividends = await client.get_dividends("AAPL")
         splits = await client.get_splits("AAPL")

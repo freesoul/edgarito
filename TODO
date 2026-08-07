@@ -1,4 +1,36 @@
 
+
+- When infering a stock without a config json for its ticker, create automatically the json under configs with the generated config, so it can be tuned.
+
+
+---
+
+We want to provide automatically discovered peers when no peers are manually passed by the config or the user.
+
+Implement or improve the existing peer discovery. These are some specs:
+
+* For US stocks, use Massive's Related Companies/Related Tickers endpoint as the primary peer source.
+* If Massive fails, returns too few peers, or for non-US/European stocks, fall back to Yahoo Finance/yfinance.
+* With Yahoo, discover candidates from the same industry/peer group, preferably same or economically comparable region.
+* Do not blindly accept all returned peers. Filter/rank candidates by valuation comparability:
+  * same or closely related industry/business
+  * market cap roughly 0.25x-4x the target
+  * similar revenue growth
+  * similar operating margin
+  * similar ROIC when available
+* Return approximately 5-10 best peers, ranked by similarity.
+* Avoid including the target itself and remove duplicates.
+* Make the provider/fallback logic explicit and resilient to missing data.
+* Make sure tests cover at least one US stock and one European stock.
+
+
+
+
+
+---
+
+
+
 1. **Finish generic valuation core**
 
    * Automatic terminal ROIC.
@@ -79,243 +111,4 @@
 * Thesis review.
 * Never use AI as the hidden source of valuation numbers.
 
-### Recommended next order
 
-**Automatic ROIC + peers + TTM → scenarios/MoS/reverse DCF → remaining valuation models → red flags → report/Excel/PDF → portfolio → AI.**
-
-
-
----
-
-Please implement the next Edgarito milestone: **finish the generic valuation core so the default valuation workflow works intelligently without requiring company-specific profiles or manually supplied peers.**
-
-Do not tune behavior specifically to Ferrari, Microsoft, or current market prices. Use them only as regression cases. The goal is a robust generic methodology.
-
-The scope is limited to these five items:
-
-1. Automatic terminal ROIC
-2. Automatic peer discovery
-3. TTM/latest-quarter-aware forecasting
-4. Current debt/cash/shares for the capital bridge
-5. Cross-company regression tests
-
-Do not work on new valuation methods, PDF/Excel reporting, AI, portfolio features, red flags, or bull/bear/base scenarios in this task.
-
-## 1. Automatic terminal ROIC
-
-The generic profile currently relies on a fixed terminal ROIC assumption such as 15%.
-
-Replace this with an automatic resolver when no explicit profile/CLI override exists.
-
-Terminal ROIC should be estimated from evidence such as:
-
-* historical normalized ROIC
-* ROIC stability
-* current WACC
-* industry/peer ROIC where available
-* persistence of excess returns above WACC
-* company maturity/cyclicality where already supported by the architecture
-
-A reasonable conceptual framework is:
-
-`terminal_roic = WACC + persistence * (normalized_roic - WACC)`
-
-but use a better formulation if justified.
-
-Requirements:
-
-* Explicit profile/CLI terminal ROIC must still override automatic resolution.
-* Do not assume every company converges to exactly WACC.
-* Do not let temporary peak ROIC persist forever without evidence.
-* Avoid nonsensical terminal ROIC below terminal growth.
-* Add bounds/warnings where necessary.
-* Expose value, source, methodology and confidence in CLI output.
-* Add tests for high-ROIC durable businesses, average businesses, and temporarily inflated ROIC.
-
-The stable reinvestment formula must remain economically consistent:
-
-`reinvestment_rate = terminal_growth / terminal_roic`
-
-## 2. Automatic peer discovery
-
-Relative valuation currently requires manually supplying `--peer`.
-
-Implement automatic candidate discovery so a normal command can obtain a reasonable peer universe without user input.
-
-Desired flow:
-
-`company classification -> broad candidates -> economic scoring -> selected peers`
-
-Use the existing `PeerUniverseSelector` as the deterministic ranking/filtering layer where appropriate.
-
-Candidate discovery should consider available information such as:
-
-* sector
-* industry
-* business archetype
-* market-cap/revenue scale
-* geography/exchange where useful
-
-Final selection should consider economic comparability using the metrics already supported, such as:
-
-* growth
-* margins
-* ROIC
-* FCF conversion
-* leverage
-* capital intensity
-* cyclicality
-
-Requirements:
-
-* Manual `--peer` remains an explicit override.
-* Auto-discovered peers must show why they were selected.
-* Avoid blindly requiring the exact same sector when economic peers can cross classifications.
-* Do not invent peers if the provider cannot support discovery.
-* If peer discovery confidence is poor, skip relative valuation or warn clearly rather than returning false precision.
-* Preserve deterministic/reproducible selection.
-
-If full market-wide discovery is not feasible with the currently available provider APIs, implement the cleanest provider abstraction and the best available discovery mechanism, and clearly document the remaining limitation.
-
-## 3. TTM / latest-quarter-aware forecasting
-
-The valuation should use the latest available information rather than anchoring an August valuation entirely on the prior fiscal year.
-
-Improve the generic forecast path so it can use:
-
-* latest four quarters for trailing operating metrics
-* latest quarter/YTD information
-* current fiscal-year progress
-* historical annual data for longer-term normalization
-
-Important distinction:
-
-Do not simply treat TTM as another completed fiscal year.
-
-Prefer a structure such as:
-
-`historical FY data -> latest TTM/current run-rate -> forecast current/next FY -> future annual forecasts`
-
-Where feasible:
-
-`current FY estimate = actual YTD + forecast remaining period`
-
-Requirements:
-
-* Avoid double-counting overlapping annual and quarterly observations.
-* Preserve fiscal-year alignment.
-* Handle companies with non-calendar fiscal years.
-* Keep annual-only fallback if quarterly data are unavailable.
-* Show whether the forecast seed is FY, TTM, YTD+forecast, or another fallback.
-* Ensure the adaptive growth/margin/reinvestment transition still behaves correctly.
-* Add tests around fiscal-year boundaries and partial-year data.
-
-## 4. Use current debt, cash and shares
-
-The capital bridge should prefer the most recent available balance-sheet/share information instead of automatically using the last annual statement.
-
-Resolve:
-
-* cash and equivalents
-* short-term debt
-* long-term debt
-* relevant investments/non-operating assets
-* diluted/basic share count as appropriate
-
-from the latest reliable period available on or before the valuation date.
-
-Requirements:
-
-* Prefer latest quarterly balance sheet over older annual data.
-* Preserve explicit profile/CLI overrides.
-* Avoid mixing balance-sheet values from incompatible dates without warning.
-* Keep provenance for each bridge item.
-* If current share count and weighted-average diluted shares differ, use the economically appropriate quantity for valuation and explain the basis.
-* Do not silently use stale annual values when newer quarterly information exists.
-* Add freshness warnings when current data are unavailable.
-
-Also review whether the capital bridge architecture can distinguish ordinary operating debt from financing subsidiaries/captive finance operations. Do not overbuild this if it requires a separate major project, but avoid making the architecture harder to extend later.
-
-## 5. Cross-company regression suite
-
-After implementing the above, create a regression suite that tests whether the generic engine behaves economically sensibly across different company types.
-
-At minimum include representative cases for:
-
-* RACE: high-ROIC / premium / luxury-type business
-* MSFT: high-growth technology with exceptional current capex
-* one mature stable nonfinancial company
-* one cyclical industrial
-* one capital-intensive business
-* one highly leveraged business
-
-If fixtures/data availability makes specific live tickers unsuitable for deterministic tests, create controlled financial fixtures representing these archetypes.
-
-Tests should validate methodology/invariants, NOT closeness to market price.
-
-Examples:
-
-* higher sustainable terminal ROIC -> lower required reinvestment -> higher FCFF, all else equal
-* temporary high ROIC mean-reverts more than persistent high ROIC
-* newer quarterly cash/debt overrides older annual bridge data
-* TTM/latest-quarter information changes the forecast seed when newer information exists
-* annual fallback works when quarterlies are missing
-* auto peers are economically plausible and deterministic
-* manual peers override automatic discovery
-* weak peer discovery lowers confidence or disables relative valuation
-* no look-ahead data is used
-* explicit profile assumptions still override automatic assumptions
-* RACE/MSFT generic outputs should no longer fail because of obvious generic-model defects
-
-## Desired default behavior
-
-The long-term desired UX is approximately:
-
-`uv run edgarito valuation --ticker RACE --market eu`
-
-without requiring a Ferrari-specific profile or manual peers.
-
-The command should automatically:
-
-1. retrieve the latest financials
-2. construct FY/TTM/current-period context
-3. resolve WACC and terminal growth
-4. resolve terminal ROIC
-5. forecast FCFF
-6. use the latest capital bridge
-7. discover peers where possible
-8. calculate intrinsic valuation
-9. calculate relative valuation when evidence is sufficient
-10. explain assumptions, confidence, provenance and warnings
-
-A company profile should become an optional evidence/override layer for information such as explicit management guidance, known buybacks or unusual capital structure, not something required to make the generic valuation economically sensible.
-
-## Implementation principles
-
-* Inspect the current architecture before coding.
-* Reuse existing services/models where appropriate.
-* Avoid giant services with mixed responsibilities.
-* Keep inference/resolution separate from valuation arithmetic.
-* Preserve backwards compatibility where practical.
-* Keep all important automatic assumptions auditable.
-* Do not introduce hidden hardcoded ticker-specific logic.
-* Do not calibrate results to analyst targets or current prices.
-* Prefer warnings and lower confidence over fabricated precision.
-
-## After implementation
-
-Please:
-
-1. Run the full relevant test suite.
-2. Run generic/default valuations for RACE and MSFT without company-specific profiles where possible.
-3. Compare before vs after behavior.
-4. Show:
-
-   * resolved terminal ROIC and why
-   * forecast seed type: FY / TTM / YTD
-   * capital-bridge dates/sources
-   * discovered peers and selection rationale
-   * intrinsic valuation
-   * relative valuation if available
-5. Identify any remaining generic-core limitations.
-6. Do not describe a valuation as "more accurate" merely because it moved closer to the market price.

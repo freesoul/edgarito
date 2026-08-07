@@ -263,8 +263,8 @@ def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
     assert result.gross_debt == Decimal("100")
     assert result.cash_and_equivalents == Decimal("25")
     assert result.net_debt == Decimal("75")
-    assert result.diluted_shares == Decimal("10")
-    assert result.shares_source == "weighted_average_diluted_shares"
+    assert result.diluted_shares == Decimal("9")
+    assert "current shares outstanding" in result.shares_source
 
 
 def test_capital_bridge_accepts_reported_debt_when_short_term_line_is_absent():

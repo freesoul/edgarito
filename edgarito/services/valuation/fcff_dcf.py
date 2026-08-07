@@ -1,7 +1,6 @@
 import datetime
 from decimal import Decimal
 
-from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -17,7 +16,6 @@ from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastObservation,
 )
-from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.valuation.discounting import (
     PresentValueService,
     TerminalValueService,
@@ -37,7 +35,7 @@ from edgarito.services.valuation.models import (
 
 
 class FcffDcfCapitalBridgeResolver:
-    """Resolve net debt and diluted shares from one normalized annual period."""
+    """Resolve enterprise-to-equity inputs from the latest coherent period."""
 
     _CONCEPTS = frozenset(
         {
@@ -68,19 +66,34 @@ class FcffDcfCapitalBridgeResolver:
         cash_and_equivalents: Decimal | None = None,
         diluted_shares: Decimal | None = None,
         non_operating_assets: Decimal | None = None,
+        valuation_date: datetime.date | None = None,
     ) -> FcffDcfCapitalBridge:
-        annual = [
-            observation
-            for observation in financials.observations
-            if observation.granularity == Granularity.ANNUAL
-            and observation.fiscal_period == FiscalPeriod.FY
-            and observation.fiscal_year == fiscal_year
+        as_of = valuation_date or period_end
+        eligible = [
+            item
+            for item in financials.observations
+            if item.concept in self._CONCEPTS and self._available_on(item) <= as_of
         ]
-        by_concept = {}
-        for observation in annual:
-            by_concept.setdefault(observation.concept, observation)
+        by_date: dict[datetime.date, dict[FinancialConcept, FinancialObservation]] = {}
+        for item in eligible:
+            by_date.setdefault(item.period_end, {}).setdefault(item.concept, item)
+        bridge_date = self._latest_coherent_balance_date(by_date) or period_end
+        by_concept = by_date.get(bridge_date, {})
+        bridge_fiscal_year = next(
+            (item.fiscal_year for item in by_concept.values()), fiscal_year
+        )
+        warnings: list[str] = []
+        selected_granularity = next(
+            (item.granularity for item in by_concept.values()), Granularity.ANNUAL
+        )
+        if selected_granularity == Granularity.ANNUAL:
+            warnings.append(
+                "Quarterly capital-bridge data were unavailable; latest annual "
+                "balance-sheet values are used"
+            )
 
         component_overrides = (gross_debt, cash_and_equivalents)
+        debt_is_explicit = net_debt is not None or gross_debt is not None
         if (component_overrides[0] is None) != (component_overrides[1] is None):
             raise ValueError(
                 "FCFF DCF manual gross debt and cash must be provided together"
@@ -97,69 +110,55 @@ class FcffDcfCapitalBridgeResolver:
             net_debt_source = "explicit gross debt minus explicit cash override"
         elif net_debt is None and financials.provider.casefold() == "yahoo":
             gross_debt, cash_and_equivalents, net_debt_source = (
-                self._resolve_yahoo_net_debt(by_concept, unit, fiscal_year)
+                self._resolve_yahoo_net_debt(by_concept, unit, bridge_fiscal_year)
             )
             net_debt = gross_debt - cash_and_equivalents
         elif net_debt is None:
-            metrics = FinancialMetricsService().calculate(
-                financials,
-                granularity=Granularity.ANNUAL,
-                metrics={FinancialMetric.GROSS_DEBT, FinancialMetric.NET_DEBT},
+            gross_debt, cash_and_equivalents, net_debt_source = (
+                self._resolve_reported_net_debt(by_concept, unit, bridge_fiscal_year)
             )
-            net_debt_metric = next(
-                (
-                    item
-                    for item in metrics.observations
-                    if item.metric == FinancialMetric.NET_DEBT
-                    and item.fiscal_year == fiscal_year
-                    and item.fiscal_period == FiscalPeriod.FY
-                ),
-                None,
-            )
-            gross_debt_metric = next(
-                (
-                    item
-                    for item in metrics.observations
-                    if item.metric == FinancialMetric.GROSS_DEBT
-                    and item.fiscal_year == fiscal_year
-                    and item.fiscal_period == FiscalPeriod.FY
-                ),
-                None,
-            )
-            cash_observation = by_concept.get(FinancialConcept.CASH_AND_EQUIVALENTS)
-            if net_debt_metric is None or gross_debt_metric is None:
-                raise ValueError(
-                    f"FCFF DCF requires complete debt and cash inputs for FY{fiscal_year}; "
-                    "provide valuation.capital_bridge.net_debt in the profile or "
-                    "--net-debt"
-                )
-            if net_debt_metric.unit != unit or gross_debt_metric.unit != unit:
-                raise ValueError(
-                    "Net debt and forecast cash flows must use one currency"
-                )
-            if cash_observation is None or cash_observation.unit != unit:
-                raise ValueError("Cash and forecast cash flows must use one currency")
-            net_debt = net_debt_metric.value
-            gross_debt = gross_debt_metric.value
-            cash_and_equivalents = cash_observation.value
-            net_debt_source = net_debt_metric.formula
+            net_debt = gross_debt - cash_and_equivalents
         else:
             net_debt_source = "explicit profile or CLI override"
 
+        share_observation = None
         if diluted_shares is None:
-            share_observation = by_concept.get(
-                FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES
-            ) or by_concept.get(FinancialConcept.SHARES_OUTSTANDING)
+            share_observation = self._latest_share_observation(eligible)
             if share_observation is None or share_observation.value <= 0:
                 raise ValueError(
-                    f"FCFF DCF requires positive diluted shares for FY{fiscal_year}; "
+                    f"FCFF DCF requires a positive current share count by {as_of}; "
                     "provide valuation.capital_bridge.diluted_shares in the profile "
                     "or --shares"
                 )
             diluted_shares = share_observation.value
-            shares_source = share_observation.concept.value
+            if share_observation.concept == FinancialConcept.SHARES_OUTSTANDING:
+                shares_source = (
+                    f"{share_observation.source_concept} current shares outstanding; "
+                    "preferred to period-average diluted shares for a point-in-time "
+                    "equity claim count"
+                )
+            else:
+                shares_source = (
+                    f"{share_observation.source_concept}; weighted-average diluted "
+                    "shares fallback because a current shares-outstanding balance "
+                    "was unavailable"
+                )
         else:
             shares_source = "explicit profile or CLI override"
+
+        if (
+            share_observation is not None
+            and abs((share_observation.period_end - bridge_date).days) > 95
+        ):
+            warnings.append(
+                "Share count and debt/cash are from materially different dates: "
+                f"{share_observation.period_end.isoformat()} vs {bridge_date.isoformat()}"
+            )
+        if (as_of - bridge_date).days > 180:
+            warnings.append(
+                f"Capital-bridge data are {(as_of - bridge_date).days} days old; "
+                "current quarterly values were unavailable"
+            )
 
         if non_operating_assets is None:
             investment_observations = [
@@ -188,8 +187,8 @@ class FcffDcfCapitalBridgeResolver:
             non_operating_assets_source = "explicit profile or CLI override"
 
         return FcffDcfCapitalBridge(
-            fiscal_year=fiscal_year,
-            period_end=period_end,
+            fiscal_year=bridge_fiscal_year,
+            period_end=bridge_date,
             unit=unit,
             net_debt=net_debt,
             diluted_shares=diluted_shares,
@@ -199,7 +198,96 @@ class FcffDcfCapitalBridgeResolver:
             cash_and_equivalents=cash_and_equivalents,
             non_operating_assets=non_operating_assets,
             non_operating_assets_source=non_operating_assets_source,
+            debt_date=(
+                bridge_date if gross_debt is not None and not debt_is_explicit else None
+            ),
+            cash_date=(
+                bridge_date
+                if cash_and_equivalents is not None and not debt_is_explicit
+                else None
+            ),
+            shares_date=(share_observation.period_end if share_observation else None),
+            non_operating_assets_date=(
+                bridge_date
+                if non_operating_assets_source
+                not in {
+                    "none reported",
+                    "explicit profile or CLI override",
+                }
+                else None
+            ),
+            warnings=tuple(warnings),
         )
+
+    @staticmethod
+    def _available_on(observation: FinancialObservation) -> datetime.date:
+        if observation.filed is not None:
+            return observation.filed
+        if observation.provider.casefold() == "yahoo":
+            lag = 90 if observation.granularity == Granularity.ANNUAL else 45
+            return observation.period_end + datetime.timedelta(days=lag)
+        return observation.period_end
+
+    @staticmethod
+    def _latest_coherent_balance_date(by_date):
+        for selected_on in sorted(by_date, reverse=True):
+            values = by_date[selected_on]
+            has_cash = FinancialConcept.CASH_AND_EQUIVALENTS in values
+            has_debt = any(
+                concept in values
+                for concept in (
+                    FinancialConcept.SHORT_TERM_DEBT,
+                    FinancialConcept.LONG_TERM_DEBT_CURRENT,
+                    FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+                )
+            )
+            if has_cash and has_debt:
+                return selected_on
+        return max(by_date, default=None)
+
+    @staticmethod
+    def _latest_share_observation(eligible):
+        shares = [
+            item
+            for item in eligible
+            if item.concept
+            in {
+                FinancialConcept.SHARES_OUTSTANDING,
+                FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES,
+            }
+            and item.value > 0
+        ]
+        if not shares:
+            return None
+        current = [
+            item
+            for item in shares
+            if item.concept == FinancialConcept.SHARES_OUTSTANDING
+        ]
+        pool = current or shares
+        return max(pool, key=lambda item: (item.period_end, item.granularity.value))
+
+    @classmethod
+    def _resolve_reported_net_debt(cls, by_concept, unit, fiscal_year):
+        debt_observations = [
+            by_concept[concept]
+            for concept in (
+                FinancialConcept.SHORT_TERM_DEBT,
+                FinancialConcept.LONG_TERM_DEBT_CURRENT,
+                FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+            )
+            if concept in by_concept
+        ]
+        cash = by_concept.get(FinancialConcept.CASH_AND_EQUIVALENTS)
+        if not debt_observations or cash is None:
+            raise ValueError(
+                f"FCFF DCF requires complete debt and cash inputs for FY{fiscal_year}; "
+                "provide valuation.capital_bridge.net_debt in the profile or --net-debt"
+            )
+        if any(item.unit != unit for item in [*debt_observations, cash]):
+            raise ValueError("Debt, cash, and forecast must use one currency")
+        gross_debt = sum((item.value for item in debt_observations), Decimal(0))
+        return gross_debt, cash.value, "gross debt - cash and equivalents"
 
     @staticmethod
     def _resolve_yahoo_net_debt(
@@ -258,8 +346,6 @@ class FcffDcfService:
     ) -> FcffDcfResult:
         if not forecast.observations:
             raise ValueError("FCFF DCF requires at least one forecast cash flow")
-        if capital_bridge.fiscal_year != forecast.base_fiscal_year:
-            raise ValueError("Capital bridge must match the forecast base fiscal year")
         if capital_bridge.unit != forecast.unit:
             raise ValueError("Capital bridge and forecast must use one currency")
         expected_years = list(range(1, len(forecast.observations) + 1))
@@ -351,7 +437,7 @@ class FcffDcfService:
             if enterprise_value != 0
             else None
         )
-        warnings = []
+        warnings = list(capital_bridge.warnings)
         if terminal_percentage is not None and terminal_percentage > Decimal(75):
             warnings.append(
                 "Discounted terminal value exceeds 75% of enterprise value; "
@@ -425,6 +511,9 @@ class FcffDcfService:
             parameters=parameters,
             assumptions=assumptions,
             multistage_plan=multistage_plan,
+            forecast_seed_type=forecast.seed_type.value,
+            forecast_seed_methodology=forecast.seed_methodology,
+            forecast_seed_period_end=forecast.seed_period_end,
             capital_bridge=capital_bridge,
             explicit_forecast_present_value=explicit_present_value,
             terminal_value=terminal_value,

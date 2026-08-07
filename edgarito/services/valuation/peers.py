@@ -5,6 +5,7 @@ from edgarito.services.valuation.models import (
     BusinessArchetype,
     CompanyTradingMultiples,
     PeerCandidateAssessment,
+    PeerDiscoveryResult,
     PeerSelectionParameters,
     PeerUniverse,
     ValuationProfile,
@@ -31,6 +32,7 @@ class PeerUniverseSelector:
         parameters: PeerSelectionParameters | None = None,
         target_multiples: CompanyTradingMultiples | None = None,
         candidate_multiples: dict[str, CompanyTradingMultiples] | None = None,
+        discovery: PeerDiscoveryResult | None = None,
     ) -> PeerUniverse:
         parameters = parameters or PeerSelectionParameters()
         if not target.ticker:
@@ -48,6 +50,24 @@ class PeerUniverseSelector:
             for candidate in candidates
         ]
         assessments.sort(key=lambda item: (-item.score, item.ticker))
+        seen_entities: dict[str, str] = {}
+        deduplicated = []
+        for item in assessments:
+            entity_key = self._entity_key(item.company_name)
+            representative = seen_entities.get(entity_key)
+            if entity_key and representative is not None:
+                item = item.model_copy(
+                    update={
+                        "exclusions": [
+                            *item.exclusions,
+                            f"Duplicate listing of the same issuer as {representative}",
+                        ]
+                    }
+                )
+            elif entity_key:
+                seen_entities[entity_key] = item.ticker
+            deduplicated.append(item)
+        assessments = deduplicated
         eligible = [
             item
             for item in assessments
@@ -69,16 +89,31 @@ class PeerUniverseSelector:
                 f"{parameters.preferred_minimum} are preferred"
             )
         if not candidates:
-            warnings.append(
-                "No candidate universe was supplied; peer discovery is a separate "
-                "provider concern"
-            )
+            warnings.append("No provider-supported candidate universe was available")
+        if discovery is not None:
+            warnings.extend(discovery.warnings)
+        confidence = (
+            "high"
+            if len(selected_tickers) >= parameters.preferred_minimum
+            else "medium"
+            if len(selected_tickers) >= max(2, parameters.preferred_minimum // 2)
+            else "low"
+        )
         return PeerUniverse(
             target_ticker=target.ticker,
             target_company_id=target.company_id,
             parameters=parameters,
             candidates=assessments,
             selected_tickers=selected_tickers,
+            discovery_source=(
+                discovery.provider if discovery is not None else "manual override"
+            ),
+            discovery_methodology=(
+                discovery.methodology
+                if discovery is not None
+                else "Explicit --peer candidate symbols override automatic discovery"
+            ),
+            discovery_confidence=confidence,
             warnings=warnings,
         )
 
@@ -249,10 +284,40 @@ class PeerUniverseSelector:
             and candidate.ticker
             and target.ticker.casefold() == candidate.ticker.casefold()
         )
-        same_name = re.sub(r"[^a-z0-9]", "", target.company_name.casefold()) == re.sub(
-            r"[^a-z0-9]", "", candidate.company_name.casefold()
-        )
+        same_name = PeerUniverseSelector._entity_key(
+            target.company_name
+        ) == PeerUniverseSelector._entity_key(candidate.company_name)
         return same_ticker or same_name
+
+    @staticmethod
+    def _entity_key(name: str) -> str:
+        noise = {
+            "a",
+            "adr",
+            "ag",
+            "b",
+            "cdr",
+            "cedear",
+            "class",
+            "common",
+            "corp",
+            "corporation",
+            "depositary",
+            "inc",
+            "limited",
+            "ltd",
+            "nv",
+            "ord",
+            "ordinary",
+            "plc",
+            "receipt",
+            "sa",
+            "se",
+            "spa",
+            "stock",
+        }
+        tokens = re.findall(r"[a-z0-9]+", name.casefold())
+        return "".join(token for token in tokens if token not in noise)
 
     @classmethod
     def _industry_score(cls, target: str | None, candidate: str | None) -> int:

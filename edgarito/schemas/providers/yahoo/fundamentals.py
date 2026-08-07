@@ -27,6 +27,7 @@ class YahooCompanyFinancials(BaseModel):
     industry: Optional[str] = None
     country: Optional[str] = None
     beta: Optional[Decimal] = None
+    market_capitalization: Optional[Decimal] = None
     annual_income_statements: tuple[YahooFinancialReport, ...] = ()
     quarterly_income_statements: tuple[YahooFinancialReport, ...] = ()
     annual_balance_sheets: tuple[YahooFinancialReport, ...] = ()

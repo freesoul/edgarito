@@ -81,15 +81,15 @@ class ValuationAssumptionResolver:
         industry_snapshot: Optional[IndustryBetaSnapshot] = None,
         company_beta: Optional[Decimal] = None,
     ) -> ResolvedDcfAssumptions:
-        selected_on = max(
-            valuation_date,
-            datetime.date.today(),
-            *(
-                [market_data.latest_price.observed_on]
-                if market_data is not None and market_data.latest_price is not None
-                else []
-            ),
-        )
+        selected_on = valuation_date
+        if (
+            market_data is not None
+            and market_data.latest_price is not None
+            and market_data.latest_price.observed_on > valuation_date
+        ):
+            raise ValueError(
+                "Automatic assumptions cannot use market data after valuation_date"
+            )
         currency = capital_bridge.unit.upper()
         company_id = financials.company_id
         assumptions: list[ValuationAssumption] = []

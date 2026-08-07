@@ -67,7 +67,7 @@
       "maximum_high_growth_years": 3,
       "extend_to_stable": true,
       "fade_reinvestment_to_terminal": true,
-      "terminal_return_on_invested_capital": "15",
+      "terminal_return_on_invested_capital": null,
       "depreciable_asset_life_years": null
     }
   },
@@ -85,10 +85,10 @@
     "max_peers": 8,
     "preferred_minimum": 5,
     "minimum_score": 50,
-    "require_same_sector": true
+    "require_same_sector": false
   },
   "relative_valuation": {
-    "enabled": false,
+    "enabled": true,
     "basis": "ev_to_ebitda",
     "horizon_years": "1",
     "multiple_resolution": {

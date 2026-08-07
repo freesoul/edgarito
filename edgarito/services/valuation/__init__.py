@@ -44,6 +44,7 @@ from edgarito.services.valuation.models import (
     MultipleConfidence,
     MultipleStatus,
     PeerCandidateAssessment,
+    PeerDiscoveryResult,
     PeerMultipleSummary,
     PeerSelectionParameters,
     PeerUniverse,
@@ -68,6 +69,10 @@ from edgarito.services.valuation.multiples import (
     ComparableMultiplesService,
     LtmMultiplesService,
 )
+from edgarito.services.valuation.peer_discovery import (
+    PeerCandidateDiscoveryProvider,
+    YahooScreenerPeerDiscoveryProvider,
+)
 from edgarito.services.valuation.peers import PeerUniverseSelector
 from edgarito.services.valuation.profile import ValuationProfileBuilder
 from edgarito.services.valuation.selector import ValuationModelSelector
@@ -77,6 +82,10 @@ from edgarito.services.valuation.specialized import (
     ResourceInputExtractor,
     SotpInputExtractor,
     SpecializedValuationExtractor,
+)
+from edgarito.services.valuation.terminal_roic import (
+    TerminalRoicResolution,
+    TerminalRoicResolver,
 )
 
 __all__ = [
@@ -116,10 +125,13 @@ __all__ = [
     "HistoricalMultiplesService",
     "LtmMultiplesService",
     "PeerCandidateAssessment",
+    "PeerCandidateDiscoveryProvider",
+    "PeerDiscoveryResult",
     "PeerMultipleSummary",
     "PeerSelectionParameters",
     "PeerUniverse",
     "PeerUniverseSelector",
+    "YahooScreenerPeerDiscoveryProvider",
     "PresentValueResult",
     "PresentValueService",
     "RelativeValuationBasis",
@@ -133,6 +145,8 @@ __all__ = [
     "SotpInputExtractor",
     "SpecializedValuationExtractor",
     "TerminalMetric",
+    "TerminalRoicResolution",
+    "TerminalRoicResolver",
     "TerminalValueMethod",
     "TerminalValueResult",
     "TerminalValueService",

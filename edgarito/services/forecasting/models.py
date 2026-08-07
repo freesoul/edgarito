@@ -14,6 +14,12 @@ class ForecastAssumptionSource(str, Enum):
     ADAPTIVE_MULTISTAGE = "adaptive_multistage"
 
 
+class ForecastSeedType(str, Enum):
+    FISCAL_YEAR = "FY"
+    TTM = "TTM"
+    YTD_PLUS_FORECAST = "YTD+forecast"
+
+
 class SimplifiedFcfForecastParameters(BaseModel):
     """Inputs for a revenue-times-FCF-margin forecast.
 
@@ -266,6 +272,11 @@ class FcffForecast(BaseModel):
     ticker: Optional[str] = None
     identifiers: Optional[SecurityIdentifiers] = None
     method: str = "driver_based_fcff"
+    seed_type: ForecastSeedType = ForecastSeedType.FISCAL_YEAR
+    seed_methodology: str = "Latest complete fiscal year"
+    seed_period_end: Optional[datetime.date] = None
+    current_fiscal_year: Optional[int] = None
+    actual_quarters: int = Field(default=0, ge=0, le=4)
 
     base_fiscal_year: int
     base_period_end: datetime.date
@@ -301,6 +312,10 @@ class AdaptiveMultistagePlan(BaseModel):
     extended_to_stable: bool = False
     explicit_growth_prefix_years: int = Field(default=0, ge=0, le=30)
     terminal_return_on_invested_capital: Optional[Decimal] = None
+    terminal_roic_source: Optional[str] = None
+    terminal_roic_methodology: Optional[str] = None
+    terminal_roic_confidence: Optional[str] = None
+    terminal_roic_warnings: tuple[str, ...] = ()
     terminal_reinvestment_rate: Optional[Decimal] = None
     terminal_capex_to_revenue: Optional[Decimal] = None
     depreciable_asset_life_years: Optional[int] = None

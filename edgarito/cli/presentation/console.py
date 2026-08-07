@@ -318,6 +318,9 @@ class ForecastConsolePresenter:
             f"{identifier} - {forecast.company_name}",
             f"Provider: {forecast.provider.upper()} | CIK: {forecast.company_id}",
             "Method: driver-based FCFF",
+            f"Forecast seed: {forecast.seed_type.value} through "
+            f"{(forecast.seed_period_end or forecast.base_period_end).isoformat()}",
+            f"Seed methodology: {forecast.seed_methodology}",
             f"Base FY{forecast.base_fiscal_year}: "
             f"Revenue {forecast.base_revenue / scale:,.1f} {amount_unit} | "
             f"EBIT {forecast.base_operating_income / scale:,.1f} {amount_unit} | "
@@ -608,6 +611,10 @@ class FcffDcfConsolePresenter:
             f"{result.valuation_date.isoformat()}",
             f"Valuation profile: {profile_name or 'unspecified'}",
             f"Model: FCFF DCF | Timing: {timing}",
+            "Forecast seed: "
+            f"{result.forecast_seed_type} through "
+            f"{result.forecast_seed_period_end.isoformat() if result.forecast_seed_period_end else '-'}",
+            f"Forecast seed method: {result.forecast_seed_methodology}",
             f"WACC: {result.parameters.wacc:,.2f}% ({result.parameters.wacc_source})",
             f"Terminal method: {terminal_method}",
         ]
@@ -649,6 +656,15 @@ class FcffDcfConsolePresenter:
                         "asset life"
                     )
                 lines.append(details)
+                lines.append(
+                    "Terminal ROIC resolution: "
+                    f"{plan.terminal_roic_source or 'unspecified'} | confidence "
+                    f"{plan.terminal_roic_confidence or 'unspecified'}"
+                )
+                if plan.terminal_roic_methodology:
+                    lines.append(
+                        f"Terminal ROIC method: {plan.terminal_roic_methodology}"
+                    )
         if result.parameters.perpetual_growth_rate is not None:
             source = result.parameters.perpetual_growth_source or "explicit"
             lines.append(
@@ -758,6 +774,13 @@ class FcffDcfConsolePresenter:
                 "Non-operating investments source: "
                 f"{result.capital_bridge.non_operating_assets_source}",
                 f"Shares source: {result.capital_bridge.shares_source}",
+                "Capital bridge dates: "
+                f"debt={result.capital_bridge.debt_date or 'explicit/unknown'}, "
+                f"cash={result.capital_bridge.cash_date or 'explicit/unknown'}, "
+                f"shares={result.capital_bridge.shares_date or 'explicit/unknown'}, "
+                "non-operating assets="
+                f"{result.capital_bridge.non_operating_assets_date or 'none/explicit'}",
+                f"Debt scope: {result.capital_bridge.debt_scope}",
             ]
         )
         if result.warnings:
@@ -890,6 +913,9 @@ class ComparableMultiplesConsolePresenter:
             f"{target.price:,.2f} {target.currency} on {target.price_date.isoformat()}",
             f"Selected peers ({len(selected)}): "
             f"{', '.join(report.universe.selected_tickers) or '-'}",
+            f"Candidate source: {report.universe.discovery_source} | "
+            f"confidence {report.universe.discovery_confidence}",
+            f"Discovery method: {report.universe.discovery_methodology}",
             "",
             "PEER SELECTION",
             f"{'Ticker':<12} {'Score':>7}  Decision / evidence",

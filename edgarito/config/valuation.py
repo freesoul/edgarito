@@ -245,19 +245,25 @@ class MultistageValuationConfiguration(_ProfileModel):
     maximum_high_growth_years: int = Field(default=3, ge=0, le=10)
     extend_to_stable: bool = True
     fade_reinvestment_to_terminal: bool = True
-    terminal_return_on_invested_capital: Decimal = Decimal("15")
+    terminal_return_on_invested_capital: Optional[Decimal] = None
     depreciable_asset_life_years: Optional[int] = Field(default=None, ge=2, le=30)
 
     @field_validator(
         "convergence_tolerance",
         "max_annual_growth_fade",
         "growth_gap_per_high_growth_year",
-        "terminal_return_on_invested_capital",
     )
     @classmethod
     def validate_positive_rate(cls, value: Decimal) -> Decimal:
         if not value.is_finite() or value <= 0:
             raise ValueError("Multistage rate parameters must be finite and positive")
+        return value
+
+    @field_validator("terminal_return_on_invested_capital")
+    @classmethod
+    def validate_terminal_roic(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and (not value.is_finite() or value <= 0):
+            raise ValueError("Terminal ROIC must be finite and positive")
         return value
 
     @field_validator("stable_growth_rate")

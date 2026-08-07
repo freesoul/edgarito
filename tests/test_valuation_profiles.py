@@ -35,7 +35,7 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
     assert profile.model_selection.sector is None
     assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
-    assert not profile.relative_valuation.enabled
+    assert profile.relative_valuation.enabled
     assert profile.relative_valuation.multiple_resolution.use_fundamental_anchor
     assert profile.specialized_inputs.history == 5
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (

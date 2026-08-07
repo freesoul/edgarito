@@ -150,6 +150,11 @@ class YahooFinanceClient:
             industry=str(info["industry"]) if info.get("industry") else None,
             country=str(info["country"]) if info.get("country") else None,
             beta=(Decimal(str(info["beta"])) if info.get("beta") is not None else None),
+            market_capitalization=(
+                Decimal(str(info["marketCap"]))
+                if info.get("marketCap") is not None
+                else None
+            ),
             **{
                 name: self._dataframe_to_reports(table)
                 for name, table in statement_tables.items()

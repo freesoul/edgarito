@@ -236,7 +236,19 @@ class PeerUniverse(BaseModel):
     parameters: PeerSelectionParameters
     candidates: list[PeerCandidateAssessment] = Field(default_factory=list)
     selected_tickers: tuple[str, ...] = ()
+    discovery_source: str = "manual override"
+    discovery_methodology: str = "Explicit candidate symbols"
+    discovery_confidence: str = "high"
     warnings: list[str] = Field(default_factory=list)
+
+
+class PeerDiscoveryResult(BaseModel):
+    provider: str
+    target_ticker: str
+    candidate_tickers: tuple[str, ...] = ()
+    methodology: str
+    confidence: str
+    warnings: tuple[str, ...] = ()
 
 
 class MultipleStatus(str, Enum):
@@ -734,6 +746,14 @@ class FcffDcfCapitalBridge(BaseModel):
     cash_and_equivalents: Optional[Decimal] = None
     non_operating_assets: Decimal = Decimal(0)
     non_operating_assets_source: str = "none reported"
+    debt_date: Optional[datetime.date] = None
+    cash_date: Optional[datetime.date] = None
+    shares_date: Optional[datetime.date] = None
+    non_operating_assets_date: Optional[datetime.date] = None
+    debt_scope: str = (
+        "consolidated reported financing debt; financing-subsidiary split unavailable"
+    )
+    warnings: tuple[str, ...] = ()
 
     @field_validator(
         "net_debt",
@@ -749,7 +769,11 @@ class FcffDcfCapitalBridge(BaseModel):
         return value
 
     @field_validator(
-        "unit", "net_debt_source", "shares_source", "non_operating_assets_source"
+        "unit",
+        "net_debt_source",
+        "shares_source",
+        "non_operating_assets_source",
+        "debt_scope",
     )
     @classmethod
     def normalize_text(cls, value: str) -> str:
@@ -998,6 +1022,9 @@ class FcffDcfResult(BaseModel):
     parameters: FcffDcfParameters
     assumptions: Optional[ValuationAssumptionSet] = None
     multistage_plan: Optional[AdaptiveMultistagePlan] = None
+    forecast_seed_type: str = "FY"
+    forecast_seed_methodology: str = "Latest complete fiscal year"
+    forecast_seed_period_end: Optional[datetime.date] = None
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult

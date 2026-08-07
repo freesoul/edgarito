@@ -94,7 +94,11 @@ class HistoricalMultiplesService:
                 ),
                 None,
             )
-            if multiple is not None and multiple.value is not None:
+            if (
+                multiple is not None
+                and multiple.value is not None
+                and multiple.value > 0
+            ):
                 observations_by_period.setdefault(
                     snapshot.fundamentals.period_end,
                     HistoricalMultipleObservation(
@@ -109,7 +113,11 @@ class HistoricalMultiplesService:
                     (item for item in snapshot.multiples if item.basis == basis), None
                 )
                 reason = (
-                    selected.reason
+                    "the computed multiple was non-positive"
+                    if multiple is not None
+                    and multiple.value is not None
+                    and multiple.value <= 0
+                    else selected.reason
                     if selected is not None and selected.reason
                     else "the requested multiple was not computed"
                 )
