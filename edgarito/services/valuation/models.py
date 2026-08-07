@@ -398,6 +398,9 @@ class ResolvedMultiple(BaseModel):
     market_anchor: Optional[Decimal] = None
     observed_premium: Optional[Decimal] = None
     resolved_premium: Optional[Decimal] = None
+    forward_synchronized_premium: Optional[Decimal] = None
+    forward_evidence_weight: Decimal = Field(default=0, ge=0, le=1)
+    premium_evidence_source: str = "current_peer"
     historical_peer_premium: Optional[Decimal] = None
     historical_peer_premium_25: Optional[Decimal] = None
     historical_peer_premium_75: Optional[Decimal] = None

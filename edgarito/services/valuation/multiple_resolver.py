@@ -35,6 +35,8 @@ class _PremiumForecast:
 class MultipleResolver:
     """Resolve a market multiple as fundamental value plus persistent premium."""
 
+    _FORWARD_HISTORY_SUPPORT_CAP = Decimal("0.25")
+    _FORWARD_EVIDENCE_WEIGHT_CAP = Decimal("0.75")
     _SUPPORTED_BASES = {
         RelativeValuationBasis.EV_TO_EBITDA,
         RelativeValuationBasis.EV_TO_EBIT,
@@ -81,7 +83,32 @@ class MultipleResolver:
             and forward_peer_summary.sample_size >= policy.minimum_peer_sample
             else None
         )
-        peer_summary = usable_forward_peer_summary or ltm_peer_summary
+        forward_evidence_available = policy.use_peer_median and (
+            usable_forward_peer_summary is not None
+        )
+        target_forward_multiple = (
+            self._target_forward_multiple(
+                target,
+                basis,
+                target_forecast,
+                intrinsic_valuation,
+                horizon_years,
+            )
+            if forward_evidence_available
+            else None
+        )
+        synchronized_forward_premium = (
+            target_forward_multiple / usable_forward_peer_summary.median - Decimal(1)
+            if target_forward_multiple is not None
+            and usable_forward_peer_summary is not None
+            and usable_forward_peer_summary.median > 0
+            else None
+        )
+        peer_summary = (
+            usable_forward_peer_summary or ltm_peer_summary
+            if policy.use_peer_median
+            else None
+        )
         peer_anchor = peer_summary.median if peer_summary is not None else None
         historical_anchor = (
             effective_history.median if effective_history is not None else None
@@ -90,7 +117,11 @@ class MultipleResolver:
         warnings = list(
             effective_history.warnings if effective_history is not None else ()
         )
-        if forward_peer_summary is not None and usable_forward_peer_summary is None:
+        if (
+            policy.use_peer_median
+            and forward_peer_summary is not None
+            and usable_forward_peer_summary is None
+        ):
             warnings.append(
                 f"Only {forward_peer_summary.sample_size} reliable forward peer "
                 f"multiples are available; policy requires "
@@ -100,24 +131,23 @@ class MultipleResolver:
             market_anchor = peer_anchor
             if usable_forward_peer_summary is not None:
                 peer_anchor_source = "forward"
-                warnings.append(
-                    "Historical premium observations are reconstructed from LTM "
-                    "multiples; they are used as relative evidence against the "
-                    "forward baseline, not as forward consensus observations"
-                )
-                target_current = self._target_forward_multiple(
-                    target,
-                    basis,
-                    target_forecast,
-                    intrinsic_valuation,
-                    horizon_years,
-                )
+                target_current = target_forward_multiple
                 if target_current is None:
                     target_current = ltm_target_multiple
                     warnings.append(
                         "Forward peer multiples are available, but the target forward "
                         "market multiple could not be reconstructed; current target "
                         "LTM is used with reduced comparability"
+                    )
+                elif synchronized_forward_premium is not None:
+                    warnings.append(
+                        "Synchronized forward target/peer premium at the requested "
+                        "horizon is the primary premium evidence; historical premium "
+                        "observations are reconstructed from LTM multiples and remain "
+                        "supporting evidence for uncertainty and audit only. LTM "
+                        "contributions to the forward "
+                        "evidence range are capped at ±25 percentage points around "
+                        "the synchronized forward premium"
                     )
             else:
                 peer_anchor_source = "current_ltm_fallback"
@@ -146,16 +176,54 @@ class MultipleResolver:
                 "resolved multiple remains at the base forward multiple"
             )
         fundamental_premium = fundamental / market_anchor - Decimal(1)
+        historical_current_premium = observed_premium
+        if synchronized_forward_premium is not None:
+            ltm_peer_anchor = (
+                ltm_peer_summary.median
+                if ltm_peer_summary is not None and ltm_peer_summary.median > 0
+                else None
+            )
+            if ltm_target_multiple is not None and ltm_peer_anchor is not None:
+                historical_current_premium = (
+                    ltm_target_multiple / ltm_peer_anchor - Decimal(1)
+                )
         premium_forecast = self._statistical_premium_forecast(
             effective_history,
             peer_histories,
-            observed_premium,
+            historical_current_premium,
             horizon_years,
             policy,
             warnings,
+            forward_evidence_active=synchronized_forward_premium is not None,
+        )
+        primary_premium = (
+            synchronized_forward_premium
+            if synchronized_forward_premium is not None
+            else premium_forecast.statistical_premium
+        )
+        premium_evidence_source = (
+            "forward_synchronized"
+            if synchronized_forward_premium is not None
+            else "ltm_history"
+            if premium_forecast.sample_size
+            else "current_ltm"
+            if peer_anchor_source == "current_ltm_fallback"
+            else "dcf_fallback"
         )
         fundamental_support, _support_count = self._fundamental_support(
             target, peer_report.peers, warnings
+        )
+        forward_evidence_weight = (
+            min(
+                MultipleResolver._FORWARD_EVIDENCE_WEIGHT_CAP,
+                # A current forward market multiple is evidence, not a target-date
+                # valuation; retain a DCF leg even when the peer sample is large.
+                Decimal(usable_forward_peer_summary.sample_size)
+                / Decimal(max(8, policy.minimum_peer_sample * 2)),
+            )
+            if synchronized_forward_premium is not None
+            and usable_forward_peer_summary is not None
+            else Decimal(0)
         )
         horizon_retention = (
             Decimal(
@@ -167,16 +235,24 @@ class MultipleResolver:
             else Decimal(1)
         )
         quality_weight = (
-            fundamental_support
-            if premium_forecast.statistical_premium > fundamental_premium
-            else Decimal(1)
+            fundamental_support if primary_premium > fundamental_premium else Decimal(1)
+        )
+        evidence_weight = (
+            forward_evidence_weight
+            if synchronized_forward_premium is not None
+            else premium_forecast.history_weight
         )
         persistence = min(
-            Decimal(1),
-            premium_forecast.history_weight * quality_weight * horizon_retention,
+            Decimal(1), evidence_weight * quality_weight * horizon_retention
         )
+        if synchronized_forward_premium is not None and persistence == 0:
+            warnings.append(
+                "Synchronized forward premium is available but fundamental support "
+                "is insufficient; the DCF-implied premium remains the resolved "
+                "anchor"
+            )
         resolved_premium = fundamental_premium + persistence * (
-            premium_forecast.statistical_premium - fundamental_premium
+            primary_premium - fundamental_premium
         )
         point = market_anchor * (Decimal(1) + resolved_premium)
         lower, upper = self._evidence_range(
@@ -185,6 +261,7 @@ class MultipleResolver:
             base_anchor=market_anchor,
             peer_summary=peer_summary,
             premium_forecast=premium_forecast,
+            primary_premium=synchronized_forward_premium,
         )
 
         sample_size = peer_summary.sample_size if peer_summary is not None else 0
@@ -200,12 +277,23 @@ class MultipleResolver:
         )
         if peer_anchor_source == "current_ltm_fallback":
             peer_confidence = self._lower_confidence(peer_confidence)
-        confidence = min(
-            peer_confidence,
-            target_history_confidence,
-            premium_persistence_confidence,
-            key=self._confidence_rank,
-        )
+        if synchronized_forward_premium is not None:
+            confidence = (
+                MultipleConfidence.LOW
+                if persistence == 0
+                else min(
+                    peer_confidence,
+                    MultipleConfidence.MEDIUM,
+                    key=self._confidence_rank,
+                )
+            )
+        else:
+            confidence = min(
+                peer_confidence,
+                target_history_confidence,
+                premium_persistence_confidence,
+                key=self._confidence_rank,
+            )
         if sample_size < policy.minimum_peer_sample:
             warnings.append(
                 f"Only {sample_size} peer observations support {basis.value}; "
@@ -249,13 +337,20 @@ class MultipleResolver:
             market_anchor=market_anchor,
             observed_premium=observed_premium,
             resolved_premium=resolved_premium,
+            forward_synchronized_premium=synchronized_forward_premium,
+            forward_evidence_weight=forward_evidence_weight,
+            premium_evidence_source=premium_evidence_source,
             historical_peer_premium=premium_forecast.long_run_premium,
             historical_peer_premium_25=premium_forecast.percentile_25,
             historical_peer_premium_75=premium_forecast.percentile_75,
             premium_history_sample_size=premium_forecast.sample_size,
             premium_mean_reversion_beta=premium_forecast.raw_phi,
             shrunk_premium_persistence=premium_forecast.shrunk_phi,
-            statistical_premium=premium_forecast.statistical_premium,
+            statistical_premium=(
+                premium_forecast.statistical_premium
+                if premium_forecast.sample_size or synchronized_forward_premium is None
+                else None
+            ),
             premium_history_weight=premium_forecast.history_weight,
             premium_observation_interval_years=(
                 premium_forecast.observation_interval_years
@@ -270,7 +365,15 @@ class MultipleResolver:
             premium_persistence_confidence=premium_persistence_confidence,
             confidence=confidence,
             methodology=(
-                "peer/base multiple × (1 + DCF-implied premium + evidence weight × "
+                (
+                    "peer forward multiple × (1 + DCF-implied premium + forward "
+                    "evidence weight × (synchronized forward target/peer premium - "
+                    "DCF-implied premium)); forward evidence weight is based on the "
+                    "forward peer sample and independent of LTM history, which is "
+                    "supporting evidence only"
+                )
+                if synchronized_forward_premium is not None
+                else "peer/base multiple × (1 + DCF-implied premium + evidence weight × "
                 "(statistically forecast premium - DCF-implied premium))"
             ),
             warnings=tuple(dict.fromkeys(warnings)),
@@ -396,6 +499,7 @@ class MultipleResolver:
         horizon_years,
         policy,
         warnings,
+        forward_evidence_active=False,
     ):
         premium_series = MultipleResolver._aligned_peer_premiums(
             history, peer_histories, policy
@@ -408,11 +512,18 @@ class MultipleResolver:
             else policy.premium_persistence_prior
         )
         if not premiums:
-            warnings.append(
-                "No synchronized peer history is available; the statistical premium "
-                "has zero blending weight and the resolver falls back to the "
-                "DCF-implied premium"
-            )
+            if forward_evidence_active:
+                warnings.append(
+                    "No synchronized LTM peer history is available; the forward "
+                    "synchronized premium remains primary and no LTM persistence "
+                    "support is applied"
+                )
+            else:
+                warnings.append(
+                    "No synchronized peer history is available; the statistical "
+                    "premium has zero blending weight and the resolver falls back "
+                    "to the DCF-implied premium"
+                )
             return _PremiumForecast(
                 long_run_premium=None,
                 percentile_25=None,
@@ -517,16 +628,32 @@ class MultipleResolver:
         base_anchor,
         peer_summary,
         premium_forecast,
+        primary_premium=None,
     ):
         fundamental_premium = fundamental_anchor / base_anchor - Decimal(1)
         resolved_premium = point / base_anchor - Decimal(1)
         premium_candidates = [fundamental_premium, resolved_premium]
-        if premium_forecast.sample_size >= 4:
-            premium_candidates.append(premium_forecast.statistical_premium)
-            if premium_forecast.percentile_25 is not None:
-                premium_candidates.append(premium_forecast.percentile_25)
-            if premium_forecast.percentile_75 is not None:
-                premium_candidates.append(premium_forecast.percentile_75)
+        if primary_premium is None:
+            if premium_forecast.sample_size >= 4:
+                premium_candidates.append(premium_forecast.statistical_premium)
+                if premium_forecast.percentile_25 is not None:
+                    premium_candidates.append(premium_forecast.percentile_25)
+                if premium_forecast.percentile_75 is not None:
+                    premium_candidates.append(premium_forecast.percentile_75)
+        elif premium_forecast.sample_size >= 4:
+            for supporting_premium in (
+                premium_forecast.statistical_premium,
+                premium_forecast.percentile_25,
+                premium_forecast.percentile_75,
+            ):
+                if supporting_premium is not None:
+                    premium_candidates.append(
+                        MultipleResolver._bounded_forward_history_premium(
+                            supporting_premium, primary_premium
+                        )
+                    )
+        if primary_premium is not None and primary_premium not in premium_candidates:
+            premium_candidates.append(primary_premium)
         base_low = (
             peer_summary.percentile_25
             if peer_summary is not None
@@ -554,6 +681,19 @@ class MultipleResolver:
             base_high * (Decimal(1) + resolved_premium),
         )
         return max(Decimal("0.01"), lower), max(point, upper)
+
+    @staticmethod
+    def _bounded_forward_history_premium(
+        supporting_premium: Decimal, forward_premium: Decimal
+    ) -> Decimal:
+        delta = max(
+            -MultipleResolver._FORWARD_HISTORY_SUPPORT_CAP,
+            min(
+                MultipleResolver._FORWARD_HISTORY_SUPPORT_CAP,
+                supporting_premium - forward_premium,
+            ),
+        )
+        return forward_premium + delta
 
     @staticmethod
     def _aligned_peer_premiums(history, peer_histories, policy):

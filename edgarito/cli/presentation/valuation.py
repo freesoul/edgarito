@@ -255,6 +255,20 @@ class ComparableImpliedValuationConsolePresenter:
             "current_ltm_fallback": "Peer baseline (current LTM)",
             "dcf_fallback": "Peer baseline (DCF fallback)",
         }.get(multiple.peer_anchor_source, "Peer forward baseline")
+        target_label = (
+            "Target forward comparative multiple:"
+            if multiple.premium_evidence_source == "forward_synchronized"
+            else "Current target comparative multiple:"
+        )
+        primary_premium = (
+            multiple.forward_synchronized_premium
+            if multiple.premium_evidence_source == "forward_synchronized"
+            else (
+                multiple.statistical_premium
+                if multiple.statistical_premium is not None
+                else multiple.observed_premium
+            )
+        )
         lines = [
             *section("RELATIVE VALUATION"),
             f"{result.ticker or result.company_id} - {result.company_name}",
@@ -267,8 +281,10 @@ class ComparableImpliedValuationConsolePresenter:
             f"{peer_label + ':':<40}{format_multiple(multiple.market_anchor)}",
             f"{'DCF-implied forward multiple:':<40}"
             f"{format_multiple(multiple.fundamental_anchor)}",
-            f"{'Current target comparative multiple:':<40}"
-            f"{format_multiple(multiple.current_target_anchor)}",
+            f"{target_label:<40}{format_multiple(multiple.current_target_anchor)}",
+            f"{'Premium evidence source:':<40}{multiple.premium_evidence_source}",
+            f"{'Primary premium evidence:':<40}"
+            f"{format_ratio_percent(primary_premium, signed=True)}",
             f"{'Historical premium:':<40}"
             f"{format_ratio_percent(multiple.historical_peer_premium, signed=True)}",
             f"{'Resolved premium:':<40}"
@@ -362,6 +378,9 @@ class ComparableImpliedValuationConsolePresenter:
             f"{format_ratio_percent(multiple.historical_trend, signed=True)}",
             f"Current target premium vs baseline: "
             f"{format_ratio_percent(multiple.observed_premium, signed=True)}",
+            f"Forward synchronized target/peer premium: "
+            f"{format_ratio_percent(multiple.forward_synchronized_premium, signed=True)}",
+            f"Forward evidence weight: {multiple.forward_evidence_weight:,.1%}",
             f"Synchronized premium observations: "
             f"{multiple.premium_history_sample_size}",
             "Median premium observation interval: "
@@ -377,12 +396,12 @@ class ComparableImpliedValuationConsolePresenter:
                 else "unavailable"
             ),
             f"Shrunk AR(1) phi: {multiple.shrunk_premium_persistence:,.2f}",
-            f"Statistical premium at horizon: "
+            f"Historical statistical premium at horizon: "
             f"{format_ratio_percent(multiple.statistical_premium, signed=True)}",
             f"Premium-history weight: {multiple.premium_history_weight:,.1%}",
             f"Quality-support score: {multiple.fundamental_support:,.1%}",
             f"Horizon retention: {multiple.horizon_retention:,.1%}",
-            f"Statistical-anchor weight: {multiple.persistence_factor:,.1%}",
+            f"Effective premium weight: {multiple.persistence_factor:,.1%}",
             "Confidence detail: "
             f"peer={multiple.peer_confidence.value}, "
             f"history={multiple.target_history_confidence.value}, "

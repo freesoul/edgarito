@@ -125,9 +125,7 @@ def test_peer_selector_excludes_target_cross_listings_at_issuer_level():
     )
 
     assert result.selected_tickers == ("BESI",)
-    excluded = next(
-        item for item in result.candidates if item.ticker == "2330.TW"
-    )
+    excluded = next(item for item in result.candidates if item.ticker == "2330.TW")
     assert any("target company/issuer" in reason for reason in excluded.exclusions)
 
 
@@ -974,8 +972,303 @@ def test_forward_peer_summary_takes_precedence_over_ltm_baseline():
     assert resolved.peer_anchor_source == "forward"
     assert resolved.market_anchor == Decimal("8")
     assert resolved.current_target_anchor == target.enterprise_value / Decimal("125")
+    assert resolved.forward_synchronized_premium == (
+        target.enterprise_value / Decimal("125") / Decimal("8") - Decimal(1)
+    )
+    assert resolved.forward_evidence_weight == Decimal(4) / Decimal(8)
+    assert resolved.persistence_factor > Decimal(0)
+    assert (
+        min(resolved.fundamental_anchor, resolved.current_target_anchor)
+        < (resolved.point_estimate)
+        < max(resolved.fundamental_anchor, resolved.current_target_anchor)
+    )
     assert resolved.peer_confidence == MultipleConfidence.MEDIUM
+    assert resolved.confidence == MultipleConfidence.MEDIUM
+    assert resolved.target_history_confidence == MultipleConfidence.LOW
+    assert resolved.statistical_premium is None
+    assert not any("falls back to the DCF" in warning for warning in resolved.warnings)
     assert not any("current LTM" in warning for warning in resolved.warnings)
+
+
+def test_forward_premium_remains_active_with_sparse_ltm_history():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=4,
+                )
+            ]
+        }
+    )
+    dates = (datetime.date(2024, 12, 31), datetime.date(2025, 12, 31))
+    target_history = HistoricalMultipleSummary(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        observations=tuple(
+            HistoricalMultipleObservation(observed_on=date, value=value)
+            for date, value in zip(dates, (Decimal("30"), Decimal("32")), strict=True)
+        ),
+    )
+    peer_histories = tuple(
+        HistoricalMultipleSummary(
+            basis=RelativeValuationBasis.EV_TO_EBITDA,
+            observations=tuple(
+                HistoricalMultipleObservation(observed_on=date, value=value)
+                for date, value in zip(
+                    dates, (Decimal("10"), Decimal("11")), strict=True
+                )
+            ),
+        )
+        for _ in range(2)
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=target_history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    target_forward_multiple = target.enterprise_value / Decimal("125")
+    assert resolved.premium_history_weight == Decimal(2) / Decimal(12)
+    assert resolved.forward_evidence_weight == Decimal(4) / Decimal(8)
+    assert resolved.persistence_factor > Decimal(0)
+    assert (
+        min(resolved.fundamental_anchor, target_forward_multiple)
+        < (resolved.point_estimate)
+        < max(resolved.fundamental_anchor, target_forward_multiple)
+    )
+    assert resolved.confidence == MultipleConfidence.MEDIUM
+
+
+def test_forward_evidence_retains_dcf_leg_at_large_peer_sample(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=12,
+                )
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("8")),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            annual_premium_decay=Decimal(0),
+        ),
+    )
+
+    target_forward_multiple = target.enterprise_value / Decimal("125")
+    assert resolved.forward_evidence_weight == Decimal("0.75")
+    assert resolved.persistence_factor == Decimal("0.75")
+    assert resolved.point_estimate != target_forward_multiple
+    assert resolved.point_estimate == Decimal("5.12")
+
+
+def test_use_peer_median_false_ignores_forward_premium():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=12,
+                )
+            ]
+        }
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            use_peer_median=False,
+        ),
+    )
+
+    assert resolved.peer_anchor is None
+    assert resolved.peer_anchor_source == "dcf_fallback"
+    assert resolved.forward_synchronized_premium is None
+    assert resolved.forward_evidence_weight == Decimal(0)
+    assert resolved.market_anchor == resolved.fundamental_anchor
+    assert not any(
+        "forward target/peer premium" in warning for warning in resolved.warnings
+    )
+
+
+def test_unsupported_forward_premium_keeps_dcf_anchor_and_low_confidence(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=12,
+                )
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("2")),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args: (Decimal(0), 0)),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            annual_premium_decay=Decimal(0),
+        ),
+    )
+
+    assert resolved.premium_evidence_source == "forward_synchronized"
+    assert resolved.forward_evidence_weight == Decimal("0.75")
+    assert resolved.persistence_factor == Decimal(0)
+    assert resolved.point_estimate == Decimal("2")
+    assert resolved.confidence == MultipleConfidence.LOW
+    assert any(
+        "fundamental support is insufficient" in warning
+        for warning in resolved.warnings
+    )
+
+
+def test_synchronized_forward_premium_precedes_extreme_ltm_premium_history(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=4,
+                )
+            ]
+        }
+    )
+    dates = tuple(datetime.date(year, 12, 31) for year in range(2014, 2026))
+    target_history = HistoricalMultipleSummary(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        observations=tuple(
+            HistoricalMultipleObservation(observed_on=date, value=Decimal("100"))
+            for date in dates
+        ),
+    )
+    peer_histories = tuple(
+        HistoricalMultipleSummary(
+            basis=RelativeValuationBasis.EV_TO_EBITDA,
+            observations=tuple(
+                HistoricalMultipleObservation(observed_on=date, value=Decimal("1"))
+                for date in dates
+            ),
+        )
+        for _ in range(2)
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("8")),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args: (Decimal(1), 2)),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=target_history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2,
+            annual_premium_decay=Decimal(0),
+        ),
+    )
+
+    target_forward_multiple = target.enterprise_value / Decimal("125")
+    forward_premium = target_forward_multiple / Decimal("8") - Decimal(1)
+    assert resolved.premium_evidence_source == "forward_synchronized"
+    assert resolved.forward_synchronized_premium == forward_premium
+    assert resolved.historical_peer_premium == Decimal("99")
+    assert resolved.statistical_premium > Decimal("40")
+    assert resolved.forward_evidence_weight == Decimal(4) / Decimal(8)
+    assert resolved.persistence_factor == resolved.forward_evidence_weight
+    assert resolved.resolved_premium == (resolved.persistence_factor * forward_premium)
+    assert resolved.point_estimate == Decimal("8") * (
+        Decimal(1) + resolved.resolved_premium
+    )
+    assert resolved.point_estimate != Decimal("800")
+    assert resolved.lower_bound <= resolved.point_estimate <= resolved.upper_bound
+    assert resolved.upper_bound < Decimal("20")
+    assert resolved.confidence == MultipleConfidence.MEDIUM
+    assert any("primary premium evidence" in warning for warning in resolved.warnings)
 
 
 def test_sufficient_synchronized_premium_history_increases_confidence():
@@ -1238,7 +1531,10 @@ def test_implied_valuation_exposes_peer_value_independently_of_dcf_anchor():
 
     assert result.pure_peer_point_case is not None
     assert result.pure_peer_point_case.multiple == resolved.peer_anchor
-    assert result.pure_peer_point_case.present_value_per_share != result.point_case.present_value_per_share
+    assert (
+        result.pure_peer_point_case.present_value_per_share
+        != result.point_case.present_value_per_share
+    )
 
 
 def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):
