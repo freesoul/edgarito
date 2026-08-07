@@ -365,31 +365,36 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    exit_code = main(
-        [
-            "valuation",
-            "--ticker",
-            "AAPL",
-            "--years",
-            "2",
-            "--profile",
-            str(profile),
-            "--cache-dir",
-            str(tmp_path),
-            "--user-agent",
-            "Edgarito Tests (tests@example.com)",
-        ]
-    )
+    arguments = [
+        "valuation",
+        "--ticker",
+        "AAPL",
+        "--years",
+        "2",
+        "--profile",
+        str(profile),
+        "--cache-dir",
+        str(tmp_path),
+        "--user-agent",
+        "Edgarito Tests (tests@example.com)",
+    ]
+    exit_code = main(arguments)
 
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "Model: FCFF DCF" in output
-    assert "WACC: 8.00% (explicit valuation profile)" in output
+    assert "WACC:                    8.00%" in output
     assert "FY2026E FCFF" in output
     assert "FY2027E FCFF" in output
-    assert "VALUATION CONCLUSION" in output
-    assert "Final value per share (USD):" in output
-    assert "Net debt source: gross debt - cash and equivalents" in output
+    assert "INTRINSIC VALUATION" in output
+    assert "EV → EQUITY BRIDGE" in output
+    assert "Intrinsic value/share" in output
+    assert "Net debt source:" not in output
+
+    assert main([*arguments, "--audit"]) == 0
+    audit_output = capsys.readouterr().out
+    assert "ASSUMPTION AND PROVENANCE AUDIT" in audit_output
+    assert "Net debt source: gross debt - cash and equivalents" in audit_output
 
 
 def _forecast() -> FcffForecast:

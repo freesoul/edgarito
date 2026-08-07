@@ -87,7 +87,11 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         peer_source=peer_source,
         as_of=args.as_of,
     )
-    print(ComparableMultiplesConsolePresenter().render(bundle.report))
+    print(
+        ComparableMultiplesConsolePresenter().render(
+            bundle.report, verbose=args.verbose
+        )
+    )
     return 0
 
 

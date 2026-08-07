@@ -1,10 +1,21 @@
+from __future__ import annotations
+
 from decimal import Decimal
 
+from edgarito.cli.presentation._valuation_format import section, subsection
+from edgarito.schemas.valuation.assumptions import ValuationAssumptionKind
 from edgarito.services.valuation import FcffDcfResult
 
 
 class FcffDcfConsolePresenter:
-    def render(self, result: FcffDcfResult, *, profile_name: str | None = None) -> str:
+    def render(
+        self,
+        result: FcffDcfResult,
+        *,
+        profile_name: str | None = None,
+        verbose: bool = False,
+        include_warnings: bool = True,
+    ) -> str:
         identifier = result.ticker or result.company_id
         values = [
             result.enterprise_value,
@@ -12,10 +23,7 @@ class FcffDcfConsolePresenter:
             result.capital_bridge.net_debt,
             result.capital_bridge.non_operating_assets,
             result.terminal_value.terminal_value,
-            *(
-                item.amount
-                for item in result.explicit_forecast_present_value.cash_flows
-            ),
+            *(item.amount for item in result.explicit_forecast_present_value.cash_flows),
         ]
         if result.share_repurchases is not None:
             values.extend(
@@ -32,202 +40,249 @@ class FcffDcfConsolePresenter:
         amount_unit = f"{result.unit} {suffix}".rstrip()
         timing = result.parameters.cash_flow_timing.value.replace("_", " ")
         terminal_method = result.parameters.terminal_method.value.replace("_", " ")
+
         lines = [
+            *section("VALUATION SETUP"),
             f"{identifier} - {result.company_name}",
-            f"Provider: {result.provider.upper()} | Valuation date: "
-            f"{result.valuation_date.isoformat()}",
-            f"Valuation profile: {profile_name or 'unspecified'}",
-            f"Model: FCFF DCF | Timing: {timing}",
-            "Forecast seed: "
-            f"{result.forecast_seed_type} through "
-            f"{result.forecast_seed_period_end.isoformat() if result.forecast_seed_period_end else '-'}",
-            f"Forecast seed method: {result.forecast_seed_methodology}",
-            f"WACC: {result.parameters.wacc:,.2f}% ({result.parameters.wacc_source})",
+            f"Valuation date: {result.valuation_date.isoformat()} | "
+            f"Provider: {result.provider.upper()} | Profile: "
+            f"{profile_name or 'unspecified'}",
+            f"Model: FCFF DCF | Cash-flow timing: {timing} | "
             f"Terminal method: {terminal_method}",
+            "",
+            *subsection("DEFAULT ASSUMPTIONS"),
+            *self._compact_assumptions(result),
         ]
-        if result.multistage_plan is not None:
-            plan = result.multistage_plan
-            stages = []
-            if plan.explicit_growth_prefix_years:
-                stages.append(f"{plan.explicit_growth_prefix_years} explicit")
-            if plan.high_growth_years:
-                stages.append(f"{plan.high_growth_years} high-growth")
-            if plan.transition_years:
-                stages.append(f"{plan.transition_years} transition")
-            if plan.stable_years:
-                stages.append(f"{plan.stable_years} stable")
-            extension = (
-                f"; extended from {plan.requested_years} requested years"
-                if plan.extended_to_stable
-                else ""
-            )
-            lines.append(
-                "Projection: adaptive multistage | "
-                f"{' + '.join(stages)} years{extension} | stable growth anchor "
-                f"{plan.terminal_growth_rate:,.2f}%"
-            )
-            if plan.terminal_return_on_invested_capital is not None:
-                details = (
-                    "Stable reinvestment: "
-                    f"{plan.terminal_reinvestment_rate:,.2f}% of NOPAT at "
-                    f"{plan.terminal_return_on_invested_capital:,.2f}% terminal ROIC"
-                )
-                if plan.terminal_capex_to_revenue is not None:
-                    details += (
-                        f" | terminal capex/revenue "
-                        f"{plan.terminal_capex_to_revenue:,.2f}%"
-                    )
-                if plan.depreciable_asset_life_years is not None:
-                    details += (
-                        f" | {plan.depreciable_asset_life_years}-year depreciable "
-                        "asset life"
-                    )
-                lines.append(details)
-                lines.append(
-                    "Terminal ROIC resolution: "
-                    f"{plan.terminal_roic_source or 'unspecified'} | confidence "
-                    f"{plan.terminal_roic_confidence or 'unspecified'}"
-                )
-                if plan.terminal_roic_methodology:
-                    lines.append(
-                        f"Terminal ROIC method: {plan.terminal_roic_methodology}"
-                    )
-        if result.parameters.perpetual_growth_rate is not None:
-            source = result.parameters.perpetual_growth_source or "explicit"
-            lines.append(
-                "Terminal growth: "
-                f"{result.parameters.perpetual_growth_rate:,.2f}% ({source})"
-            )
-        if result.parameters.exit_multiple is not None:
-            metric = result.parameters.exit_metric.value.upper()
-            lines.append(
-                f"Terminal multiple: {result.parameters.exit_multiple:,.2f}x {metric}"
-            )
-        if result.assumptions is not None:
-            lines.extend(["", "Resolved assumptions:"])
-            for assumption in result.assumptions.assumptions:
-                provider = (
-                    assumption.provenance.provider or assumption.provenance.origin.value
-                )
-                lines.append(
-                    f"  {assumption.kind.value}: {assumption.value:,.3f} [{provider}]"
-                )
+        if verbose:
+            lines.extend(["", *self._audit_details(result)])
+
         lines.extend(
             [
                 "",
-                f"{'Cash flow':<26}{'Period':>10}{'FCFF':>18}{'Factor':>12}{'PV':>18}",
-                "-" * 84,
+                *section("INTRINSIC VALUATION"),
+                f"FCFF forecast ({amount_unit})",
+                f"{'Cash flow':<24}{'Period':>9}{'FCFF':>16}"
+                f"{'Discount':>12}{'Present value':>18}",
+                "-" * 79,
             ]
         )
         for item in result.explicit_forecast_present_value.cash_flows:
             lines.append(
-                f"{(item.label or 'FCFF'):<26}{item.period:>10,.1f}"
-                f"{item.amount / scale:>18,.1f}{item.discount_factor:>12,.4f}"
+                f"{(item.label or 'FCFF'):<24}{item.period:>9,.1f}"
+                f"{item.amount / scale:>16,.1f}{item.discount_factor:>12,.4f}"
                 f"{item.present_value / scale:>18,.1f}"
             )
         terminal = result.terminal_present_value
         lines.append(
-            f"{'Terminal value':<26}{terminal.period:>10,.1f}"
-            f"{terminal.amount / scale:>18,.1f}{terminal.discount_factor:>12,.4f}"
+            f"{'Terminal value':<24}{terminal.period:>9,.1f}"
+            f"{terminal.amount / scale:>16,.1f}{terminal.discount_factor:>12,.4f}"
             f"{terminal.present_value / scale:>18,.1f}"
         )
         lines.extend(
             [
                 "",
-                f"Explicit FCFF PV ({amount_unit}): "
-                f"{result.explicit_forecast_present_value.total_present_value / scale:,.1f}",
-                f"Terminal value PV ({amount_unit}): "
-                f"{result.terminal_present_value.present_value / scale:,.1f}",
-                f"Enterprise value ({amount_unit}): "
-                f"{result.enterprise_value / scale:,.1f}",
-                f"Less net debt ({amount_unit}): "
-                f"{result.capital_bridge.net_debt / scale:,.1f}",
-                f"Add non-operating investments ({amount_unit}): "
-                f"{result.capital_bridge.non_operating_assets / scale:,.1f}",
-                f"Equity value ({amount_unit}): {result.equity_value / scale:,.1f}",
-                f"Diluted shares ({share_suffix or 'units'}): "
-                f"{result.capital_bridge.diluted_shares / share_scale:,.1f}",
+                *subsection("EV → EQUITY BRIDGE"),
+                f"{'Explicit FCFF PV':<30}{result.explicit_forecast_present_value.total_present_value / scale:>16,.1f} {amount_unit}",
+                f"{'Terminal PV':<30}{result.terminal_present_value.present_value / scale:>16,.1f} {amount_unit}",
+                f"{'Enterprise value':<30}{result.enterprise_value / scale:>16,.1f} {amount_unit}",
+                f"{'Less: net debt':<30}{result.capital_bridge.net_debt / scale:>16,.1f} {amount_unit}",
+                f"{'Add: non-operating assets':<30}{result.capital_bridge.non_operating_assets / scale:>16,.1f} {amount_unit}",
+                f"{'Equity value':<30}{result.equity_value / scale:>16,.1f} {amount_unit}",
+                f"{'Diluted shares':<30}{result.capital_bridge.diluted_shares / share_scale:>16,.1f} {share_suffix or 'units'}",
+                f"{'Intrinsic value/share':<30}{result.value_per_share:>16,.2f} {result.unit}",
             ]
         )
-        if result.share_repurchases is not None:
-            repurchases = result.share_repurchases
-            lines.extend(
-                [
-                    "",
-                    "Share repurchase analysis",
-                    f"{'Period':<12}{'Cash spent':>18}{'Purchase price':>18}"
-                    f"{'Shares retired':>18}{'PV cash':>18}",
-                    "-" * 84,
-                ]
-            )
-            for period in repurchases.periods:
-                lines.append(
-                    f"{f'FY{period.fiscal_year}E':<12}"
-                    f"{period.cash_spent / scale:>18,.1f}"
-                    f"{period.purchase_price:>18,.2f}"
-                    f"{period.shares_repurchased / share_scale:>18,.2f}"
-                    f"{period.present_value_cash_spent / scale:>18,.1f}"
-                )
-            lines.extend(
-                [
-                    f"Total buyback cash ({amount_unit}): "
-                    f"{repurchases.total_cash_spent / scale:,.1f}",
-                    f"PV of buyback cash ({amount_unit}): "
-                    f"{repurchases.present_value_cash_spent / scale:,.1f}",
-                    f"Projected shares retired ({share_suffix or 'units'}): "
-                    f"{repurchases.shares_repurchased / share_scale:,.2f}",
-                    f"Remaining diluted shares ({share_suffix or 'units'}): "
-                    f"{repurchases.ending_shares / share_scale:,.2f}",
-                    f"Residual equity value ({amount_unit}): "
-                    f"{repurchases.residual_equity_value / scale:,.1f}",
-                    f"Buyback accretion / (dilution): "
-                    f"{repurchases.accretion_percentage:+,.2f}%",
-                    f"Repurchase discount rate: {repurchases.discount_rate:,.2f}% "
-                    f"({repurchases.discount_rate_source})",
-                    f"Repurchase-price growth: {repurchases.price_growth_rate:,.2f}%",
-                    f"Purchase-price basis: {repurchases.purchase_price_source}",
-                    f"Buyback source: {repurchases.source}",
-                ]
-            )
         if result.terminal_value_percentage is not None:
             lines.append(
-                "Terminal PV / enterprise value: "
-                f"{result.terminal_value_percentage:,.1f}%"
+                f"{'Terminal PV / enterprise value':<30}"
+                f"{result.terminal_value_percentage:>16,.1f}%"
+            )
+        if result.share_repurchases is not None:
+            lines.extend(self._repurchase_details(result, scale, share_scale, amount_unit, share_suffix))
+        if include_warnings and result.warnings:
+            lines.extend(["", *subsection("WARNINGS")])
+            lines.extend(f"- {warning}" for warning in result.warnings)
+        return "\n".join(lines)
+
+    def _compact_assumptions(self, result: FcffDcfResult) -> list[str]:
+        cost_of_equity = self._assumption_value(
+            result, ValuationAssumptionKind.COST_OF_EQUITY
+        )
+        beta = self._assumption_value(result, ValuationAssumptionKind.LEVERED_BETA)
+        tax_rate = self._assumption_value(
+            result, ValuationAssumptionKind.NORMALIZED_TAX_RATE
+        )
+        terminal_roic = (
+            result.multistage_plan.terminal_return_on_invested_capital
+            if result.multistage_plan is not None
+            else self._assumption_value(result, ValuationAssumptionKind.TERMINAL_ROIC)
+        )
+        terminal_growth = result.parameters.perpetual_growth_rate
+        projection = self._projection_label(result)
+        seed_date = (
+            result.forecast_seed_period_end.isoformat()
+            if result.forecast_seed_period_end
+            else "unavailable"
+        )
+        rows = (
+            ("WACC", self._percent(result.parameters.wacc)),
+            ("Terminal growth", self._percent(terminal_growth)),
+            ("Terminal ROIC", self._percent(terminal_roic)),
+            ("Cost of equity", self._percent(cost_of_equity)),
+            ("Beta", f"{beta:,.2f}x" if beta is not None else "unavailable"),
+            ("Tax rate", self._percent(tax_rate)),
+            (
+                "Forecast seed / method",
+                f"{result.forecast_seed_type} through {seed_date} / "
+                f"{self._short_seed_method(result.forecast_seed_methodology)}",
+            ),
+            ("Projection structure", projection),
+        )
+        return [f"{label + ':':<25}{value}" for label, value in rows]
+
+    def _audit_details(self, result: FcffDcfResult) -> list[str]:
+        lines = [*subsection("ASSUMPTION AND PROVENANCE AUDIT")]
+        lines.extend(
+            [
+                f"WACC source: {result.parameters.wacc_source}",
+                f"Forecast seed methodology: {result.forecast_seed_methodology}",
+            ]
+        )
+        if result.parameters.perpetual_growth_rate is not None:
+            lines.append(
+                "Terminal growth source: "
+                f"{result.parameters.perpetual_growth_source or 'explicit'}"
+            )
+        if result.multistage_plan is not None:
+            plan = result.multistage_plan
+            if plan.terminal_roic_source:
+                lines.append(
+                    f"Terminal ROIC: {plan.terminal_roic_source} | confidence "
+                    f"{plan.terminal_roic_confidence or 'unspecified'}"
+                )
+            if plan.terminal_roic_methodology:
+                lines.append(f"Terminal ROIC method: {plan.terminal_roic_methodology}")
+            if plan.terminal_return_on_invested_capital is not None:
+                details = (
+                    f"Stable reinvestment: {plan.terminal_reinvestment_rate:,.2f}% "
+                    f"of NOPAT at {plan.terminal_return_on_invested_capital:,.2f}% ROIC"
+                )
+                if plan.terminal_capex_to_revenue is not None:
+                    details += f" | capex/revenue {plan.terminal_capex_to_revenue:,.2f}%"
+                if plan.depreciable_asset_life_years is not None:
+                    details += f" | asset life {plan.depreciable_asset_life_years} years"
+                lines.append(details)
+        if result.assumptions is not None:
+            lines.append("Resolved assumptions:")
+            for assumption in result.assumptions.assumptions:
+                provenance = assumption.provenance
+                source = provenance.provider or provenance.origin.value
+                metadata = [source]
+                if provenance.dataset:
+                    metadata.append(provenance.dataset)
+                if provenance.version:
+                    metadata.append(provenance.version)
+                if provenance.observed_on:
+                    metadata.append(f"observed {provenance.observed_on.isoformat()}")
+                lines.append(
+                    f"  {assumption.kind.value}: {assumption.value:,.3f} "
+                    f"[{' | '.join(metadata)}]"
+                )
+                if provenance.methodology:
+                    lines.append(f"    Method: {provenance.methodology}")
+                if assumption.rationale:
+                    lines.append(f"    Rationale: {assumption.rationale}")
+        bridge = result.capital_bridge
+        lines.extend(
+            [
+                f"Net debt source: {bridge.net_debt_source}",
+                f"Non-operating assets source: {bridge.non_operating_assets_source}",
+                f"Shares source: {bridge.shares_source}",
+                "Capital bridge dates: "
+                f"debt={bridge.debt_date or 'explicit/unknown'}, "
+                f"cash={bridge.cash_date or 'explicit/unknown'}, "
+                f"shares={bridge.shares_date or 'explicit/unknown'}, "
+                "non-operating assets="
+                f"{bridge.non_operating_assets_date or 'none/explicit'}",
+                f"Debt scope: {bridge.debt_scope}",
+            ]
+        )
+        return lines
+
+    def _repurchase_details(
+        self,
+        result: FcffDcfResult,
+        scale: Decimal,
+        share_scale: Decimal,
+        amount_unit: str,
+        share_suffix: str,
+    ) -> list[str]:
+        repurchases = result.share_repurchases
+        if repurchases is None:
+            return []
+        lines = [
+            "",
+            *subsection("SHARE REPURCHASE ANALYSIS"),
+            f"{'Period':<12}{'Cash spent':>16}{'Purchase price':>17}"
+            f"{'Shares retired':>17}{'PV cash':>16}",
+            "-" * 78,
+        ]
+        for period in repurchases.periods:
+            lines.append(
+                f"{f'FY{period.fiscal_year}E':<12}"
+                f"{period.cash_spent / scale:>16,.1f}"
+                f"{period.purchase_price:>17,.2f}"
+                f"{period.shares_repurchased / share_scale:>17,.2f}"
+                f"{period.present_value_cash_spent / scale:>16,.1f}"
             )
         lines.extend(
             [
-                "",
-                f"Net debt source: {result.capital_bridge.net_debt_source}",
-                "Non-operating investments source: "
-                f"{result.capital_bridge.non_operating_assets_source}",
-                f"Shares source: {result.capital_bridge.shares_source}",
-                "Capital bridge dates: "
-                f"debt={result.capital_bridge.debt_date or 'explicit/unknown'}, "
-                f"cash={result.capital_bridge.cash_date or 'explicit/unknown'}, "
-                f"shares={result.capital_bridge.shares_date or 'explicit/unknown'}, "
-                "non-operating assets="
-                f"{result.capital_bridge.non_operating_assets_date or 'none/explicit'}",
-                f"Debt scope: {result.capital_bridge.debt_scope}",
+                f"Total buyback cash: {repurchases.total_cash_spent / scale:,.1f} {amount_unit}",
+                f"PV of buyback cash: {repurchases.present_value_cash_spent / scale:,.1f} {amount_unit}",
+                f"Remaining diluted shares: {repurchases.ending_shares / share_scale:,.2f} {share_suffix or 'units'}",
+                f"Intrinsic value/share after buybacks: {repurchases.value_per_remaining_share:,.2f} {result.unit}",
+                f"Buyback accretion/(dilution): {repurchases.accretion_percentage:+,.1f}%",
             ]
         )
-        if result.warnings:
-            lines.extend(["", "WARNINGS"])
-            lines.extend(f"- {warning}" for warning in result.warnings)
-        lines.extend(["", "VALUATION CONCLUSION"])
-        if result.share_repurchases is not None:
-            lines.extend(
-                [
-                    f"Value per share without buybacks ({result.unit}): "
-                    f"{result.value_per_share:,.2f}",
-                    f"Final value per share after buybacks ({result.unit}): "
-                    f"{result.share_repurchases.value_per_remaining_share:,.2f}",
-                ]
-            )
-        else:
-            lines.append(
-                f"Final value per share ({result.unit}): {result.value_per_share:,.2f}"
-            )
-        return "\n".join(lines)
+        return lines
+
+    @staticmethod
+    def _projection_label(result: FcffDcfResult) -> str:
+        plan = result.multistage_plan
+        if plan is None:
+            return "constant explicit forecast"
+        stages = []
+        if plan.explicit_growth_prefix_years:
+            stages.append(f"{plan.explicit_growth_prefix_years} explicit")
+        if plan.high_growth_years:
+            stages.append(f"{plan.high_growth_years} high-growth")
+        if plan.transition_years:
+            stages.append(f"{plan.transition_years} transition")
+        if plan.stable_years:
+            stages.append(f"{plan.stable_years} stable")
+        extension = (
+            f"; extended from {plan.requested_years} to {plan.effective_years} years"
+            if plan.extended_to_stable
+            else f"; {plan.effective_years} years"
+        )
+        return "adaptive multistage: " + " + ".join(stages) + extension
+
+    @staticmethod
+    def _short_seed_method(methodology: str) -> str:
+        return methodology.split(";", 1)[0]
+
+    @staticmethod
+    def _assumption_value(
+        result: FcffDcfResult, kind: ValuationAssumptionKind
+    ) -> Decimal | None:
+        if result.assumptions is None:
+            return None
+        assumption = result.assumptions.find(kind)
+        return assumption.value if assumption is not None else None
+
+    @staticmethod
+    def _percent(value: Decimal | None) -> str:
+        return f"{value:,.2f}%" if value is not None else "unavailable"
 
     @staticmethod
     def _scale_values(values: list[Decimal]) -> tuple[Decimal, str]:
@@ -239,4 +294,3 @@ class FcffDcfConsolePresenter:
         if largest >= Decimal("1000"):
             return Decimal("1000"), "K"
         return Decimal(1), ""
-

@@ -12,6 +12,9 @@ from edgarito.cli.presentation.valuation import (
     ComparableMultiplesConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
+from edgarito.cli.presentation.valuation_report import (
+    ValuationReportConsolePresenter,
+)
 
 __all__ = [
     "ClassificationConsolePresenter",
@@ -24,4 +27,5 @@ __all__ = [
     "MetricsConsolePresenter",
     "SpecializedExtractionConsolePresenter",
     "ValuationSelectionConsolePresenter",
+    "ValuationReportConsolePresenter",
 ]

@@ -1,5 +1,14 @@
+from __future__ import annotations
+
 from decimal import Decimal
 
+from edgarito.cli.presentation._valuation_format import (
+    format_currency,
+    format_multiple,
+    format_ratio_percent,
+    section,
+    subsection,
+)
 from edgarito.services.valuation import (
     ComparableImpliedValuation,
     ComparableMultiplesReport,
@@ -25,9 +34,7 @@ class ValuationSelectionConsolePresenter:
         if profile.economic_traits:
             traits = ", ".join(
                 self._label(trait.value)
-                for trait in sorted(
-                    profile.economic_traits, key=lambda item: item.value
-                )
+                for trait in sorted(profile.economic_traits, key=lambda item: item.value)
             )
             lines.append(f"Economic traits: {traits}")
         if profile.annual_fiscal_years:
@@ -60,9 +67,7 @@ class ValuationSelectionConsolePresenter:
                 f"  Forecast profile: {self._label(model.forecast_profile.value)}"
             )
         if model.relative_bases:
-            bases = ", ".join(
-                self._label(basis.value) for basis in model.relative_bases
-            )
+            bases = ", ".join(self._label(basis.value) for basis in model.relative_bases)
             lines.append(f"  Suggested bases: {bases}")
         for reason in model.reasons:
             lines.append(f"  + {reason}")
@@ -99,31 +104,55 @@ class ValuationSelectionConsolePresenter:
 
 
 class ComparableMultiplesConsolePresenter:
-    def render(self, report: ComparableMultiplesReport) -> str:
+    def render(
+        self,
+        report: ComparableMultiplesReport,
+        *,
+        verbose: bool = False,
+        include_warnings: bool = True,
+    ) -> str:
         target = report.target
         selected = set(report.universe.selected_tickers)
         lines = [
+            *section("PEER ANALYSIS"),
             f"{target.ticker} - {target.company_name}",
             f"LTM period: {target.fundamentals.period_start.isoformat()} to "
-            f"{target.fundamentals.period_end.isoformat()} | Price: "
-            f"{target.price:,.2f} {target.currency} on {target.price_date.isoformat()}",
-            f"Selected peers ({len(selected)}): "
-            f"{', '.join(report.universe.selected_tickers) or '-'}",
-            f"Candidate source: {report.universe.discovery_source} | "
-            f"confidence {report.universe.discovery_confidence}",
-            f"Discovery method: {report.universe.discovery_methodology}",
+            f"{target.fundamentals.period_end.isoformat()} | Current price: "
+            f"{format_currency(target.price, target.currency)} "
+            f"({target.price_date.isoformat()})",
+            f"Selected peers: {len(selected)} | Discovery confidence: "
+            f"{report.universe.discovery_confidence}",
             "",
-            "PEER SELECTION",
-            f"{'Ticker':<12} {'Score':>7}  Decision / evidence",
-            "-" * 78,
+            *subsection("PEER SELECTION"),
+            f"{'Ticker':<10}{'Score':>8}   Evidence",
+            "-" * 58,
         ]
-        for candidate in report.universe.candidates:
-            decision = "selected" if candidate.selected else "excluded"
-            detail = candidate.exclusions or candidate.reasons
+        default_candidates = [
+            candidate for candidate in report.universe.candidates if candidate.selected
+        ]
+        for candidate in default_candidates:
+            evidence = ", ".join(self._evidence_tags(candidate.reasons)) or "selected"
             lines.append(
-                f"{candidate.ticker:<12} {candidate.score:>6}/100  "
-                f"{decision}: {'; '.join(detail) or '-'}"
+                f"{candidate.ticker:<10}{candidate.score:>7}/100   {evidence}"
             )
+        if not default_candidates:
+            lines.append("No peers selected")
+        if verbose:
+            lines.extend(
+                [
+                    "",
+                    f"Discovery source: {report.universe.discovery_source}",
+                    f"Discovery method: {report.universe.discovery_methodology}",
+                    "Full selection audit:",
+                ]
+            )
+            for candidate in report.universe.candidates:
+                decision = "selected" if candidate.selected else "excluded"
+                detail = candidate.exclusions or candidate.reasons
+                lines.append(
+                    f"  {candidate.ticker} {candidate.score}/100 {decision}: "
+                    f"{'; '.join(detail) or '-'}"
+                )
 
         target_multiples = {item.basis: item for item in target.multiples}
         summaries = {item.basis: item for item in report.summaries}
@@ -131,7 +160,7 @@ class ComparableMultiplesConsolePresenter:
         lines.extend(
             [
                 "",
-                "LTM MULTIPLES",
+                *subsection("PEER MULTIPLES"),
                 f"{'Basis':<28} {'Target':>12} {'Peer median':>14} "
                 f"{'Peer range':>21} {'N':>4}",
                 "-" * 83,
@@ -141,20 +170,20 @@ class ComparableMultiplesConsolePresenter:
             target_multiple = target_multiples.get(basis)
             summary = summaries.get(basis)
             target_value = (
-                self._format_multiple(target_multiple.value, target_multiple.unit)
+                self._format_trading_multiple(target_multiple.value, target_multiple.unit)
                 if target_multiple
                 and target_multiple.status == MultipleStatus.COMPUTED
                 and target_multiple.value is not None
                 else "-"
             )
             median_value = (
-                self._format_multiple(summary.median, target_multiple.unit)
+                self._format_trading_multiple(summary.median, target_multiple.unit)
                 if summary and target_multiple
                 else "-"
             )
             peer_range = (
-                f"{self._format_multiple(summary.minimum, target_multiple.unit)}–"
-                f"{self._format_multiple(summary.maximum, target_multiple.unit)}"
+                f"{self._format_trading_multiple(summary.minimum, target_multiple.unit)}–"
+                f"{self._format_trading_multiple(summary.maximum, target_multiple.unit)}"
                 if summary and target_multiple
                 else "-"
             )
@@ -163,170 +192,110 @@ class ComparableMultiplesConsolePresenter:
                 f"{target_value:>12} {median_value:>14} {peer_range:>21} "
                 f"{summary.sample_size if summary else 0:>4}"
             )
-
-        warnings = [
-            *target.warnings,
-            *(warning for peer in report.peers for warning in peer.warnings),
-            *report.warnings,
-        ]
-        if warnings:
-            lines.extend(["", "WARNINGS"])
-            lines.extend(f"- {warning}" for warning in dict.fromkeys(warnings))
+        if include_warnings:
+            warnings = self.warnings(report)
+            if warnings:
+                lines.extend(["", *subsection("WARNINGS")])
+                lines.extend(f"- {warning}" for warning in warnings)
         return "\n".join(lines)
 
     @staticmethod
-    def _format_multiple(value: Decimal, unit: str) -> str:
+    def warnings(report: ComparableMultiplesReport) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    *report.universe.warnings,
+                    *report.target.warnings,
+                    *(warning for peer in report.peers for warning in peer.warnings),
+                    *report.warnings,
+                ]
+            )
+        )
+
+    @staticmethod
+    def _evidence_tags(reasons: list[str]) -> tuple[str, ...]:
+        joined = " ".join(reasons).casefold()
+        candidates = (
+            (
+                ("same sector", "sector"),
+                ("same business archetype", "archetype"),
+                ("revenue scale is comparable", "scale"),
+            )
+            if "same sector" in joined
+            else (
+                ("same business archetype", "archetype"),
+                ("same lifecycle", "lifecycle"),
+                ("observable growth", "economics"),
+                ("revenue scale is comparable", "scale"),
+                ("same cyclicality", "cyclicality"),
+            )
+        )
+        return tuple(label for marker, label in candidates if marker in joined)[:3]
+
+    @staticmethod
+    def _format_trading_multiple(value: Decimal, unit: str) -> str:
         return f"{value:,.2f}%" if unit == "percent" else f"{value:,.2f}x"
 
 
 class ComparableImpliedValuationConsolePresenter:
-    def render(self, result: ComparableImpliedValuation) -> str:
+    def render(
+        self,
+        result: ComparableImpliedValuation,
+        *,
+        verbose: bool = False,
+        include_warnings: bool = True,
+    ) -> str:
         multiple = result.resolved_multiple
-
-        def anchor(value):
-            return f"{value:,.2f}x" if value is not None else "unavailable"
-
         peer_label = {
             "forward": "Peer forward baseline",
             "current_ltm_fallback": "Peer baseline (current LTM)",
-            "dcf_fallback": "Base multiple (DCF fallback)",
-        }.get(multiple.peer_anchor_source, "Peer/base multiple")
-
+            "dcf_fallback": "Peer baseline (DCF fallback)",
+        }.get(multiple.peer_anchor_source, "Peer forward baseline")
         lines = [
-            "MARKET-RELATIVE IMPLIED VALUATION",
+            *section("RELATIVE VALUATION"),
             f"{result.ticker or result.company_id} - {result.company_name}",
             f"Valuation date: {result.valuation_date.isoformat()} | Target date: "
-            f"{result.target_date.isoformat()} ({result.horizon_years:,.2f} years)",
+            f"{result.target_date.isoformat()} ({result.horizon_years:,.1f} years)",
             f"Basis: {ValuationSelectionConsolePresenter._label(result.basis.value)} | "
-            f"Metric: {result.forecast_metric_label}",
+            f"Forecast metric: {result.forecast_metric_label}",
             "",
-            "MULTIPLE RESOLUTION",
-            f"{peer_label + ':':<36}{anchor(multiple.market_anchor)}",
-            f"DCF-implied forward multiple:   {anchor(multiple.fundamental_anchor)}",
-            "DCF-implied premium vs peers:   "
-            + (
-                f"{multiple.fundamental_premium:+,.1%}"
-                if multiple.fundamental_premium is not None
-                else "unavailable"
-            ),
-            f"Target historical median:       {anchor(multiple.historical_anchor)}",
-            "Target historical IQR:          "
-            + (
-                f"{multiple.historical_percentile_25:,.2f}x-"
-                f"{multiple.historical_percentile_75:,.2f}x"
-                if multiple.historical_percentile_25 is not None
-                and multiple.historical_percentile_75 is not None
-                else "unavailable"
-            ),
-            f"Historical observations:         {multiple.historical_sample_size}",
-            "Historical multiple volatility: "
-            + (
-                f"{multiple.historical_volatility:,.1%}"
-                if multiple.historical_volatility is not None
-                else "unavailable"
-            ),
-            "Historical multiple trend:      "
-            + (
-                f"{multiple.historical_trend:+,.1%}"
-                if multiple.historical_trend is not None
-                else "unavailable"
-            ),
-            f"Current target comparative multiple: "
-            f"{anchor(multiple.current_target_anchor)}",
-            "Current target premium vs base: "
-            + (
-                f"{multiple.observed_premium:+,.1%}"
-                if multiple.observed_premium is not None
-                else "unavailable"
-            ),
-            "Historical long-run premium:    "
-            + (
-                f"{multiple.historical_peer_premium:+,.1%}"
-                if multiple.historical_peer_premium is not None
-                else " unavailable"
-            ),
-            f"Synchronized premium observations: "
-            f"{multiple.premium_history_sample_size}",
-            "Median premium observation interval: "
-            + (
-                f"{multiple.premium_observation_interval_years:,.2f} years"
-                if multiple.premium_observation_interval_years is not None
-                else "unavailable"
-            ),
-            "Raw AR(1) phi (deviation persistence): "
-            + (
-                f"{multiple.premium_mean_reversion_beta:,.2f}"
-                if multiple.premium_mean_reversion_beta is not None
-                else "unavailable"
-            ),
-            f"Shrunk AR(1) phi:               "
-            f"{multiple.shrunk_premium_persistence:,.2f}",
-            "Statistical premium at horizon: "
-            + (
-                f"{multiple.statistical_premium:+,.1%}"
-                if multiple.statistical_premium is not None
-                else "unavailable"
-            ),
-            f"Premium-history weight:         {multiple.premium_history_weight:,.1%}",
-            f"Fundamental quality support:    {multiple.fundamental_support:,.1%}",
-            f"Horizon evidence retention:     {multiple.horizon_retention:,.1%}",
-            f"Statistical-anchor evidence weight: {multiple.persistence_factor:,.1%}",
-            "Resolved target premium:        "
-            + (
-                f"{multiple.resolved_premium:+,.1%}"
-                if multiple.resolved_premium is not None
-                else "unavailable"
-            ),
-            f"Resolved forward multiple:      {multiple.point_estimate:,.2f}x",
-            f"Reasonable range:                {multiple.lower_bound:,.2f}x-"
-            f"{multiple.upper_bound:,.2f}x",
-            "Range evidence: DCF anchor, peer IQR, and synchronized premium IQR",
-            "Confidence:",
-            f"  peer baseline:                {multiple.peer_confidence.value}",
-            f"  target history:               "
-            f"{multiple.target_history_confidence.value}",
-            f"  premium persistence:          "
-            f"{multiple.premium_persistence_confidence.value}",
-            f"  overall relative valuation:   {multiple.confidence.value}",
-            f"Peer sample: {multiple.sample_size}",
-            "",
-            f"{'Case':<12}{'Multiple':>12}{'Target-date price':>22}{'Present value':>20}",
-            "-" * 66,
+            *subsection("MULTIPLE RESOLUTION"),
+            f"{peer_label + ':':<40}{format_multiple(multiple.market_anchor)}",
+            f"{'DCF-implied forward multiple:':<40}"
+            f"{format_multiple(multiple.fundamental_anchor)}",
+            f"{'Current target comparative multiple:':<40}"
+            f"{format_multiple(multiple.current_target_anchor)}",
+            f"{'Historical premium:':<40}"
+            f"{format_ratio_percent(multiple.historical_peer_premium, signed=True)}",
+            f"{'Resolved premium:':<40}"
+            f"{format_ratio_percent(multiple.resolved_premium, signed=True)}",
+            f"{'Resolved multiple:':<40}{format_multiple(multiple.point_estimate)}",
+            f"{'Evidence range:':<40}"
+            f"{format_multiple(multiple.lower_bound)}–"
+            f"{format_multiple(multiple.upper_bound)}",
+            f"{'Confidence:':<40}{multiple.confidence.value}",
         ]
+        if verbose:
+            lines.extend(["", *self._multiple_audit(result)])
+        lines.extend(
+            [
+                "",
+                f"{'Case':<12}{'Multiple':>12}{'Target-date value':>24}"
+                f"{'Present-value equivalent today':>34}",
+                "-" * 82,
+            ]
+        )
         for case in (result.lower_case, result.point_case, result.upper_case):
             lines.append(
                 f"{case.label:<12}{case.multiple:>11,.2f}x"
-                f"{case.implied_value_per_share:>18,.2f} {result.currency}"
-                f"{case.present_value_per_share:>16,.2f} {result.currency}"
-            )
-        if result.intrinsic_value_per_share is not None:
-            difference = (
-                result.point_case.present_value_per_share
-                - result.intrinsic_value_per_share
-            )
-            lines.extend(
-                [
-                    "",
-                    "MODEL COMPARISON",
-                    f"Intrinsic FCFF DCF:             "
-                    f"{result.intrinsic_value_per_share:,.2f} {result.currency}",
-                    f"Relative target-date price:     "
-                    f"{result.point_case.implied_value_per_share:,.2f} "
-                    f"{result.currency}",
-                    f"Relative present-value equivalent today: "
-                    f"{result.point_case.present_value_per_share:,.2f} "
-                    f"{result.currency}",
-                    f"Market-premium difference:      {difference:+,.2f} "
-                    f"{result.currency}",
-                    "The DCF values forecast cash flows; the relative estimate "
-                    "also retains an evidence-constrained market premium.",
-                ]
+                f"{format_currency(case.implied_value_per_share, result.currency):>24}"
+                f"{format_currency(case.present_value_per_share, result.currency):>34}"
             )
         if result.current_price is not None:
             lines.extend(
                 [
-                    f"Current price:                   {result.current_price:,.2f} "
-                    f"{result.currency}",
+                    "",
+                    f"Current price: {format_currency(result.current_price, result.currency)}",
                     "Current-price implied forward multiple: "
                     + (
                         f"{result.current_price_implied_multiple:,.2f}x "
@@ -342,18 +311,71 @@ class ComparableImpliedValuationConsolePresenter:
         ):
             lines.extend(
                 [
-                    f"Analyst target price:            "
-                    f"{result.analyst_target_price:,.2f} {result.currency}",
-                    "Analyst target vs resolved target-date price: "
-                    f"{result.analyst_target_price - result.point_case.implied_value_per_share:+,.2f} "
-                    f"{result.currency}",
-                    f"Analyst-target implied multiple: "
+                    f"Analyst target-date value: "
+                    f"{format_currency(result.analyst_target_price, result.currency)}",
+                    "Analyst-target implied multiple: "
                     f"{result.analyst_target_implied_multiple:,.2f}x "
                     f"{ValuationSelectionConsolePresenter._label(result.basis.value)}",
                 ]
             )
-        if result.warnings:
-            lines.extend(["", "WARNINGS"])
+        if include_warnings and result.warnings:
+            lines.extend(["", *subsection("WARNINGS")])
             lines.extend(f"- {warning}" for warning in result.warnings)
         return "\n".join(lines)
 
+    @staticmethod
+    def _multiple_audit(result: ComparableImpliedValuation) -> list[str]:
+        multiple = result.resolved_multiple
+        lines = [
+            *subsection("MULTIPLE-RESOLUTION AUDIT"),
+            f"DCF-implied premium vs peers: "
+            f"{format_ratio_percent(multiple.fundamental_premium, signed=True)}",
+            f"Target historical median: {format_multiple(multiple.historical_anchor)}",
+            "Target historical IQR: "
+            f"{format_multiple(multiple.historical_percentile_25)}–"
+            f"{format_multiple(multiple.historical_percentile_75)}",
+            f"Historical observations: {multiple.historical_sample_size}",
+            f"Historical multiple volatility: "
+            f"{format_ratio_percent(multiple.historical_volatility)}",
+            f"Historical multiple trend: "
+            f"{format_ratio_percent(multiple.historical_trend, signed=True)}",
+            f"Current target premium vs baseline: "
+            f"{format_ratio_percent(multiple.observed_premium, signed=True)}",
+            f"Synchronized premium observations: "
+            f"{multiple.premium_history_sample_size}",
+            "Median premium observation interval: "
+            + (
+                f"{multiple.premium_observation_interval_years:,.2f} years"
+                if multiple.premium_observation_interval_years is not None
+                else "unavailable"
+            ),
+            "Raw AR(1) phi: "
+            + (
+                f"{multiple.premium_mean_reversion_beta:,.2f}"
+                if multiple.premium_mean_reversion_beta is not None
+                else "unavailable"
+            ),
+            f"Shrunk AR(1) phi: {multiple.shrunk_premium_persistence:,.2f}",
+            f"Statistical premium at horizon: "
+            f"{format_ratio_percent(multiple.statistical_premium, signed=True)}",
+            f"Premium-history weight: {multiple.premium_history_weight:,.1%}",
+            f"Quality-support score: {multiple.fundamental_support:,.1%}",
+            f"Horizon retention: {multiple.horizon_retention:,.1%}",
+            f"Statistical-anchor weight: {multiple.persistence_factor:,.1%}",
+            "Confidence detail: "
+            f"peer={multiple.peer_confidence.value}, "
+            f"history={multiple.target_history_confidence.value}, "
+            f"persistence={multiple.premium_persistence_confidence.value}",
+            f"Peer sample: {multiple.sample_size}",
+            f"Methodology: {multiple.methodology}",
+        ]
+        if result.intrinsic_value_per_share is not None:
+            lines.extend(
+                [
+                    f"Intrinsic value: "
+                    f"{format_currency(result.intrinsic_value_per_share, result.currency)}",
+                    f"Relative value (present value): "
+                    f"{format_currency(result.point_case.present_value_per_share, result.currency)}",
+                ]
+            )
+        return lines

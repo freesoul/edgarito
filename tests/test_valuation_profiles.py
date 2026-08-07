@@ -581,7 +581,7 @@ def test_default_valuation_creates_and_reports_a_ticker_profile(
     assert exit_code == 0
     assert generated_path.is_file()
     assert f"Generated valuation profile: {generated_path.resolve()}" in output
-    assert "Valuation profile: aapl" in output
+    assert "Profile: aapl" in output
     generated = ValuationProfileLoader.load(generated_path)
     assert (
         generated.valuation.multistage.terminal_return_on_invested_capital

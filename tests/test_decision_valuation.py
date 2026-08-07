@@ -4,6 +4,9 @@ from decimal import Decimal
 import pytest
 
 from edgarito.cli.presentation.decision import DecisionValuationConsolePresenter
+from edgarito.cli.presentation.valuation_report import (
+    ValuationReportConsolePresenter,
+)
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -339,12 +342,36 @@ def test_console_keeps_the_default_summary_concise_and_exposes_optional_details(
     )
 
     assert "DECISION SUMMARY" in summary
-    assert "MoS convention" in summary
+    assert "Margin-of-safety convention" not in summary
     assert "SENSITIVITY:" not in summary
-    assert "SCENARIO ASSUMPTIONS" in details
-    assert "SENSITIVITY: Value/share sensitivity" in details
-    assert "REVERSE DCF (ONE VARIABLE AT A TIME)" in details
-    assert "do not form a combined market forecast" in details
+    assert "SCENARIOS" in details
+    assert "SENSITIVITY: VALUE/SHARE SENSITIVITY" in details
+    assert "REVERSE DCF" in details
+    assert "rows are not a combined forecast" in details
+    assert details.rfind("DECISION SUMMARY") > details.rfind("REVERSE DCF")
+
+    audit = presenter.render(result, verbose=True)
+    assert "Margin-of-safety convention" in audit
+
+
+def test_consolidated_warning_output_deduplicates_shortens_and_adds_severity():
+    message = (
+        "Projected net debt and diluted shares are held flat because no "
+        "capital-structure forecast was supplied"
+    )
+    rendered = ValuationReportConsolePresenter._render_warnings(
+        [message, message, "Enterprise value does not cover reported net debt"],
+        verbose=False,
+    )
+    audit = ValuationReportConsolePresenter._render_warnings(
+        [message], verbose=True
+    )
+
+    assert rendered.count("Projected net debt") == 1
+    assert "[HIGH] Enterprise value does not cover reported net debt." in rendered
+    assert "[INFO] Projected net debt and diluted shares are held flat." in rendered
+    assert "because no capital-structure forecast was supplied" not in rendered
+    assert "because no capital-structure forecast was supplied" in audit
 
 
 @pytest.mark.parametrize(

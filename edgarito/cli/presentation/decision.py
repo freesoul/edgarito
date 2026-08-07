@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from edgarito.cli.presentation._valuation_format import (
+    format_currency,
+    section,
+)
 from edgarito.services.valuation import (
     DecisionScenario,
     DecisionValuationResult,
@@ -6,7 +12,7 @@ from edgarito.services.valuation import (
 
 
 class DecisionValuationConsolePresenter:
-    """Render decision outputs without deriving or changing valuation evidence."""
+    """Render decision evidence without deriving or changing valuation results."""
 
     def render(
         self,
@@ -15,13 +21,58 @@ class DecisionValuationConsolePresenter:
         show_scenarios: bool = False,
         show_sensitivity: bool = False,
         show_reverse_dcf: bool = False,
+        verbose: bool = False,
+        include_warnings: bool = True,
     ) -> str:
+        lines = self.render_details(
+            result,
+            show_scenarios=show_scenarios,
+            show_sensitivity=show_sensitivity,
+            show_reverse_dcf=show_reverse_dcf,
+            verbose=verbose,
+        )
+        if include_warnings and result.warnings:
+            if lines:
+                lines.append("")
+            lines.extend([*section("CONSOLIDATED WARNINGS")])
+            lines.extend(f"- {warning}" for warning in result.warnings)
+        if lines:
+            lines.append("")
+        lines.extend(self.render_summary(result, verbose=verbose))
+        return "\n".join(lines)
+
+    def render_details(
+        self,
+        result: DecisionValuationResult,
+        *,
+        show_scenarios: bool,
+        show_sensitivity: bool,
+        show_reverse_dcf: bool,
+        verbose: bool,
+    ) -> list[str]:
+        lines: list[str] = []
+        if show_scenarios:
+            lines.extend(self._scenario_details(result, verbose=verbose))
+        if show_sensitivity:
+            if lines:
+                lines.append("")
+            lines.extend(self._sensitivity_details(result, verbose=verbose))
+        if show_reverse_dcf:
+            if lines:
+                lines.append("")
+            lines.extend(self._reverse_details(result, verbose=verbose))
+        return lines
+
+    def render_summary(
+        self, result: DecisionValuationResult, *, verbose: bool = False
+    ) -> list[str]:
         lines = [
-            "DECISION SUMMARY",
-            f"Current price ({result.currency}): {result.current_price:,.2f}",
+            *section("DECISION SUMMARY"),
+            f"Current price: {format_currency(result.current_price, result.currency)}",
             "",
-            f"{'Evidence':<18}{'Value/share':>15}{'Upside/(down)':>17}{'MoS':>12}",
-            "-" * 62,
+            f"{'Evidence':<18}{f'Value/share ({result.currency})':>20}"
+            f"{'Upside/(downside)':>20}{'Margin of safety':>18}",
+            "-" * 76,
         ]
         for comparison in result.price_comparisons:
             margin = (
@@ -30,8 +81,8 @@ class DecisionValuationConsolePresenter:
                 else "n/a"
             )
             lines.append(
-                f"{comparison.label:<18}{comparison.value_per_share:>15,.2f}"
-                f"{comparison.upside_downside:>+16,.1f}%{margin:>12}"
+                f"{comparison.label:<18}{comparison.value_per_share:>20,.2f}"
+                f"{comparison.upside_downside:>+19,.1f}%{margin:>18}"
             )
         assessment = result.assessment
         lines.extend(
@@ -46,14 +97,6 @@ class DecisionValuationConsolePresenter:
                 f"Overall assessment: {assessment.overall}",
             ]
         )
-        if assessment.model_dispersion is not None:
-            lines.append(
-                f"Intrinsic/relative dispersion: {assessment.model_dispersion}"
-            )
-        lines.append(
-            "MoS convention: 1 - current price / estimated value; negative means "
-            "price exceeds estimated value."
-        )
         market_growth = next(
             (
                 item
@@ -65,31 +108,36 @@ class DecisionValuationConsolePresenter:
         if market_growth is not None:
             if market_growth.status == ReverseDcfStatus.SOLVED:
                 lines.append(
-                    "Market-implied initial revenue growth: "
-                    f"{market_growth.implied_value:,.2f}% vs "
-                    f"{market_growth.base_value:,.2f}% base"
+                    "Main reverse-DCF implied expectation: initial revenue growth "
+                    f"{market_growth.implied_value:,.1f}% vs "
+                    f"{market_growth.base_value:,.1f}% base"
                 )
             else:
                 lines.append(
-                    "Market-implied initial revenue growth: no solution in "
-                    f"{market_growth.lower_bound:,.2f}% to "
-                    f"{market_growth.upper_bound:,.2f}% range"
+                    "Main reverse-DCF implied expectation: initial revenue growth "
+                    "has no solution within "
+                    f"{market_growth.lower_bound:,.1f}% to "
+                    f"{market_growth.upper_bound:,.1f}%"
                 )
-
-        if show_scenarios:
-            lines.extend(self._scenario_details(result))
-        if show_sensitivity:
-            lines.extend(self._sensitivity_details(result))
-        if show_reverse_dcf:
-            lines.extend(self._reverse_details(result))
-        if result.warnings:
-            lines.extend(["", "Decision-analysis warnings:"])
-            lines.extend(f"- {warning}" for warning in result.warnings)
-        return "\n".join(lines)
+        if verbose:
+            if assessment.model_dispersion is not None:
+                lines.append(
+                    f"Intrinsic/relative dispersion: {assessment.model_dispersion}"
+                )
+            lines.extend(
+                [
+                    "Margin-of-safety convention: 1 - current price / estimated "
+                    "value; negative means price exceeds estimated value.",
+                    f"Decision methodology: {result.methodology}",
+                ]
+            )
+        return lines
 
     @staticmethod
-    def _scenario_details(result: DecisionValuationResult) -> list[str]:
-        lines = ["", "SCENARIO ASSUMPTIONS"]
+    def _scenario_details(
+        result: DecisionValuationResult, *, verbose: bool
+    ) -> list[str]:
+        lines = [*section("SCENARIOS")]
         headers = tuple(
             case.scenario.value.title() for case in result.intrinsic_scenarios
         )
@@ -124,33 +172,33 @@ class DecisionValuationConsolePresenter:
                     f"{values[1]:>12,.2f}{values[2]:>12,.2f}",
                 ]
             )
-        changed = {
-            assumption.name
-            for case in result.intrinsic_scenarios
-            if case.scenario != DecisionScenario.BASE
-            for assumption in case.assumptions
-            if assumption.changed
-        }
-        lines.append(
-            "Scenario policy changed: "
-            + (
-                ", ".join(sorted(changed))
-                if changed
-                else "none (explicit overrides preserved)"
+        if verbose:
+            changed = {
+                assumption.name
+                for case in result.intrinsic_scenarios
+                if case.scenario != DecisionScenario.BASE
+                for assumption in case.assumptions
+                if assumption.changed
+            }
+            lines.append(
+                "Scenario policy changed: "
+                + (", ".join(sorted(changed)) if changed else "none")
             )
-        )
-        lines.append(result.methodology)
+            lines.append(f"Methodology: {result.methodology}")
         return lines
 
     @staticmethod
-    def _sensitivity_details(result: DecisionValuationResult) -> list[str]:
+    def _sensitivity_details(
+        result: DecisionValuationResult, *, verbose: bool
+    ) -> list[str]:
         lines: list[str] = []
-        for table in result.sensitivity_tables:
+        for index, table in enumerate(result.sensitivity_tables):
+            if index:
+                lines.append("")
             axes_label = f"{table.row_label} / {table.column_label}"
             lines.extend(
                 [
-                    "",
-                    f"SENSITIVITY: {table.name}",
+                    *section(f"SENSITIVITY: {table.name}"),
                     f"{axes_label:<16}"
                     + "".join(f"{value:>11,.2f}%" for value in table.column_values),
                     "-" * (16 + 11 * len(table.column_values)),
@@ -166,16 +214,18 @@ class DecisionValuationConsolePresenter:
                     for cell in row
                 )
                 lines.append(f"{row_value:>14,.2f}% {rendered}")
-            lines.append(table.methodology)
+            if verbose:
+                lines.append(f"Methodology: {table.methodology}")
         return lines
 
     @staticmethod
-    def _reverse_details(result: DecisionValuationResult) -> list[str]:
+    def _reverse_details(
+        result: DecisionValuationResult, *, verbose: bool
+    ) -> list[str]:
         if not result.reverse_dcf:
             return []
         lines = [
-            "",
-            "REVERSE DCF (ONE VARIABLE AT A TIME)",
+            *section("REVERSE DCF"),
             f"{'Assumption':<24}{'Base':>11}{'Implied':>12}{'Search range':>24}",
             "-" * 71,
         ]
@@ -191,9 +241,10 @@ class DecisionValuationConsolePresenter:
                 f"{label:<24}{solution.base_value:>10,.2f}%"
                 f"{implied:>12}{search_range:>24}"
             )
+            if verbose:
+                lines.append(f"  {solution.explanation}")
         lines.append(
-            "Each implied assumption is solved independently; the rows do not form "
-            "a combined market forecast."
+            "Each assumption is solved independently; rows are not a combined forecast."
         )
         return lines
 

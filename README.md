@@ -634,10 +634,13 @@ the latest quote through the ECB's daily currency-per-euro reference rates and
 records `yahoo+ecb-fx` in the WACC source. This includes direct conversions such
 as USD to EUR and euro-cross conversions between two non-EUR currencies.
 
-The CLI prints every selected assumption and its provider. Historical cost of
-debt and book debt as a market-debt proxy are estimates, so override `--wacc` or
-the component fields in a company-specific profile when the issuer's economics
-make them unsuitable.
+The default CLI report prints the resolved WACC, terminal assumptions, cost of
+equity, beta, tax rate, forecast seed, and projection structure. Use `--audit`
+for every selected assumption, its provenance, and methodology. `--verbose`
+shows the same valuation audit and also enables debug logging. Historical cost
+of debt and book debt as a market-debt proxy are estimates, so override `--wacc`
+or the component fields in a company-specific profile when the issuer's
+economics make them unsuitable.
 
 When final explicit FCFF growth remains at least one percentage point away from
 perpetual growth, the valuation also warns that the terminal transition is
@@ -724,7 +727,9 @@ uv run edgarito valuation --ticker AAPL --wacc 8 \
 ```
 
 The result reports every cash flow, discount period and factor, terminal-value
-contribution, enterprise/equity bridge, input sources, and sensitivity warnings.
+contribution, and the enterprise-to-equity bridge. Source details and model
+internals are available under `--audit` or `--verbose`; warnings are deduplicated
+and consolidated near the end of the report.
 
 ## Turn valuation evidence into a decision range
 

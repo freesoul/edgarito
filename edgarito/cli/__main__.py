@@ -17,14 +17,11 @@ from edgarito.cli.comparables import (
 from edgarito.cli.parser import build_parser
 from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
-    ComparableImpliedValuationConsolePresenter,
-    ComparableMultiplesConsolePresenter,
-    DecisionValuationConsolePresenter,
-    FcffDcfConsolePresenter,
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
     MetricsConsolePresenter,
     SpecializedExtractionConsolePresenter,
+    ValuationReportConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
 from edgarito.config.valuation import ForecastMethod, ValuationProfileLoader
@@ -204,6 +201,9 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 async def _run_valuation(args: argparse.Namespace) -> int:
     generated_profile_path = None
     should_generate_profile = False
+    peer_report = None
+    decision_result = None
+    additional_warnings: list[str] = []
     if args.ticker:
         profile, generated_profile_path, should_generate_profile = (
             ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
@@ -546,8 +546,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 )
             }
         )
-    if selected_model in {"fcff-dcf", "both"}:
-        print(FcffDcfConsolePresenter().render(result, profile_name=profile.name))
+    if selected_model == "comparables":
+        additional_warnings.extend(result.warnings)
     if selected_model in {"comparables", "both"}:
         if terminal_method != TerminalValueMethod.PERPETUITY_GROWTH:
             raise ValueError(
@@ -566,9 +566,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         if horizon_years <= 0:
             raise ValueError("--horizon-years must be positive")
         if comparable_bundle is None:
-            print(
-                "\nRelative valuation skipped: automatic peer evidence could not be "
-                f"prepared ({comparable_error or 'unknown provider failure'})."
+            additional_warnings.append(
+                "Relative valuation skipped: automatic peer evidence could not be "
+                f"prepared ({comparable_error or 'unknown provider failure'})"
             )
         else:
             report = comparable_bundle.report
@@ -588,23 +588,21 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 valuation_date,
                 horizon_years,
             )
-            if selected_model == "both":
-                print("\n" + "=" * 84 + "\n")
-            print(ComparableMultiplesConsolePresenter().render(report))
+            peer_report = report
             relative_ready = True
             if report.universe.discovery_confidence == "low":
-                print(
-                    "\nRelative valuation skipped: selected peer evidence has low "
-                    "economic-comparability confidence."
+                additional_warnings.append(
+                    "Relative valuation skipped: selected peer evidence has low "
+                    "economic-comparability confidence"
                 )
                 relative_ready = False
             elif len(report.universe.selected_tickers) < (
                 relative_configuration.multiple_resolution.minimum_peer_sample
             ):
-                print(
-                    "\nRelative valuation skipped: peer evidence is below the "
+                additional_warnings.append(
+                    "Relative valuation skipped: peer evidence is below the "
                     f"configured minimum sample of "
-                    f"{relative_configuration.multiple_resolution.minimum_peer_sample}."
+                    f"{relative_configuration.multiple_resolution.minimum_peer_sample}"
                 )
                 relative_ready = False
             if relative_ready:
@@ -649,10 +647,6 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     current_price=report.target.price,
                     analyst_target_price=args.analyst_target_price,
                     intrinsic_value_per_share=result.value_per_share,
-                )
-                print("\n" + "=" * 84 + "\n")
-                print(
-                    ComparableImpliedValuationConsolePresenter().render(relative_result)
                 )
     current_price = (
         relative_result.current_price if relative_result is not None else None
@@ -714,19 +708,25 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 relative_result,
             )
         except ValueError as exc:
-            print(f"\nDecision analysis unavailable: {exc}")
-        else:
-            print("\n" + "=" * 84 + "\n")
-            print(
-                DecisionValuationConsolePresenter().render(
-                    decision_result,
-                    show_scenarios=args.scenarios,
-                    show_sensitivity=args.sensitivity,
-                    show_reverse_dcf=args.reverse_dcf,
-                )
-            )
+            additional_warnings.append(f"Decision analysis unavailable: {exc}")
     elif current_price is None and decision_configuration.enabled:
-        print("\nDecision analysis skipped: no current market price was available.")
+        additional_warnings.append(
+            "Decision analysis skipped: no current market price was available"
+        )
+    report_output = ValuationReportConsolePresenter().render(
+        intrinsic=result if selected_model in {"fcff-dcf", "both"} else None,
+        peer_report=peer_report,
+        relative=relative_result,
+        decision=decision_result,
+        profile_name=profile.name,
+        show_scenarios=args.scenarios,
+        show_sensitivity=args.sensitivity,
+        show_reverse_dcf=args.reverse_dcf,
+        verbose=args.verbose or args.audit,
+        additional_warnings=tuple(additional_warnings),
+    )
+    if report_output:
+        print(report_output)
     return 0
 
 

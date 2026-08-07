@@ -4,7 +4,10 @@ from statistics import median
 
 import pytest
 
-from edgarito.cli.presentation.console import ComparableImpliedValuationConsolePresenter
+from edgarito.cli.presentation.console import (
+    ComparableImpliedValuationConsolePresenter,
+    ComparableMultiplesConsolePresenter,
+)
 from edgarito.config.valuation import MultipleResolutionConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -510,6 +513,13 @@ def test_comparable_report_aggregates_only_selected_peer_values():
     assert pe.maximum == Decimal("12")
     assert pe.sample_size == 2
 
+    rendered = ComparableMultiplesConsolePresenter().render(report)
+    audit = ComparableMultiplesConsolePresenter().render(report, verbose=True)
+    assert "PEER ANALYSIS" in rendered
+    assert "PEER1" in rendered
+    assert "Same normalized industry" not in rendered
+    assert "Same normalized industry" in audit
+
 
 def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     target_profile = _profile("TARGET")
@@ -629,8 +639,14 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert implied.analyst_target_implied_multiple == Decimal("1.76")
     assert implied.current_price_implied_multiple == Decimal("1.6")
     rendered = ComparableImpliedValuationConsolePresenter().render(implied)
-    assert "Analyst target vs resolved target-date price" in rendered
-    assert "Relative present-value equivalent today" in rendered
+    audit = ComparableImpliedValuationConsolePresenter().render(
+        implied, verbose=True
+    )
+    assert "Analyst target-date value" in rendered
+    assert "Present-value equivalent today" in rendered
+    assert "Evidence range" in rendered
+    assert "Raw AR(1) phi" not in rendered
+    assert "Raw AR(1) phi" in audit
 
 
 def test_weak_history_falls_back_to_dcf_anchor_and_never_averages_raw_multiples():

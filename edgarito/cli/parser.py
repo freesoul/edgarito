@@ -365,6 +365,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show all independently solved market-implied DCF assumptions",
     )
+    valuation.add_argument(
+        "--audit",
+        action="store_true",
+        help=(
+            "Show full valuation diagnostics and provenance without enabling "
+            "debug logging"
+        ),
+    )
     valuation_models.add_argument(
         "--classification-provider",
         choices=[
@@ -536,7 +544,14 @@ def _add_retrieval_arguments(
             "or configure user_agent in .env"
         ),
     )
-    command_parser.add_argument("--verbose", action="store_true")
+    command_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Enable debug logging; valuation also shows full diagnostics and "
+            "provenance"
+        ),
+    )
 
 
 def _add_valuation_profile_argument(
