@@ -1,9 +1,5 @@
 
 
-- when a config json exist for a ticker (eg race.json for ferrari) make sure we load it even if no profile argument is passed with its path.
-
-- some files grew too big (like cli/presentation/console.py). refactorize into parts.
-
 
 1. **Finish generic valuation core**
 
