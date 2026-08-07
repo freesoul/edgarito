@@ -82,17 +82,20 @@ def _baseline():
 def _guidance(
     metric,
     *,
+    metric_name=None,
     year=2025,
     low=None,
     high=None,
     point=None,
     kind=GuidanceValueKind.MONETARY,
     currency="USD",
+    basis=GuidanceBasis.GAAP,
     status=GuidanceStatus.ISSUED,
     filed=datetime.date(2025, 2, 1),
 ):
     return ManagementGuidance(
         metric=metric,
+        metric_name=metric_name,
         fiscal_year=year,
         period_type=GuidancePeriodType.FISCAL_YEAR,
         point=Decimal(point) if point is not None else None,
@@ -101,7 +104,7 @@ def _guidance(
         value_kind=kind,
         currency=currency,
         unit=currency or kind.value,
-        basis=GuidanceBasis.GAAP,
+        basis=basis,
         scope=GuidanceScope.CONSOLIDATED,
         status=status,
         filing_date=filed,
@@ -139,6 +142,65 @@ def test_revenue_guidance_midpoint_becomes_absolute_anchor():
         "management guidance midpoint revenue anchor"
     )
     assert gross_margin in result.evidence_only
+
+
+def test_named_revenue_component_cannot_replace_total_company_anchor():
+    total_revenue = _guidance(
+        GuidanceMetric.REVENUE,
+        low="51000000000",
+        high="51400000000",
+    )
+    ads_revenue = _guidance(
+        GuidanceMetric.REVENUE,
+        metric_name="ads revenue",
+        point="3000000000",
+    )
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [total_revenue, ads_revenue],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    assert parameters.revenue_anchors == {2025: Decimal("51200000000")}
+    assert [item.guidance for item in result.applications] == [total_revenue]
+    assert ads_revenue in result.evidence_only
+    assert any(
+        "named revenue component 'ads revenue'" in reason
+        for reason in result.rejected_reasons
+    )
+
+
+def test_reported_total_revenue_wins_over_unknown_basis_regardless_of_order():
+    total_revenue = _guidance(
+        GuidanceMetric.REVENUE,
+        low="51000000000",
+        high="51400000000",
+        basis=GuidanceBasis.REPORTED,
+    )
+    misleading_revenue = _guidance(
+        GuidanceMetric.REVENUE,
+        point="3000000000",
+        basis=GuidanceBasis.UNKNOWN,
+    )
+
+    for records in (
+        [total_revenue, misleading_revenue],
+        [misleading_revenue, total_revenue],
+    ):
+        parameters, result = GuidanceForecastOverlay().apply(
+            records,
+            baseline=_baseline(),
+            parameters=FcffForecastParameters(forecast_years=2),
+        )
+
+        assert parameters.revenue_anchors == {2025: Decimal("51200000000")}
+        assert [item.guidance for item in result.applications] == [total_revenue]
+        assert misleading_revenue in result.evidence_only
+        assert any(
+            "lower-priority guidance" in reason
+            for reason in result.rejected_reasons
+        )
 
 
 def test_capex_uses_guided_revenue_but_gross_margin_never_maps_to_operating_margin():

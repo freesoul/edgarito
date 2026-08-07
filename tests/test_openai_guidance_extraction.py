@@ -19,7 +19,11 @@ from edgarito.schemas.guidance.management import (
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
+from edgarito.services.guidance.extraction import (
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+    ManagementGuidanceExtractor,
+)
 from edgarito.services.openai import (
     OpenAIClient,
     OpenAIExtractionError,
@@ -209,16 +213,16 @@ def test_extraction_cache_invalidates_for_identity_changes(tmp_path, change):
 
     changed_document = document
     changed_ai = ai
-    prompt = "management-guidance-v1"
-    schema = "management-guidance-schema-v1"
+    prompt = PROMPT_VERSION
+    schema = SCHEMA_VERSION
     if change == "content":
         changed_document = _document(document.content + " Updated outlook.")
     elif change == "model":
         changed_ai = _DomainOpenAI(_response(), model="gpt-other")
     elif change == "prompt":
-        prompt = "management-guidance-v2"
+        prompt = f"{PROMPT_VERSION}-changed"
     else:
-        schema = "management-guidance-schema-v2"
+        schema = f"{SCHEMA_VERSION}-changed"
     asyncio.run(
         ManagementGuidanceExtractor(
             changed_ai, cache, prompt_version=prompt, schema_version=schema

@@ -23,7 +23,7 @@ from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import normalize_evidence
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "management-guidance-v1"
+PROMPT_VERSION = "management-guidance-v2"
 SCHEMA_VERSION = "management-guidance-schema-v1"
 
 EXTRACTION_INSTRUCTIONS = """
@@ -35,10 +35,13 @@ expectations, third-party forecasts, or qualitative statements. In particular, d
 turn expressions such as "high-single-digit growth" into numbers. Preserve points and
 ranges exactly as stated. Distinguish quarterly from fiscal-year and long-term guidance,
 consolidated from segment guidance, and GAAP/non-GAAP/constant-currency basis when
-explicit. Use null when a field is not explicit. Copy a concise supporting_text excerpt
-verbatim from the SEC document for every item. Monetary point/low/high values must use
-the stated display unit (for example, 43 with unit=billions), not a computed midpoint.
-Return an empty guidance list when no qualifying management guidance exists.
+explicit. Consolidated revenue means total company revenue only. Product, channel,
+geography, or sub-business revenue such as advertising revenue is not consolidated
+revenue; classify it as segment scope and identify it with metric_name and segment_name.
+Use null when a field is not explicit. Copy a concise supporting_text excerpt verbatim
+from the SEC document for every item. Monetary point/low/high values must use the stated
+display unit (for example, 43 with unit=billions), not a computed midpoint. Return an
+empty guidance list when no qualifying management guidance exists.
 """.strip()
 
 _SCALE = {

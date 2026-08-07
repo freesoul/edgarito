@@ -1109,25 +1109,29 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     )
     guidance_overlay: GuidanceOverlayResult | None = None
     if OPENAI_API_KEY:
+        original_forecast_parameters = forecast_parameters
         try:
-            forecast_parameters, guidance_overlay = (
-                await _management_guidance_overlay(
-                    args,
-                    financials,
-                    forecast_parameters,
-                    forecast,
-                    valuation_date,
-                )
+            candidate_parameters, candidate_overlay = await _management_guidance_overlay(
+                args,
+                financials,
+                original_forecast_parameters,
+                forecast,
+                valuation_date,
             )
-            additional_warnings.extend(guidance_overlay.warnings)
-            if guidance_overlay.applications:
-                forecast = forecast_service.forecast(
+            additional_warnings.extend(candidate_overlay.warnings)
+            candidate_forecast = forecast
+            if candidate_overlay.applications:
+                candidate_forecast = forecast_service.forecast(
                     financials,
-                    forecast_parameters,
+                    candidate_parameters,
                     as_of=valuation_date,
                     availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
+            forecast_parameters = candidate_parameters
+            guidance_overlay = candidate_overlay
+            forecast = candidate_forecast
         except Exception as exc:
+            forecast_parameters = original_forecast_parameters
             additional_warnings.append(
                 "Management-guidance extraction unavailable; historical forecast "
                 f"retained ({exc})"

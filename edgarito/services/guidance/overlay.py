@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from edgarito.schemas.guidance.management import (
@@ -18,6 +19,36 @@ from edgarito.services.forecasting.models import (
     FcffForecastDriver,
     FcffForecastParameters,
     ForecastAssumptionSource,
+)
+
+_CONSOLIDATED_REVENUE_NAMES = frozenset(
+    {
+        "company revenue",
+        "consolidated revenue",
+        "consolidated revenues",
+        "net revenue",
+        "net revenues",
+        "net sales",
+        "revenue",
+        "revenues",
+        "sales",
+        "total revenue",
+        "total revenues",
+        "total sales",
+    }
+)
+_CONSOLIDATED_REVENUE_GROWTH_NAMES = frozenset(
+    {
+        "company revenue growth",
+        "consolidated revenue growth",
+        "net revenue growth",
+        "net sales growth",
+        "reported revenue growth",
+        "revenue growth",
+        "sales growth",
+        "total revenue growth",
+        "total sales growth",
+    }
 )
 
 
@@ -43,9 +74,11 @@ class GuidanceForecastOverlay:
             else:
                 eligible.append(record)
 
-        by_metric_year = {
-            (record.metric, record.fiscal_year): record for record in eligible
-        }
+        by_metric_year = self._select_by_metric_year(
+            eligible,
+            evidence_only=evidence_only,
+            rejected=rejected,
+        )
         applications: list[GuidanceApplication] = []
         updates: dict = {}
         source_overrides = dict(parameters.assumption_source_overrides)
@@ -237,11 +270,114 @@ class GuidanceForecastOverlay:
             return f"{record.basis.value} basis is not compatible with reported FCFF drivers"
         if record.scope != GuidanceScope.CONSOLIDATED:
             return "only consolidated guidance maps automatically"
+        if record.metric in {
+            GuidanceMetric.REVENUE,
+            GuidanceMetric.REVENUE_GROWTH,
+        } and GuidanceForecastOverlay._is_named_revenue_component(record):
+            return (
+                f"named revenue component {record.metric_name!r} cannot anchor "
+                "consolidated revenue"
+            )
         if record.period_type != GuidancePeriodType.FISCAL_YEAR:
             return "only exact fiscal-year guidance maps automatically"
         if record.fiscal_year not in forecast_years:
             return "period is outside the current FCFF forecast horizon"
         return None
+
+    @staticmethod
+    def _is_named_revenue_component(record: ManagementGuidance) -> bool:
+        if not record.metric_name:
+            return False
+        normalized = re.sub(
+            r"[^a-z0-9]+", " ", record.metric_name.casefold()
+        ).strip()
+        allowed = (
+            _CONSOLIDATED_REVENUE_NAMES
+            if record.metric == GuidanceMetric.REVENUE
+            else _CONSOLIDATED_REVENUE_GROWTH_NAMES
+        )
+        return normalized not in allowed
+
+    @classmethod
+    def _select_by_metric_year(
+        cls,
+        records: list[ManagementGuidance],
+        *,
+        evidence_only: list[ManagementGuidance],
+        rejected: list[str],
+    ) -> dict[tuple[GuidanceMetric, int | None], ManagementGuidance]:
+        grouped: dict[
+            tuple[GuidanceMetric, int | None], list[ManagementGuidance]
+        ] = {}
+        for record in records:
+            grouped.setdefault((record.metric, record.fiscal_year), []).append(record)
+
+        selected: dict[
+            tuple[GuidanceMetric, int | None], ManagementGuidance
+        ] = {}
+        for key, candidates in grouped.items():
+            best_priority = max(cls._selection_priority(item) for item in candidates)
+            strongest = [
+                item
+                for item in candidates
+                if cls._selection_priority(item) == best_priority
+            ]
+            strongest_values = {cls._record_values(item) for item in strongest}
+            if len(strongest_values) > 1:
+                for item in candidates:
+                    evidence_only.append(item)
+                metric, year = key
+                rejected.append(
+                    f"FY{year} {metric.value}: equally credible conflicting "
+                    "guidance cannot be selected safely"
+                )
+                continue
+
+            winner = min(strongest, key=cls._stable_record_identity)
+            selected[key] = winner
+            for item in candidates:
+                if item is winner:
+                    continue
+                evidence_only.append(item)
+                if cls._record_values(item) != cls._record_values(winner):
+                    rejected.append(
+                        f"{item.period_label} {item.metric.value}: lower-priority "
+                        f"guidance did not replace {winner.basis.value} guidance"
+                    )
+        return selected
+
+    @staticmethod
+    def _selection_priority(record: ManagementGuidance) -> tuple[int, int, Decimal]:
+        basis_priority = {
+            GuidanceBasis.REPORTED: 3,
+            GuidanceBasis.GAAP: 2,
+            GuidanceBasis.UNKNOWN: 1,
+        }.get(record.basis, 0)
+        status_priority = {
+            GuidanceStatus.RAISED: 3,
+            GuidanceStatus.LOWERED: 3,
+            GuidanceStatus.REAFFIRMED: 2,
+            GuidanceStatus.ISSUED: 1,
+        }.get(record.status, 0)
+        confidence = (
+            record.extraction_confidence
+            if record.extraction_confidence is not None
+            else Decimal("-1")
+        )
+        return basis_priority, status_priority, confidence
+
+    @staticmethod
+    def _record_values(record: ManagementGuidance) -> tuple:
+        return record.point, record.low, record.high, record.currency, record.unit
+
+    @staticmethod
+    def _stable_record_identity(record: ManagementGuidance) -> tuple[str, ...]:
+        return (
+            record.accession_number,
+            record.source_document.casefold(),
+            (record.metric_name or "").casefold(),
+            record.supporting_text.casefold(),
+        )
 
     @staticmethod
     def _apply_percentage_driver(
