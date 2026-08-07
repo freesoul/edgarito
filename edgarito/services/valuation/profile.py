@@ -128,16 +128,28 @@ class ValuationProfileBuilder:
             earnings,
             latest_equity,
         )
-        lifecycle = overrides.lifecycle or inferred_lifecycle
+        has_lifecycle_override = overrides.lifecycle not in {
+            None,
+            CompanyLifecycle.UNKNOWN,
+        }
+        lifecycle = (
+            overrides.lifecycle if has_lifecycle_override else inferred_lifecycle
+        )
         notes.append(
-            f"Lifecycle {'overridden' if overrides.lifecycle else 'inferred'} as "
+            f"Lifecycle {'overridden' if has_lifecycle_override else 'inferred'} as "
             f"{lifecycle.value}"
         )
 
         inferred_cyclicality = self._cyclicality(sector, industry_key)
-        cyclicality = overrides.cyclicality or inferred_cyclicality
+        has_cyclicality_override = overrides.cyclicality not in {
+            None,
+            Cyclicality.UNKNOWN,
+        }
+        cyclicality = (
+            overrides.cyclicality if has_cyclicality_override else inferred_cyclicality
+        )
         notes.append(
-            f"Cyclicality {'overridden' if overrides.cyclicality else 'inferred'} "
+            f"Cyclicality {'overridden' if has_cyclicality_override else 'inferred'} "
             f"as {cyclicality.value}"
         )
 

@@ -1089,6 +1089,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     required_concepts = (
         forecast_service.required_concepts()
         | bridge_resolver.required_concepts()
+        | ValuationProfileBuilder.required_concepts()
         | {
             FinancialConcept.INTEREST_EXPENSE,
             FinancialConcept.STOCKHOLDERS_EQUITY,
@@ -1294,6 +1295,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         discovered_peers = (
             comparable_bundle.report.universe.selected_tickers
             if comparable_bundle is not None
+            and comparable_bundle.report.universe.discovery_confidence != "low"
             else ()
         )
         profile, generated_profile_path, created = (

@@ -74,6 +74,45 @@ class PeerUniverseSelector:
             for item in assessments
             if not item.exclusions and item.score >= parameters.minimum_score
         ]
+        if len(eligible) < parameters.preferred_minimum:
+            candidates_by_ticker = {
+                candidate.ticker or candidate.company_id: candidate
+                for candidate in candidates
+            }
+            relaxed = []
+            for item in assessments:
+                candidate = candidates_by_ticker.get(item.ticker)
+                market_cap_only = len(item.exclusions) == 1 and item.exclusions[
+                    0
+                ].startswith("Market capitalization is outside")
+                same_industry = (
+                    candidate is not None
+                    and self._industry_score(target.industry, candidate.industry) == 30
+                )
+                same_sector = (
+                    candidate is not None
+                    and target.sector is not None
+                    and candidate.sector == target.sector
+                )
+                if market_cap_only and same_industry and same_sector:
+                    item = item.model_copy(
+                        update={
+                            "reasons": [
+                                *item.reasons,
+                                "Exact-industry fallback retained despite market-cap "
+                                "difference because strict selection produced too few "
+                                "peers",
+                            ],
+                            "exclusions": [],
+                        }
+                    )
+                relaxed.append(item)
+            assessments = relaxed
+            eligible = [
+                item
+                for item in assessments
+                if not item.exclusions and item.score >= parameters.minimum_score
+            ]
         selected_assessments = eligible[: parameters.max_peers]
         selected_tickers = tuple(item.ticker for item in selected_assessments)
         selected = set(selected_tickers)

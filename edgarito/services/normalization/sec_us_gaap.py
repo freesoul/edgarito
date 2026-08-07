@@ -161,6 +161,7 @@ CONCEPT_DEFINITIONS = (
     ConceptDefinition(
         FinancialConcept.SHORT_TERM_DEBT,
         (
+            "DebtCurrent",
             "ShortTermBorrowings",
             "ShortTermDebtCurrent",
             "OtherShortTermBorrowings",
@@ -175,7 +176,7 @@ CONCEPT_DEFINITIONS = (
     ),
     ConceptDefinition(
         FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
-        ("LongTermDebtNoncurrent",),
+        ("LongTermDebtNoncurrent", "LongTermDebt"),
         instant=True,
     ),
     ConceptDefinition(

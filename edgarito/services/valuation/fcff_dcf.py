@@ -472,7 +472,7 @@ class FcffDcfService:
                 "Explicit FCFF uses mid-year timing; terminal value remains at "
                 "the end of the final forecast year"
             )
-        if capital_bridge.period_end < selected_valuation_date:
+        if (selected_valuation_date - capital_bridge.period_end).days > 95:
             warnings.append(
                 f"Capital bridge is dated {capital_bridge.period_end.isoformat()}, "
                 f"before the {selected_valuation_date.isoformat()} valuation date; "

@@ -204,6 +204,25 @@ def test_scenarios_preserve_an_explicit_negative_terminal_growth():
         assert not terminal_growth.changed
 
 
+def test_non_monotonic_combined_scenarios_use_directional_value_envelopes():
+    context = _context(capex_ratio=Decimal("60"))
+    service = ScenarioValuationService()
+    raw_bull = service._variant(IntrinsicDecisionEngine(context), DecisionScenario.BULL)
+    assert raw_bull.value_per_share < context.base_result.value_per_share
+
+    result = DecisionValuationService().build(
+        context,
+        Decimal("10"),
+        include_sensitivity=False,
+        include_reverse_dcf=False,
+    )
+
+    bear, base, bull = result.intrinsic_scenarios
+    assert bear.value_per_share <= base.value_per_share <= bull.value_per_share
+    assert "Directional scenario envelope" in bull.methodology
+    assert any("non-monotonic" in warning for warning in result.warnings)
+
+
 def test_sensitivity_is_monotonic_and_marks_invalid_wacc_growth_pairs():
     regular = SensitivityAnalysisService().wacc_terminal_growth(
         IntrinsicDecisionEngine(_context())

@@ -168,6 +168,22 @@ def test_semiconductor_uses_a_normalized_cycle_fcff_profile():
     assert selection.primary.forecast_profile == ForecastProfile.NORMALIZED_CYCLE
 
 
+def test_unknown_profile_overrides_defer_to_financial_inference():
+    profile = ValuationProfileBuilder().build(
+        _financials(),
+        _classification(Sector.CONSUMER_DISCRETIONARY, "Automobile Manufacturers"),
+        ValuationProfileOverrides(
+            lifecycle=CompanyLifecycle.UNKNOWN,
+            cyclicality=Cyclicality.UNKNOWN,
+        ),
+    )
+
+    assert profile.lifecycle == CompanyLifecycle.MATURE
+    assert profile.cyclicality == Cyclicality.HIGH
+    assert "Lifecycle inferred as mature" in profile.inference_notes
+    assert "Cyclicality inferred as high" in profile.inference_notes
+
+
 def test_unprofitable_growth_company_uses_revenue_to_margin_profile():
     profile = ValuationProfileBuilder().build(
         _financials(

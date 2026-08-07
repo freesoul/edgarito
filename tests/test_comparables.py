@@ -287,6 +287,51 @@ def test_peer_selector_enforces_market_cap_band_and_scores_margin_and_roic():
     assert any("outside" in reason for reason in oversized_assessment.exclusions)
 
 
+def test_peer_selector_relaxes_size_band_for_exact_industry_when_peers_are_sparse():
+    target_profile = _profile(
+        "TARGET",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Automobile Manufacturers",
+    )
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    candidates = []
+    multiples = {}
+    for ticker, size in (("AUTO1", "0.10"), ("AUTO2", "0.15")):
+        candidates.append(
+            _profile(
+                ticker,
+                sector=Sector.CONSUMER_DISCRETIONARY,
+                industry="Automobile Manufacturers",
+            )
+        )
+        multiples[ticker] = target.model_copy(
+            update={
+                "ticker": ticker,
+                "company_id": ticker,
+                "company_name": f"{ticker} Inc.",
+                "market_capitalization": (target.market_capitalization * Decimal(size)),
+            }
+        )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        candidates,
+        PeerSelectionParameters(
+            max_peers=5,
+            preferred_minimum=2,
+            minimum_score=0,
+        ),
+        target_multiples=target,
+        candidate_multiples=multiples,
+    )
+
+    assert universe.selected_tickers == ("AUTO1", "AUTO2")
+    assert all(
+        any("Exact-industry fallback" in reason for reason in item.reasons)
+        for item in universe.candidates
+    )
+
+
 def test_peer_confidence_falls_when_count_is_high_but_economic_fit_is_weak():
     target_profile = _profile("TARGET")
     target = LtmMultiplesService().compute(_financials(), _market_data())

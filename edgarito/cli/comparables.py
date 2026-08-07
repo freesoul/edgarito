@@ -59,6 +59,17 @@ class ComparableReportBundle:
 def _resolve_comparable_peer_symbols(args, valuation_profile, target_symbol):
     cli_peers = getattr(args, "peer", None) or ()
     configured_peers = valuation_profile.comparables.peers
+    generated_peer_count = valuation_profile.model_selection.peer_count
+    minimum_credible_peer_count = max(
+        2, valuation_profile.comparables.preferred_minimum // 2
+    )
+    generated_peers_are_incomplete = (
+        valuation_profile.description.startswith("Auto-generated for ")
+        and generated_peer_count is not None
+        and generated_peer_count < minimum_credible_peer_count
+    )
+    if generated_peers_are_incomplete:
+        configured_peers = ()
     source = None if cli_peers else "valuation-profile" if configured_peers else None
     values = cli_peers or configured_peers
     target = target_symbol.strip().upper()

@@ -260,10 +260,63 @@ class ScenarioValuationService:
             <= cases[1].value_per_share
             <= cases[2].value_per_share
         ):
-            raise ValueError(
-                "Scenario policy did not produce an ordered bear/base/bull range"
+            cases = (
+                self._directional_envelope(engine, DecisionScenario.BEAR, base),
+                base,
+                self._directional_envelope(engine, DecisionScenario.BULL, base),
             )
         return cases
+
+    def _directional_envelope(self, engine, scenario, base):
+        """Keep scenario labels directional when FCFF drivers interact nonlinearly."""
+        context = engine.context
+        requested = self._scenario_values(context, scenario)
+        base_values = self._base_values(context)
+        candidates = [self._variant(engine, scenario)]
+        for driver, value in requested.items():
+            if value == base_values[driver]:
+                continue
+            isolated = dict(base_values)
+            isolated[driver] = value
+            try:
+                candidates.append(
+                    self._case(
+                        engine,
+                        scenario,
+                        isolated,
+                        methodology=(
+                            "Directional scenario envelope: isolated "
+                            f"{driver.replace('_', ' ')} stress retained because "
+                            "the combined FCFF driver case was non-monotonic"
+                        ),
+                    )
+                )
+            except ValueError:
+                continue
+        candidates.append(
+            IntrinsicScenarioCase(
+                scenario=scenario,
+                value_per_share=base.value_per_share,
+                assumptions=self._assumptions(context, base_values, scenario),
+                methodology=(
+                    "Directional scenario envelope includes the unchanged base as "
+                    "the neutral bound"
+                ),
+            )
+        )
+        selector = min if scenario == DecisionScenario.BEAR else max
+        selected = selector(candidates, key=lambda item: item.value_per_share)
+        if "Directional scenario envelope" not in selected.methodology:
+            selected = selected.model_copy(
+                update={
+                    "methodology": (
+                        "Directional scenario envelope retained the combined stress; "
+                        "FCFF driver interactions made the opposite scenario "
+                        "non-monotonic"
+                    )
+                }
+            )
+        return selected
 
     def _base_case(self, context):
         values = self._base_values(context)
@@ -281,6 +334,19 @@ class ScenarioValuationService:
     def _variant(self, engine, scenario):
         context = engine.context
         values = self._scenario_values(context, scenario)
+        return self._case(
+            engine,
+            scenario,
+            values,
+            methodology=(
+                "Deterministic uncertainty policy changes only non-explicit growth, "
+                "margin, terminal economics, and discount-rate assumptions; FCFF is "
+                "fully reforecast and rediscounted"
+            ),
+        )
+
+    def _case(self, engine, scenario, values, *, methodology):
+        context = engine.context
         evaluation = engine.evaluate(
             revenue_growth=(
                 values["revenue_growth"] if context.flexible_revenue_growth else None
@@ -298,11 +364,7 @@ class ScenarioValuationService:
             scenario=scenario,
             value_per_share=_decision_value_per_share(evaluation.result),
             assumptions=self._assumptions(context, values, scenario),
-            methodology=(
-                "Deterministic uncertainty policy changes only non-explicit growth, "
-                "margin, terminal economics, and discount-rate assumptions; FCFF is "
-                "fully reforecast and rediscounted"
-            ),
+            methodology=methodology,
         )
 
     def _scenario_values(self, context, scenario):
@@ -673,6 +735,19 @@ class DecisionValuationService:
             if include_reverse_dcf
             else ()
         )
+        scenario_warnings = (
+            (
+                (
+                    "Combined FCFF scenario drivers were non-monotonic; bear and bull "
+                    "values use directional envelopes of the same disclosed stresses"
+                ),
+            )
+            if any(
+                "Directional scenario envelope" in case.methodology
+                for case in intrinsic
+            )
+            else ()
+        )
         return DecisionValuationResult(
             ticker=context.base_result.ticker,
             company_name=context.base_result.company_name,
@@ -689,6 +764,7 @@ class DecisionValuationService:
                 "remain separate; no scenario or reverse-DCF assumption is calibrated "
                 "to force agreement between models"
             ),
+            warnings=scenario_warnings,
         )
 
     @staticmethod

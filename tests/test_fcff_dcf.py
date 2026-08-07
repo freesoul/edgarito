@@ -124,6 +124,17 @@ def test_current_valuation_date_uses_calendar_stub_periods():
     assert any("Capital bridge is dated 2025-12-31" in item for item in result.warnings)
 
 
+def test_recent_quarterly_bridge_is_not_reported_as_stale():
+    result = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+        valuation_date=datetime.date(2026, 2, 1),
+    )
+
+    assert not any("Capital bridge is dated" in item for item in result.warnings)
+
+
 def test_current_mid_year_timing_rejects_an_already_elapsed_cash_flow_date():
     with pytest.raises(ValueError, match="Mid-year cash-flow timing"):
         FcffDcfService().value(

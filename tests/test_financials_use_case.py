@@ -16,6 +16,7 @@ from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 JNJ_FIXTURE = Path(__file__).parent / "fixtures" / "jnj_facts.json"
 JPM_FIXTURE = Path(__file__).parent / "fixtures" / "jpm_facts.json"
+TSLA_FIXTURE = Path(__file__).parent / "fixtures" / "tsla_facts.json"
 
 
 def load_aapl_facts() -> CompanyFacts:
@@ -174,6 +175,34 @@ def test_normalizes_sec_valuation_inputs_with_correct_units_and_taxonomies():
         observations[FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES].taxonomy
         == "us-gaap"
     )
+
+
+def test_normalizes_tesla_current_and_total_debt_fallback_tags():
+    facts = CompanyFacts.model_validate_json(TSLA_FIXTURE.read_text(encoding="utf-8"))
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        ticker="TSLA",
+        granularity=Granularity.QUARTERLY,
+        concepts={
+            FinancialConcept.SHORT_TERM_DEBT,
+            FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+        },
+    )
+
+    current = find_observation(
+        financials, FinancialConcept.SHORT_TERM_DEBT, 2025, FiscalPeriod.Q3
+    )
+    long_term = find_observation(
+        financials,
+        FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+        2025,
+        FiscalPeriod.Q3,
+    )
+
+    assert current.value == Decimal("1852000000")
+    assert current.source_concept == "DebtCurrent"
+    assert long_term.value == Decimal("5609000000")
+    assert long_term.source_concept == "LongTermDebt"
 
 
 def test_normalizes_interest_goodwill_and_intangibles_with_fallback_tags():
