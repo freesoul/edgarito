@@ -676,8 +676,16 @@ async def _run_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_selected_valuation_profile(args):
+    ticker = getattr(args, "ticker", None)
+    if ticker:
+        profile, _, _ = ValuationProfileLoader.load_for_ticker(ticker, args.profile)
+        return profile
+    return ValuationProfileLoader.load(args.profile)
+
+
 async def _run_forecast(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load(args.profile)
+    profile = _load_selected_valuation_profile(args)
     forecast_method = (
         ForecastMethod(args.forecast_method)
         if args.forecast_method is not None
@@ -1180,7 +1188,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
 
 
 async def _run_valuation_models(args: argparse.Namespace) -> int:
-    valuation_profile = ValuationProfileLoader.load(args.profile)
+    valuation_profile = _load_selected_valuation_profile(args)
     configuration = valuation_profile.model_selection
     financials = await _retrieve_financials(
         args,
@@ -1494,7 +1502,7 @@ async def _build_comparable_report(
 
 
 async def _run_specialized_inputs(args: argparse.Namespace) -> int:
-    configuration = ValuationProfileLoader.load(args.profile).specialized_inputs
+    configuration = _load_selected_valuation_profile(args).specialized_inputs
     history = args.history if args.history is not None else configuration.history
     if history < 1:
         raise ValueError("--history must be at least 1")

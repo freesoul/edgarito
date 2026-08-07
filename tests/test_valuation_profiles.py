@@ -329,6 +329,62 @@ def test_cli_uses_profile_forecast_parameters_then_applies_cli_overrides(
     assert "7.0%" in override_output
 
 
+def test_forecast_automatically_loads_an_existing_ticker_profile(
+    tmp_path, capsys, monkeypatch
+):
+    _cache_aapl(tmp_path)
+    profile_dir = tmp_path / "valuation"
+    profile_dir.mkdir()
+    default_path = profile_dir / "default.json"
+    default_path.write_text(
+        (PROFILE_FIXTURES / "default.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (profile_dir / "aapl.json").write_text(
+        json.dumps(
+            {
+                "name": "aapl",
+                "forecast": {
+                    "fcff": {
+                        "forecast_years": 2,
+                        "historical_window": 2,
+                        "revenue_growth": "5",
+                        "operating_margin": "25",
+                        "tax_rate": "21",
+                        "depreciation_to_revenue": "4",
+                        "capex_to_revenue": "3",
+                        "operating_working_capital_to_revenue": "10",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ValuationProfileLoader,
+        "default_path",
+        classmethod(lambda cls: default_path),
+    )
+
+    exit_code = main(
+        [
+            "forecast",
+            "--ticker",
+            "AAPL",
+            "--cache-dir",
+            str(tmp_path),
+            "--user-agent",
+            "Edgarito Tests (tests@example.com)",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "FY2026E" in output
+    assert "FY2027E" in output
+    assert "Revenue Growth: explicit" in output
+
+
 def _cache_aapl(cache_dir: Path) -> None:
     ticker_path = (
         cache_dir

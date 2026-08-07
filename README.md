@@ -264,10 +264,12 @@ The default WACC, perpetual growth, and terminal ROIC are `null`: for
 valuation is enabled when provider-backed peer evidence is sufficient. A CLI or
 profile value always takes precedence over an automatically resolved value.
 
-For `valuation`, an explicit `--profile` wins first. Otherwise Edgarito loads an
-existing `configs/valuation/<ticker>.json`. If it does not exist, the first
-successful generic inference creates it from the default profile and uses its
-ticker name in the current output. The generated file materializes structural
+For every profile-enabled command with `--ticker`, an explicit `--profile` wins
+first. Otherwise Edgarito loads an existing
+`configs/valuation/<ticker>.json`; only when neither exists does it use the
+default profile. For `valuation`, the first successful generic inference also
+creates a missing ticker profile and uses its ticker name in the current
+output. The generated file materializes structural
 classification, lifecycle, cyclicality, economic traits, and terminal ROIC so
 they can be tuned. When comparable discovery succeeds, the economically
 selected symbols are stored in `comparables.peers`; later `valuation` and
