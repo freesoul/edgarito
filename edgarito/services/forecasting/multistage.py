@@ -10,6 +10,7 @@ from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastDriver,
     FcffForecastParameters,
+    ForwardGrowthEvidence,
     ForecastAssumptionSource,
 )
 
@@ -34,6 +35,7 @@ class AdaptiveMultistageFcffForecastService:
         availability_mode: ObservationAvailabilityMode = (
             ObservationAvailabilityMode.POINT_IN_TIME
         ),
+        forward_evidence: ForwardGrowthEvidence | None = None,
     ) -> tuple[FcffForecast, AdaptiveMultistagePlan]:
         if not seed_forecast.observations:
             raise ValueError("Adaptive multistage forecasting requires a seed forecast")
@@ -43,6 +45,7 @@ class AdaptiveMultistageFcffForecastService:
                 requested_parameters,
                 terminal_growth_rate,
                 configuration,
+                forward_evidence,
             )
         else:
             if len(seed_forecast.observations) != fixed_plan.effective_years:
@@ -250,9 +253,13 @@ class AdaptiveMultistageFcffForecastService:
         parameters,
         terminal_growth_rate,
         configuration,
+        forward_evidence=None,
     ) -> tuple[tuple[Decimal, ...], AdaptiveMultistagePlan]:
         configured = parameters.revenue_growth
         explicit_prefix: tuple[Decimal, ...] = ()
+        evidence_score = (
+            forward_evidence.score if forward_evidence is not None else Decimal(0)
+        )
         if configured is not None and len(configured) > 1:
             explicit_prefix = tuple(configured)
             initial_growth = explicit_prefix[-1]
@@ -273,10 +280,18 @@ class AdaptiveMultistageFcffForecastService:
                 else 0
             )
 
+            if forward_evidence is not None:
+                evidence_score = forward_evidence.score
+                high_growth_years = min(
+                    configuration.maximum_high_growth_years,
+                    high_growth_years + self._ceiling(evidence_score * Decimal("3")),
+                )
         gap = abs(initial_growth - terminal_growth_rate)
         transition_years = 0
         if gap >= configuration.convergence_tolerance:
             transition_years = self._ceiling(gap / configuration.max_annual_growth_fade)
+            if forward_evidence is not None:
+                transition_years += self._ceiling(evidence_score * Decimal("5"))
             transition_years = max(
                 configuration.minimum_transition_years,
                 min(configuration.maximum_transition_years, transition_years),
@@ -322,6 +337,12 @@ class AdaptiveMultistageFcffForecastService:
             max_annual_growth_fade=configuration.max_annual_growth_fade,
             extended_to_stable=effective_years > parameters.forecast_years,
             explicit_growth_prefix_years=explicit_used,
+            forward_evidence_score=(
+                forward_evidence.score if forward_evidence is not None else Decimal(0)
+            ),
+            forward_evidence_summary=(
+                forward_evidence.summary if forward_evidence is not None else ()
+            ),
         )
         return path, plan
 

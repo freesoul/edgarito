@@ -339,6 +339,8 @@ class AdaptiveMultistagePlan(BaseModel):
     terminal_reinvestment_rate: Optional[Decimal] = None
     terminal_capex_to_revenue: Optional[Decimal] = None
     depreciable_asset_life_years: Optional[int] = None
+    forward_evidence_score: Decimal = Decimal("0")
+    forward_evidence_summary: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_stages(self) -> "AdaptiveMultistagePlan":
@@ -353,6 +355,50 @@ class AdaptiveMultistagePlan(BaseModel):
         ):
             raise ValueError("Adaptive stages must span the effective forecast")
         return self
+
+
+class ForwardGrowthEvidence(BaseModel):
+    """Forward indicators that justify delaying the historical growth fade."""
+
+    model_config = ConfigDict(frozen=True)
+
+    backlog: bool = False
+    guidance: bool = False
+    capacity: bool = False
+    growth_visibility: Decimal = Field(default=Decimal("0"), ge=0, le=1)
+    lifecycle: str = "unknown"
+
+    @property
+    def score(self) -> Decimal:
+        lifecycle_score = {
+            "growth": Decimal("1"),
+            "unprofitable_growth": Decimal("0.9"),
+            "mature": Decimal("0.25"),
+            "declining": Decimal("0"),
+            "distressed": Decimal("0"),
+            "pre_revenue": Decimal("0.8"),
+        }.get(self.lifecycle, Decimal("0.1"))
+        return (
+            Decimal("0.20") * Decimal(self.backlog)
+            + Decimal("0.20") * Decimal(self.guidance)
+            + Decimal("0.15") * Decimal(self.capacity)
+            + Decimal("0.20") * self.growth_visibility
+            + Decimal("0.25") * lifecycle_score
+        )
+
+    @property
+    def summary(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name, present in (
+                ("backlog/bookings", self.backlog),
+                ("forward guidance", self.guidance),
+                ("capacity", self.capacity),
+                ("growth visibility", self.growth_visibility > 0),
+                (f"{self.lifecycle} lifecycle", self.lifecycle != "unknown"),
+            )
+            if present
+        )
 
 
 # The generic historical public names now point to the valuation-grade default.

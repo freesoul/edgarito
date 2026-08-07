@@ -279,6 +279,23 @@ class ComparableImpliedValuationConsolePresenter:
             f"{format_multiple(multiple.upper_bound)}",
             f"{'Confidence:':<40}{multiple.confidence.value}",
         ]
+        if result.pure_peer_point_case is not None:
+            lines.extend(
+                [
+                    "",
+                    *subsection("INDEPENDENT PEER CROSS-CHECK"),
+                    "Pure peer-implied value (no DCF premium): "
+                    + format_currency(
+                        result.pure_peer_point_case.present_value_per_share,
+                        result.currency,
+                    ),
+                    "DCF-blended relative value: "
+                    + format_currency(
+                        result.point_case.present_value_per_share,
+                        result.currency,
+                    ),
+                ]
+            )
         if verbose:
             lines.extend(["", *self._multiple_audit(result)])
         lines.extend(

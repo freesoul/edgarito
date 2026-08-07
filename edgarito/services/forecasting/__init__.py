@@ -5,6 +5,7 @@ from edgarito.services.forecasting.fcff import (
 from edgarito.services.forecasting.free_cash_flow import SimplifiedFcfForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
+    ForwardGrowthEvidence,
     FcffForecast,
     FcffForecastDriver,
     FcffForecastObservation,
@@ -25,6 +26,7 @@ from edgarito.services.forecasting.multistage import (
 __all__ = [
     "AdaptiveMultistageFcffForecastService",
     "AdaptiveMultistagePlan",
+    "ForwardGrowthEvidence",
     "FcffForecast",
     "FcffForecastDriver",
     "FcffForecastObservation",

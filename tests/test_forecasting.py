@@ -20,6 +20,7 @@ from edgarito.services.forecasting import (
     FcffForecastDriver,
     FcffForecastParameters,
     FcffForecastService,
+    ForwardGrowthEvidence,
     ForecastAssumptionSource,
     FreeCashFlowForecastService,
     SimplifiedFcfForecastParameters,
@@ -373,6 +374,39 @@ def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
         "terminal transition is abrupt" in item for item in values[0].warnings
     )
 
+
+def test_forward_evidence_delays_growth_fade_without_exceeding_stage_caps():
+    financials = _fcff_financials()
+    parameters = FcffForecastParameters(forecast_years=5)
+    service = FcffForecastService()
+    seed = service.forecast(financials, parameters)
+    adaptive = AdaptiveMultistageFcffForecastService(service)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15")
+    )
+    _, historical_plan = adaptive.forecast(
+        financials, seed, parameters, Decimal("3"), configuration
+    )
+    _, evidence_plan = adaptive.forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        configuration,
+        forward_evidence=ForwardGrowthEvidence(
+            backlog=True,
+            guidance=True,
+            capacity=True,
+            growth_visibility=Decimal("1"),
+            lifecycle="growth",
+        ),
+    )
+
+    assert evidence_plan.high_growth_years >= historical_plan.high_growth_years
+    assert evidence_plan.transition_years >= historical_plan.transition_years
+    assert evidence_plan.effective_years <= 30
+    assert evidence_plan.forward_evidence_score > 0
+    assert evidence_plan.forward_evidence_summary
 
 def test_generic_forecast_service_is_the_fcff_default():
     assert FreeCashFlowForecastService is FcffForecastService

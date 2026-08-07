@@ -65,6 +65,7 @@ from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
     FcffForecastParameters,
     FcffForecastService,
+    ForwardGrowthEvidence,
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
 )
@@ -1363,6 +1364,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             normalized_tax_rate=(
                 tax_assumption.value if tax_assumption is not None else None
             ),
+            forward_evidence=_forward_growth_evidence(
+                profile_context.lifecycle,
+                profile_context.economic_traits,
+                guidance_overlay,
+            ),
             as_of=valuation_date,
             availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
         )
@@ -1610,6 +1616,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 tax_assumption.value if tax_assumption is not None else None
             ),
             share_repurchase_parameters=share_repurchase_parameters,
+            forward_evidence=_forward_growth_evidence(
+                profile_context.lifecycle,
+                profile_context.economic_traits,
+                guidance_overlay,
+            ),
             flexible_revenue_growth=(
                 args.revenue_growth is None
                 and profile.forecast.fcff.revenue_growth is None
@@ -1990,6 +2001,44 @@ async def _management_guidance_overlay(
         )
     finally:
         await openai_client.close()
+
+
+def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
+    """Turn verified forward indicators into a bounded stage-duration signal."""
+    records = ()
+    if guidance_overlay is not None:
+        records = (*guidance_overlay.applications, *guidance_overlay.evidence_only)
+    traits = {getattr(item, "value", str(item)) for item in economic_traits}
+    backlog = "backlog_driven" in traits
+    for item in guidance_overlay.applications if guidance_overlay is not None else ():
+        metric = getattr(item.guidance.metric, "value", "")
+        backlog = backlog or metric in {"backlog", "bookings"}
+    guidance = any(
+        getattr(getattr(item, "metric", None), "value", "")
+        in {"revenue", "revenue_growth"}
+        for item in records
+    )
+    text = " ".join(
+        getattr(item, "supporting_text", "").casefold() for item in records
+    )
+    capacity = any(
+        term in text for term in ("capacity", "cleanroom", "fab", "shipment")
+    )
+    visible_years = {
+        item.fiscal_year
+        for item in records
+        if getattr(item, "fiscal_year", None) is not None
+        and getattr(getattr(item, "period_type", None), "value", "")
+        in {"multi_year_target", "long_term_target"}
+    }
+    growth_visibility = min(Decimal("1"), Decimal(len(visible_years)) / Decimal("3"))
+    return ForwardGrowthEvidence(
+        backlog=backlog,
+        guidance=guidance,
+        capacity=capacity,
+        growth_visibility=growth_visibility,
+        lifecycle=getattr(lifecycle, "value", str(lifecycle)),
+    )
 
 
 async def _retrieve_automatic_assumption_inputs(

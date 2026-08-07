@@ -1175,6 +1175,44 @@ def test_fundamental_anchor_values_remaining_fcff_at_matching_horizon(basis, met
     assert anchor != intrinsic.terminal_value.terminal_value / metric
 
 
+def test_implied_valuation_exposes_peer_value_independently_of_dcf_anchor():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal("20"),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    result = ComparableImpliedValuationService().value(
+        target_forecast=forecast,
+        capital_bridge=bridge,
+        projected_shares=bridge.diluted_shares,
+        resolved_multiple=resolved,
+        valuation_date=datetime.date(2025, 12, 31),
+        horizon_years=Decimal(1),
+        discount_rate=Decimal("10"),
+        intrinsic_value_per_share=Decimal("1"),
+    )
+
+    assert result.pure_peer_point_case is not None
+    assert result.pure_peer_point_case.multiple == resolved.peer_anchor
+    assert result.pure_peer_point_case.present_value_per_share != result.point_case.present_value_per_share
+
+
 def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):
     target, report, _, _ = _basic_resolver_inputs()
     forecast = _multiyear_forecast()

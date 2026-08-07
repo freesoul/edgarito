@@ -14,6 +14,7 @@ from edgarito.services.forecasting import (
     FcffForecast,
     FcffForecastParameters,
     FcffForecastService,
+    ForwardGrowthEvidence,
 )
 from edgarito.services.valuation.decision_models import (
     DecisionScenario,
@@ -80,6 +81,7 @@ class IntrinsicDecisionContext:
     )
     normalized_tax_rate: Decimal | None = None
     share_repurchase_parameters: ShareRepurchaseParameters | None = None
+    forward_evidence: ForwardGrowthEvidence | None = None
     flexible_revenue_growth: bool = True
     flexible_operating_margin: bool = True
     flexible_terminal_roic: bool = True
@@ -202,6 +204,7 @@ class IntrinsicDecisionEngine:
                 fixed_plan=fixed_plan,
                 as_of=context.valuation_date,
                 availability_mode=context.availability_mode,
+                forward_evidence=context.forward_evidence,
             )
         else:
             plan = None

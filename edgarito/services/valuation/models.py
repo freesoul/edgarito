@@ -454,6 +454,9 @@ class ComparableImpliedValuation(BaseModel):
     lower_case: ComparableImpliedValuationCase
     point_case: ComparableImpliedValuationCase
     upper_case: ComparableImpliedValuationCase
+    pure_peer_lower_case: ComparableImpliedValuationCase | None = None
+    pure_peer_point_case: ComparableImpliedValuationCase | None = None
+    pure_peer_upper_case: ComparableImpliedValuationCase | None = None
     current_price: Optional[Decimal] = None
     current_price_implied_multiple: Optional[Decimal] = None
     analyst_target_price: Optional[Decimal] = None

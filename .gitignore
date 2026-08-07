@@ -10,3 +10,4 @@ examples/
 .ruff_cache/
 configs/valuation/*
 !cofnigs/valuation/default.json
+.kilo

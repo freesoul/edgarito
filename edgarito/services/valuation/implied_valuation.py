@@ -53,6 +53,20 @@ class ComparableImpliedValuationService:
                 ("Upper", resolved_multiple.upper_bound),
             )
         ]
+        peer_cases = None
+        if resolved_multiple.peer_anchor is not None:
+            peer_cases = [
+                self._case(
+                    label=label_name,
+                    multiple=resolved_multiple.peer_anchor,
+                    metric=metric,
+                    bridge=capital_bridge,
+                    shares=projected_shares,
+                    discount_rate=discount_rate,
+                    horizon_years=horizon_years,
+                )
+                for label_name in ("Lower", "Resolved", "Upper")
+            ]
         warnings = [
             *resolved_multiple.warnings,
             "Projected net debt and diluted shares are held flat because no "
@@ -98,6 +112,9 @@ class ComparableImpliedValuationService:
             lower_case=cases[0],
             point_case=cases[1],
             upper_case=cases[2],
+            pure_peer_lower_case=peer_cases[0] if peer_cases else None,
+            pure_peer_point_case=peer_cases[1] if peer_cases else None,
+            pure_peer_upper_case=peer_cases[2] if peer_cases else None,
             current_price=current_price,
             current_price_implied_multiple=current_price_implied_multiple,
             analyst_target_price=analyst_target_price,
