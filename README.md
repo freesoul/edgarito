@@ -726,6 +726,61 @@ uv run edgarito valuation --ticker AAPL --wacc 8 \
 The result reports every cash flow, discount period and factor, terminal-value
 contribution, enterprise/equity bridge, input sources, and sensitivity warnings.
 
+## Turn valuation evidence into a decision range
+
+When a current market price is available, `valuation` automatically adds a
+concise decision summary. It reports independently revalued bear, base, and bull
+FCFF cases, upside/downside, margin of safety, and a deterministic
+cheap/fair/expensive assessment. When reliable relative evidence exists, its
+lower/resolved/upper range remains separate from the intrinsic range; the two
+models are never blindly averaged, and material disagreement is reported.
+
+Use the detail flags independently or together:
+
+```bash
+uv run edgarito valuation --ticker MSFT \
+  --scenarios --sensitivity --reverse-dcf
+```
+
+`--scenarios` shows each changed assumption and the resulting values.
+`--sensitivity` prints a compact WACC by terminal-growth table. Every cell holds
+the base projection structure constant, recomputes sustainable terminal
+reinvestment, and rediscounts the cash flows; combinations where terminal
+growth is not below WACC are marked invalid. `--reverse-dcf` solves independently
+for market-implied revenue growth, operating margin, terminal ROIC, terminal
+growth, and WACC using bounded root finding. These reverse solutions are not
+forecasts and must not be read as simultaneous assumptions.
+
+Margin of safety uses `1 - current price / estimated value`: a positive value
+means price is below that estimate, while a negative value means price exceeds
+it. Upside/downside separately uses `estimated value / current price - 1`.
+Neither metric is a buy recommendation.
+
+Scenario rules and the fair-value band are deterministic and configurable in a
+valuation profile:
+
+```json
+{
+  "valuation": {
+    "decision_analysis": {
+      "enabled": true,
+      "revenue_growth_delta": "2",
+      "operating_margin_delta": "2",
+      "bear_wacc_delta": "0.75",
+      "bull_wacc_delta": "0.50",
+      "terminal_growth_delta": "0.25",
+      "terminal_roic_spread_change": "0.25",
+      "fair_value_band": "5",
+      "sensitivity_size": 5
+    }
+  }
+}
+```
+
+Explicit CLI and profile assumptions are preserved rather than displaced by an
+automatic scenario rule. The base case is the existing resolved valuation; no
+scenario is calibrated to the market price or an analyst target.
+
 ## Select suitable valuation models
 
 Before calculating a valuation, `valuation-models` builds an economic profile and

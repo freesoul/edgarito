@@ -4,6 +4,7 @@ from edgarito.config.providers import (
 )
 from edgarito.config.valuation import (
     CashFlowTiming,
+    DecisionAnalysisConfiguration,
     ForecastMethod,
     ForecastValuationProfile,
     MultipleResolutionConfiguration,
@@ -15,6 +16,7 @@ from edgarito.config.valuation import (
 
 __all__ = [
     "CashFlowTiming",
+    "DecisionAnalysisConfiguration",
     "ForecastMethod",
     "ForecastValuationProfile",
     "MarketProviderConfiguration",

@@ -1,4 +1,5 @@
 from edgarito.cli.presentation.dcf import FcffDcfConsolePresenter
+from edgarito.cli.presentation.decision import DecisionValuationConsolePresenter
 from edgarito.cli.presentation.financials import (
     ClassificationConsolePresenter,
     FinancialsConsolePresenter,
@@ -16,6 +17,7 @@ __all__ = [
     "ClassificationConsolePresenter",
     "ComparableImpliedValuationConsolePresenter",
     "ComparableMultiplesConsolePresenter",
+    "DecisionValuationConsolePresenter",
     "FcffDcfConsolePresenter",
     "FinancialsConsolePresenter",
     "ForecastConsolePresenter",

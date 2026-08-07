@@ -285,6 +285,27 @@ class MultistageValuationConfiguration(_ProfileModel):
         return self
 
 
+class DecisionAnalysisConfiguration(_ProfileModel):
+    """Deterministic uncertainty policy for decision-oriented valuation."""
+
+    enabled: bool = True
+    revenue_growth_delta: Decimal = Field(default=Decimal("2"), ge=0, le=25)
+    operating_margin_delta: Decimal = Field(default=Decimal("2"), ge=0, le=25)
+    bear_wacc_delta: Decimal = Field(default=Decimal("0.75"), ge=0, le=10)
+    bull_wacc_delta: Decimal = Field(default=Decimal("0.50"), ge=0, le=10)
+    terminal_growth_delta: Decimal = Field(default=Decimal("0.25"), ge=0, le=5)
+    terminal_roic_spread_change: Decimal = Field(default=Decimal("0.25"), ge=0, le=1)
+    fair_value_band: Decimal = Field(default=Decimal("5"), ge=0, le=50)
+    sensitivity_size: int = Field(default=5, ge=3, le=9)
+
+    @field_validator("sensitivity_size")
+    @classmethod
+    def require_odd_sensitivity_size(cls, value: int) -> int:
+        if value % 2 == 0:
+            raise ValueError("sensitivity_size must be odd")
+        return value
+
+
 class ValuationCalculationConfiguration(_ProfileModel):
     cash_flow_timing: CashFlowTiming = CashFlowTiming.END_OF_PERIOD
     discount_rates: DiscountRateConfiguration = Field(
@@ -301,6 +322,9 @@ class ValuationCalculationConfiguration(_ProfileModel):
     )
     multistage: MultistageValuationConfiguration = Field(
         default_factory=MultistageValuationConfiguration
+    )
+    decision_analysis: DecisionAnalysisConfiguration = Field(
+        default_factory=DecisionAnalysisConfiguration
     )
 
 

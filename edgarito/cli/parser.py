@@ -350,6 +350,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable a share-repurchase schedule supplied by the profile",
     )
+    valuation.add_argument(
+        "--scenarios",
+        action="store_true",
+        help="Show the detailed bear/base/bull assumptions and values",
+    )
+    valuation.add_argument(
+        "--sensitivity",
+        action="store_true",
+        help="Show the WACC by terminal-growth value/share sensitivity table",
+    )
+    valuation.add_argument(
+        "--reverse-dcf",
+        action="store_true",
+        help="Show all independently solved market-implied DCF assumptions",
+    )
     valuation_models.add_argument(
         "--classification-provider",
         choices=[
@@ -584,4 +599,3 @@ def _decimal_value(value: str) -> Decimal:
 
 
 __all__ = ["build_parser"]
-

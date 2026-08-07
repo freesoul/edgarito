@@ -44,6 +44,9 @@ def test_default_profile_fixture_is_valid_and_complete():
     assert profile.valuation.multistage.max_annual_growth_fade == Decimal("3")
     assert profile.valuation.multistage.extend_to_stable
     assert profile.valuation.share_repurchases.annual_cash_amounts == ()
+    assert profile.valuation.decision_analysis.enabled
+    assert profile.valuation.decision_analysis.revenue_growth_delta == Decimal("2")
+    assert profile.valuation.decision_analysis.sensitivity_size == 5
     assert profile.model_selection.sector is None
     assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
@@ -112,8 +115,8 @@ def test_ticker_profile_loading_precedence(tmp_path, monkeypatch):
         classmethod(lambda cls: default_path),
     )
 
-    default, generated_path, should_generate = (
-        ValuationProfileLoader.load_for_ticker("BRK/B")
+    default, generated_path, should_generate = ValuationProfileLoader.load_for_ticker(
+        "BRK/B"
     )
     assert default.name == "default"
     assert generated_path == profile_dir / "brk-b.json"
@@ -121,8 +124,8 @@ def test_ticker_profile_loading_precedence(tmp_path, monkeypatch):
 
     ticker_payload = default.model_copy(update={"name": "brk-b"})
     generated_path.write_text(ticker_payload.model_dump_json(), encoding="utf-8")
-    selected, selected_path, should_generate = (
-        ValuationProfileLoader.load_for_ticker("BRK/B")
+    selected, selected_path, should_generate = ValuationProfileLoader.load_for_ticker(
+        "BRK/B"
     )
     assert selected.name == "brk-b"
     assert selected_path == generated_path
@@ -131,8 +134,8 @@ def test_ticker_profile_loading_precedence(tmp_path, monkeypatch):
     explicit_path = profile_dir / "scenario.json"
     explicit_payload = default.model_copy(update={"name": "scenario"})
     explicit_path.write_text(explicit_payload.model_dump_json(), encoding="utf-8")
-    selected, selected_path, should_generate = (
-        ValuationProfileLoader.load_for_ticker("BRK/B", explicit_path)
+    selected, selected_path, should_generate = ValuationProfileLoader.load_for_ticker(
+        "BRK/B", explicit_path
     )
     assert selected.name == "scenario"
     assert selected_path == explicit_path
@@ -263,11 +266,44 @@ def test_profile_accepts_a_manual_gross_debt_and_cash_bridge():
         )
 
 
+def test_decision_analysis_policy_is_configurable_and_requires_an_odd_table():
+    profile = ForecastValuationProfile.model_validate(
+        {
+            "valuation": {
+                "decision_analysis": {
+                    "revenue_growth_delta": "3.5",
+                    "fair_value_band": "8",
+                    "sensitivity_size": 7,
+                }
+            }
+        }
+    )
+
+    policy = profile.valuation.decision_analysis
+    assert policy.revenue_growth_delta == Decimal("3.5")
+    assert policy.fair_value_band == Decimal("8")
+    assert policy.sensitivity_size == 7
+    with pytest.raises(ValueError, match="sensitivity_size must be odd"):
+        ForecastValuationProfile.model_validate(
+            {"valuation": {"decision_analysis": {"sensitivity_size": 4}}}
+        )
+
+
 def test_profile_cli_options_are_unset_until_profile_resolution():
     parser = build_parser()
     forecast = parser.parse_args(["forecast", "--ticker", "AAPL"])
     comparables = parser.parse_args(
         ["comparables", "--ticker", "AAPL", "--peer", "MSFT"]
+    )
+    valuation = parser.parse_args(
+        [
+            "valuation",
+            "--ticker",
+            "AAPL",
+            "--scenarios",
+            "--sensitivity",
+            "--reverse-dcf",
+        ]
     )
 
     assert forecast.profile is None
@@ -277,6 +313,9 @@ def test_profile_cli_options_are_unset_until_profile_resolution():
     assert comparables.profile is None
     assert comparables.max_peers is None
     assert comparables.require_same_sector is None
+    assert valuation.scenarios
+    assert valuation.sensitivity
+    assert valuation.reverse_dcf
 
 
 def test_cli_uses_profile_forecast_parameters_then_applies_cli_overrides(

@@ -69,6 +69,17 @@
       "fade_reinvestment_to_terminal": true,
       "terminal_return_on_invested_capital": null,
       "depreciable_asset_life_years": null
+    },
+    "decision_analysis": {
+      "enabled": true,
+      "revenue_growth_delta": "2",
+      "operating_margin_delta": "2",
+      "bear_wacc_delta": "0.75",
+      "bull_wacc_delta": "0.50",
+      "terminal_growth_delta": "0.25",
+      "terminal_roic_spread_change": "0.25",
+      "fair_value_band": "5",
+      "sensitivity_size": 5
     }
   },
   "model_selection": {

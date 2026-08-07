@@ -26,16 +26,36 @@ class AdaptiveMultistageFcffForecastService:
         configuration,
         *,
         normalized_tax_rate: Decimal | None = None,
+        fixed_plan: AdaptiveMultistagePlan | None = None,
         as_of=None,
     ) -> tuple[FcffForecast, AdaptiveMultistagePlan]:
         if not seed_forecast.observations:
             raise ValueError("Adaptive multistage forecasting requires a seed forecast")
-        growth_path, plan = self._growth_path(
-            seed_forecast,
-            requested_parameters,
-            terminal_growth_rate,
-            configuration,
-        )
+        if fixed_plan is None:
+            growth_path, plan = self._growth_path(
+                seed_forecast,
+                requested_parameters,
+                terminal_growth_rate,
+                configuration,
+            )
+        else:
+            if len(seed_forecast.observations) != fixed_plan.effective_years:
+                raise ValueError(
+                    "A fixed multistage plan requires a seed forecast with the "
+                    "same effective horizon"
+                )
+            stable_years = fixed_plan.stable_years
+            prefix_years = fixed_plan.effective_years - stable_years
+            growth_path = (
+                *(
+                    observation.revenue_growth
+                    for observation in seed_forecast.observations[:prefix_years]
+                ),
+                *([terminal_growth_rate] * stable_years),
+            )
+            plan = fixed_plan.model_copy(
+                update={"terminal_growth_rate": terminal_growth_rate}
+            )
         values = requested_parameters.model_dump()
         values["forecast_years"] = plan.effective_years
         values["revenue_growth"] = growth_path

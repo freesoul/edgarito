@@ -1,12 +1,4 @@
-1. **Decision-oriented valuation**
-
-   * Bear/base/bull cases.
-   * Sensitivity tables.
-   * Margin of safety.
-   * Cheap/fair/expensive vs current price.
-   * Reverse DCF / implied market expectations.
-
-2. **Remaining valuation models**
+1. **Remaining valuation models**
 
    * FCFE / Equity DCF.
    * DDM.
@@ -14,7 +6,7 @@
    * NAV/SOTP.
    * Specialized REIT, bank/insurance, resource, biotech adapters.
 
-3. **Improve forecasting**
+2. **Improve forecasting**
 
    * Management guidance.
    * Consensus forecasts as optional scenario.
@@ -23,14 +15,14 @@
    * Debt/share-count forecasts.
    * Cyclical normalization.
 
-4. **Improve relative valuation**
+3. **Improve relative valuation**
 
    * Forward peer multiples.
    * Better premium persistence/history.
    * Peer diagnostics.
    * Better uncertainty ranges/confidence.
 
-5. **Deterministic red flags**
+4. **Deterministic red flags**
 
    * FCF vs earnings.
    * Debt.
@@ -41,32 +33,31 @@
    * cash conversion.
    * concentration/accounting issues.
 
-6. **Data/provider quality**
+5. **Data/provider quality**
 
    * Auto-select best provider by freshness/completeness.
    * Reconcile discrepancies.
    * Source/provenance everywhere.
    * Staleness/data-quality warnings.
 
-7. **Report architecture**
+6. **Report architecture**
 
    * One canonical analysis/report object used by CLI, Excel, PDF and AI.
 
-8. **Exports**
+7. **Exports**
 
    * Excel first, with editable assumptions and calculations.
    * PDF afterward.
 
-9. **Portfolio mode**
+8. **Portfolio mode**
 
 * Run analysis across holdings.
 * Rank valuation/upside/MoS/red flags.
 * Portfolio concentration and rebalance support.
 
-10. **AI last**
+9. **AI last**
 
 * Filing/news commentary.
 * Explain deterministic outputs.
 * Thesis review.
 * Never use AI as the hidden source of valuation numbers.
-

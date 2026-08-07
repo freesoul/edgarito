@@ -19,6 +19,7 @@ from edgarito.cli.presentation.console import (
     ClassificationConsolePresenter,
     ComparableImpliedValuationConsolePresenter,
     ComparableMultiplesConsolePresenter,
+    DecisionValuationConsolePresenter,
     FcffDcfConsolePresenter,
     FinancialsConsolePresenter,
     ForecastConsolePresenter,
@@ -67,6 +68,8 @@ from edgarito.services.valuation import (
     CompanyLifecycle,
     ComparableImpliedValuationService,
     Cyclicality,
+    DecisionScenarioPolicy,
+    DecisionValuationService,
     DiscountRateService,
     EcbMarketDataCurrencyConverter,
     EconomicTrait,
@@ -75,6 +78,7 @@ from edgarito.services.valuation import (
     FcffDcfService,
     ForwardPeerMultiplesService,
     HistoricalMultiplesService,
+    IntrinsicDecisionContext,
     MultipleResolver,
     RelativeValuationBasis,
     ShareRepurchaseParameters,
@@ -240,6 +244,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     forecast = forecast_service.forecast(
         financials, forecast_parameters, as_of=valuation_date
     )
+    seed_forecast = forecast
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
         value is not None for value in (args.net_debt, args.gross_debt, args.cash)
@@ -319,6 +324,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     )
     comparable_bundle = None
     comparable_error = None
+    relative_result = None
     if selected_model in {"comparables", "both"}:
         provider_symbols = _parse_provider_symbols(args.provider_symbol)
         fallback_symbol = args.ticker or financials.ticker
@@ -423,6 +429,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             or multistage_configuration.stable_growth_rate is not None
         )
     )
+    tax_assumption = resolved.assumption_set.find(
+        ValuationAssumptionKind.NORMALIZED_TAX_RATE
+    )
     if use_multistage:
         stable_growth_rate = (
             resolved.perpetual_growth_rate
@@ -434,9 +443,6 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 "Adaptive multistage projection with an exit multiple requires "
                 "valuation.multistage.stable_growth_rate in the profile"
             )
-        tax_assumption = resolved.assumption_set.find(
-            ValuationAssumptionKind.NORMALIZED_TAX_RATE
-        )
         forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
             forecast_service
         ).forecast(
@@ -564,81 +570,163 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 "\nRelative valuation skipped: automatic peer evidence could not be "
                 f"prepared ({comparable_error or 'unknown provider failure'})."
             )
-            return 0
-        report = comparable_bundle.report
-        comparable_financials = comparable_bundle.target_financials
-        comparable_market = comparable_bundle.target_market
-        comparable_peer_sources = comparable_bundle.peer_sources
-        report = ForwardPeerMultiplesService().build(
-            report,
-            {
-                symbol: financials
-                for symbol, (financials, _market) in comparable_peer_sources.items()
-            },
-            basis,
-            valuation_date,
-            horizon_years,
-        )
-        if selected_model == "both":
-            print("\n" + "=" * 84 + "\n")
-        print(ComparableMultiplesConsolePresenter().render(report))
-        if report.universe.discovery_confidence == "low":
-            print(
-                "\nRelative valuation skipped: selected peer evidence has low "
-                "economic-comparability confidence."
+        else:
+            report = comparable_bundle.report
+            comparable_financials = comparable_bundle.target_financials
+            comparable_market = comparable_bundle.target_market
+            comparable_peer_sources = comparable_bundle.peer_sources
+            report = ForwardPeerMultiplesService().build(
+                report,
+                {
+                    symbol: financials
+                    for symbol, (
+                        financials,
+                        _market,
+                    ) in comparable_peer_sources.items()
+                },
+                basis,
+                valuation_date,
+                horizon_years,
             )
-            return 0
-        if len(report.universe.selected_tickers) < (
-            relative_configuration.multiple_resolution.minimum_peer_sample
-        ):
-            print(
-                "\nRelative valuation skipped: peer evidence is below the configured "
-                f"minimum sample of "
-                f"{relative_configuration.multiple_resolution.minimum_peer_sample}."
-            )
-            return 0
-        target_history = HistoricalMultiplesService().compute(
-            comparable_financials,
-            comparable_market,
-            basis,
-        )
-        peer_histories = tuple(
-            HistoricalMultiplesService().compute(financials, market, basis)
-            for financials, market in comparable_peer_sources.values()
-        )
-        resolved_multiple = MultipleResolver().resolve(
-            basis=basis,
-            target=report.target,
-            target_history=target_history,
-            peer_histories=peer_histories,
-            peer_report=report,
-            target_forecast=forecast,
-            intrinsic_valuation=result,
-            horizon_years=horizon_years,
-            policy=relative_configuration.multiple_resolution,
-        )
-        if report.warnings:
-            resolved_multiple = resolved_multiple.model_copy(
-                update={
-                    "warnings": tuple(
-                        dict.fromkeys([*resolved_multiple.warnings, *report.warnings])
+            if selected_model == "both":
+                print("\n" + "=" * 84 + "\n")
+            print(ComparableMultiplesConsolePresenter().render(report))
+            relative_ready = True
+            if report.universe.discovery_confidence == "low":
+                print(
+                    "\nRelative valuation skipped: selected peer evidence has low "
+                    "economic-comparability confidence."
+                )
+                relative_ready = False
+            elif len(report.universe.selected_tickers) < (
+                relative_configuration.multiple_resolution.minimum_peer_sample
+            ):
+                print(
+                    "\nRelative valuation skipped: peer evidence is below the "
+                    f"configured minimum sample of "
+                    f"{relative_configuration.multiple_resolution.minimum_peer_sample}."
+                )
+                relative_ready = False
+            if relative_ready:
+                target_history = HistoricalMultiplesService().compute(
+                    comparable_financials,
+                    comparable_market,
+                    basis,
+                )
+                peer_histories = tuple(
+                    HistoricalMultiplesService().compute(financials, market, basis)
+                    for financials, market in comparable_peer_sources.values()
+                )
+                resolved_multiple = MultipleResolver().resolve(
+                    basis=basis,
+                    target=report.target,
+                    target_history=target_history,
+                    peer_histories=peer_histories,
+                    peer_report=report,
+                    target_forecast=forecast,
+                    intrinsic_valuation=result,
+                    horizon_years=horizon_years,
+                    policy=relative_configuration.multiple_resolution,
+                )
+                if report.warnings:
+                    resolved_multiple = resolved_multiple.model_copy(
+                        update={
+                            "warnings": tuple(
+                                dict.fromkeys(
+                                    [*resolved_multiple.warnings, *report.warnings]
+                                )
+                            )
+                        }
                     )
-                }
-            )
-        relative_result = ComparableImpliedValuationService().value(
-            target_forecast=forecast,
+                relative_result = ComparableImpliedValuationService().value(
+                    target_forecast=forecast,
+                    capital_bridge=capital_bridge,
+                    projected_shares=capital_bridge.diluted_shares,
+                    resolved_multiple=resolved_multiple,
+                    valuation_date=valuation_date,
+                    horizon_years=horizon_years,
+                    discount_rate=resolved.wacc,
+                    current_price=report.target.price,
+                    analyst_target_price=args.analyst_target_price,
+                    intrinsic_value_per_share=result.value_per_share,
+                )
+                print("\n" + "=" * 84 + "\n")
+                print(
+                    ComparableImpliedValuationConsolePresenter().render(relative_result)
+                )
+    current_price = (
+        relative_result.current_price if relative_result is not None else None
+    )
+    if current_price is None and comparable_bundle is not None:
+        current_price = comparable_bundle.report.target.price
+    market_data = automatic_inputs.get("market_data")
+    if current_price is None and market_data is not None:
+        latest_price = market_data.latest_price
+        current_price = latest_price.close if latest_price is not None else None
+    decision_configuration = profile.valuation.decision_analysis
+    if current_price is not None and decision_configuration.enabled:
+        decision_context = IntrinsicDecisionContext(
+            financials=financials,
+            requested_parameters=forecast_parameters,
+            seed_forecast=seed_forecast,
+            base_forecast=forecast,
+            base_result=result,
             capital_bridge=capital_bridge,
-            projected_shares=capital_bridge.diluted_shares,
-            resolved_multiple=resolved_multiple,
+            terminal_roic=terminal_roic.value,
+            multistage_configuration=multistage_configuration,
+            use_multistage=use_multistage,
             valuation_date=valuation_date,
-            horizon_years=horizon_years,
-            discount_rate=resolved.wacc,
-            current_price=report.target.price,
-            analyst_target_price=args.analyst_target_price,
-            intrinsic_value_per_share=result.value_per_share,
+            normalized_tax_rate=(
+                tax_assumption.value if tax_assumption is not None else None
+            ),
+            share_repurchase_parameters=share_repurchase_parameters,
+            flexible_revenue_growth=(
+                args.revenue_growth is None
+                and profile.forecast.fcff.revenue_growth is None
+            ),
+            flexible_operating_margin=(
+                args.operating_margin is None
+                and profile.forecast.fcff.operating_margin is None
+            ),
+            flexible_terminal_roic=configured_terminal_roic is None,
+            flexible_wacc=(args.wacc is None and discount_configuration.wacc is None),
+            flexible_terminal_growth=(
+                args.terminal_growth is None
+                and terminal_configuration.perpetual_growth_rate is None
+            ),
         )
-        print("\n" + "=" * 84 + "\n")
-        print(ComparableImpliedValuationConsolePresenter().render(relative_result))
+        try:
+            decision_policy = DecisionScenarioPolicy(
+                revenue_growth_delta=decision_configuration.revenue_growth_delta,
+                operating_margin_delta=decision_configuration.operating_margin_delta,
+                bear_wacc_delta=decision_configuration.bear_wacc_delta,
+                bull_wacc_delta=decision_configuration.bull_wacc_delta,
+                terminal_growth_delta=decision_configuration.terminal_growth_delta,
+                terminal_roic_spread_change=(
+                    decision_configuration.terminal_roic_spread_change
+                ),
+                fair_value_band=decision_configuration.fair_value_band,
+                sensitivity_size=decision_configuration.sensitivity_size,
+            )
+            decision_result = DecisionValuationService(decision_policy).build(
+                decision_context,
+                current_price,
+                relative_result,
+            )
+        except ValueError as exc:
+            print(f"\nDecision analysis unavailable: {exc}")
+        else:
+            print("\n" + "=" * 84 + "\n")
+            print(
+                DecisionValuationConsolePresenter().render(
+                    decision_result,
+                    show_scenarios=args.scenarios,
+                    show_sensitivity=args.sensitivity,
+                    show_reverse_dcf=args.reverse_dcf,
+                )
+            )
+    elif current_price is None and decision_configuration.enabled:
+        print("\nDecision analysis skipped: no current market price was available.")
     return 0
 
 
