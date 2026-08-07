@@ -68,6 +68,7 @@ from edgarito.services.valuation import (
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
     FcffDcfService,
+    ForwardPeerMultiplesService,
     HistoricalMultiplesService,
     LtmMultiplesService,
     MultipleResolver,
@@ -967,6 +968,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             target_symbol,
             peer_symbols,
             as_of=valuation_date,
+        )
+        report = ForwardPeerMultiplesService().build(
+            report,
+            {
+                symbol: financials
+                for symbol, (financials, _market) in comparable_peer_sources.items()
+            },
+            basis,
+            valuation_date,
+            horizon_years,
         )
         target_history = HistoricalMultiplesService().compute(
             comparable_financials,

@@ -964,6 +964,12 @@ class ComparableImpliedValuationConsolePresenter:
         def anchor(value):
             return f"{value:,.2f}x" if value is not None else "unavailable"
 
+        peer_label = {
+            "forward": "Peer forward baseline",
+            "current_ltm_fallback": "Peer baseline (current LTM)",
+            "dcf_fallback": "Base multiple (DCF fallback)",
+        }.get(multiple.peer_anchor_source, "Peer/base multiple")
+
         lines = [
             "MARKET-RELATIVE IMPLIED VALUATION",
             f"{result.ticker or result.company_id} - {result.company_name}",
@@ -973,9 +979,14 @@ class ComparableImpliedValuationConsolePresenter:
             f"Metric: {result.forecast_metric_label}",
             "",
             "MULTIPLE RESOLUTION",
-            f"Fundamental forward anchor:     {anchor(multiple.fundamental_anchor)}",
-            f"Peer/base multiple (current LTM): {anchor(multiple.market_anchor)}",
-            f"Peer median:                    {anchor(multiple.peer_anchor)}",
+            f"{peer_label + ':':<36}{anchor(multiple.market_anchor)}",
+            f"DCF-implied forward multiple:   {anchor(multiple.fundamental_anchor)}",
+            "DCF-implied premium vs peers:   "
+            + (
+                f"{multiple.fundamental_premium:+,.1%}"
+                if multiple.fundamental_premium is not None
+                else "unavailable"
+            ),
             f"Target historical median:       {anchor(multiple.historical_anchor)}",
             "Target historical IQR:          "
             + (
@@ -998,31 +1009,46 @@ class ComparableImpliedValuationConsolePresenter:
                 if multiple.historical_trend is not None
                 else "unavailable"
             ),
-            f"Current target multiple:        {anchor(multiple.current_target_anchor)}",
+            f"Current target comparative multiple: "
+            f"{anchor(multiple.current_target_anchor)}",
             "Current target premium vs base: "
             + (
                 f"{multiple.observed_premium:+,.1%}"
                 if multiple.observed_premium is not None
                 else "unavailable"
             ),
-            "Historical target premium median:"
+            "Historical long-run premium:    "
             + (
-                f" {multiple.historical_peer_premium:+,.1%}"
+                f"{multiple.historical_peer_premium:+,.1%}"
                 if multiple.historical_peer_premium is not None
                 else " unavailable"
             ),
             f"Synchronized premium observations: "
             f"{multiple.premium_history_sample_size}",
-            "Premium AR(1) persistence:       "
+            "Median premium observation interval: "
             + (
-                f"{multiple.premium_mean_reversion_beta:,.1%}"
+                f"{multiple.premium_observation_interval_years:,.2f} years"
+                if multiple.premium_observation_interval_years is not None
+                else "unavailable"
+            ),
+            "Raw AR(1) phi (deviation persistence): "
+            + (
+                f"{multiple.premium_mean_reversion_beta:,.2f}"
                 if multiple.premium_mean_reversion_beta is not None
                 else "unavailable"
             ),
-            f"Historical persistence:         {multiple.historical_persistence:,.1%}",
-            f"Fundamental-support score:      {multiple.fundamental_support:,.1%}",
-            f"Horizon retention:              {multiple.horizon_retention:,.1%}",
-            f"Resolved premium persistence:   {multiple.persistence_factor:,.1%}",
+            f"Shrunk AR(1) phi:               "
+            f"{multiple.shrunk_premium_persistence:,.2f}",
+            "Statistical premium at horizon: "
+            + (
+                f"{multiple.statistical_premium:+,.1%}"
+                if multiple.statistical_premium is not None
+                else "unavailable"
+            ),
+            f"Premium-history weight:         {multiple.premium_history_weight:,.1%}",
+            f"Fundamental quality support:    {multiple.fundamental_support:,.1%}",
+            f"Horizon evidence retention:     {multiple.horizon_retention:,.1%}",
+            f"Statistical-anchor evidence weight: {multiple.persistence_factor:,.1%}",
             "Resolved target premium:        "
             + (
                 f"{multiple.resolved_premium:+,.1%}"
@@ -1032,6 +1058,7 @@ class ComparableImpliedValuationConsolePresenter:
             f"Resolved forward multiple:      {multiple.point_estimate:,.2f}x",
             f"Reasonable range:                {multiple.lower_bound:,.2f}x-"
             f"{multiple.upper_bound:,.2f}x",
+            "Range evidence: DCF anchor, peer IQR, and synchronized premium IQR",
             "Confidence:",
             f"  peer baseline:                {multiple.peer_confidence.value}",
             f"  target history:               "

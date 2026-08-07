@@ -37,6 +37,7 @@ from edgarito.services.valuation import (
     MultipleConfidence,
     MultipleResolver,
     MultipleStatus,
+    PeerMultipleSummary,
     PeerSelectionParameters,
     PeerUniverseSelector,
     RelativeValuationBasis,
@@ -495,6 +496,7 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert resolved.observed_premium == Decimal("5.2") / Decimal("10") - Decimal(1)
     assert resolved.historical_anchor == Decimal("12.5")
     assert resolved.lower_bound <= resolved.point_estimate <= resolved.upper_bound
+    assert resolved.lower_bound <= resolved.fundamental_anchor <= resolved.upper_bound
     assert resolved.persistence_factor < Decimal(1)
     assert resolved.premium_history_sample_size == 4
     assert resolved.premium_mean_reversion_beta is not None
@@ -511,7 +513,7 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert "Relative present-value equivalent today" in rendered
 
 
-def test_zero_persistence_collapses_to_peer_base_and_never_averages_raw_multiples():
+def test_weak_history_falls_back_to_dcf_anchor_and_never_averages_raw_multiples():
     target, report, forecast, intrinsic = _basic_resolver_inputs()
 
     resolved = MultipleResolver().resolve(
@@ -524,41 +526,52 @@ def test_zero_persistence_collapses_to_peer_base_and_never_averages_raw_multiple
         horizon_years=Decimal(1),
         policy=MultipleResolutionConfiguration(
             minimum_peer_sample=2,
-            insufficient_history_persistence=Decimal(0),
+            premium_persistence_prior=Decimal(0),
         ),
     )
 
     assert resolved.market_anchor == Decimal("10")
     assert resolved.observed_premium == Decimal("5.2") / Decimal("10") - Decimal(1)
     assert resolved.persistence_factor == 0
-    assert resolved.point_estimate == Decimal("10")
+    assert resolved.point_estimate == resolved.fundamental_anchor
 
 
-def test_full_persistence_retains_observed_ratio_premium(monkeypatch):
-    target, report, forecast, intrinsic = _basic_resolver_inputs()
+@pytest.mark.parametrize(
+    ("phi", "expected"),
+    (
+        (Decimal(0), Decimal("0.8")),
+        (Decimal("0.5"), Decimal("0.9")),
+        (Decimal(1), Decimal(1)),
+    ),
+)
+def test_ar_phi_retains_long_run_premium_and_only_moves_the_deviation(
+    monkeypatch, phi, expected
+):
+    dates = tuple(datetime.date(year, 12, 31) for year in range(2014, 2026))
+    premium_series = [(date, Decimal("0.8")) for date in dates]
     monkeypatch.setattr(
         MultipleResolver,
-        "_fundamental_support",
-        staticmethod(lambda *args, **kwargs: (Decimal(1), 6)),
+        "_aligned_peer_premiums",
+        staticmethod(lambda *args: premium_series),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_autoregressive_persistence",
+        staticmethod(lambda values: phi),
     )
 
-    resolved = MultipleResolver().resolve(
-        basis=RelativeValuationBasis.EV_TO_EBITDA,
-        target=target,
-        target_history=None,
-        peer_report=report,
-        target_forecast=forecast,
-        intrinsic_valuation=intrinsic,
-        horizon_years=Decimal(1),
-        policy=MultipleResolutionConfiguration(
-            minimum_peer_sample=2,
-            insufficient_history_persistence=Decimal(1),
-            annual_premium_decay=Decimal(0),
-        ),
+    forecast = MultipleResolver._statistical_premium_forecast(
+        HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),
+        (HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),),
+        Decimal(1),
+        Decimal(1),
+        MultipleResolutionConfiguration(annual_premium_decay=Decimal(0)),
+        [],
     )
 
-    assert resolved.persistence_factor == 1
-    assert resolved.point_estimate == Decimal("5.2")
+    assert forecast.long_run_premium == Decimal("0.8")
+    assert forecast.shrunk_phi == phi
+    assert forecast.statistical_premium == expected
 
 
 def test_missing_history_forces_low_overall_confidence():
@@ -575,10 +588,187 @@ def test_missing_history_forces_low_overall_confidence():
         policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
     )
 
-    assert resolved.peer_confidence == MultipleConfidence.MEDIUM
+    assert resolved.peer_confidence == MultipleConfidence.LOW
     assert resolved.target_history_confidence == MultipleConfidence.LOW
     assert resolved.premium_persistence_confidence == MultipleConfidence.LOW
     assert resolved.confidence == MultipleConfidence.LOW
+
+
+def test_weak_history_resolves_to_positive_dcf_premium_anchor(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("15")),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    assert resolved.market_anchor == Decimal("10")
+    assert resolved.fundamental_premium == Decimal("0.5")
+    assert resolved.point_estimate == Decimal("15")
+
+
+def test_long_stable_premium_with_strong_economics_moves_above_dcf_anchor(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    target = target.model_copy(
+        update={
+            "multiples": [
+                item.model_copy(update={"value": Decimal("20")})
+                if item.basis == RelativeValuationBasis.EV_TO_EBITDA
+                else item
+                for item in target.multiples
+            ]
+        }
+    )
+    target_history, peer_histories = _stable_premium_histories()
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("15")),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args: (Decimal(1), 6)),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=target_history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2, annual_premium_decay=Decimal(0)
+        ),
+    )
+
+    assert resolved.fundamental_anchor == Decimal("15")
+    assert resolved.statistical_premium == Decimal(1)
+    assert resolved.point_estimate == Decimal("20")
+
+
+def test_weak_economics_keep_historical_premium_at_dcf_anchor(monkeypatch):
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    target = target.model_copy(
+        update={
+            "multiples": [
+                item.model_copy(update={"value": Decimal("20")})
+                if item.basis == RelativeValuationBasis.EV_TO_EBITDA
+                else item
+                for item in target.multiples
+            ]
+        }
+    )
+    target_history, peer_histories = _stable_premium_histories()
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_anchor",
+        staticmethod(lambda *args: Decimal("15")),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_fundamental_support",
+        staticmethod(lambda *args: (Decimal(0), 6)),
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=target_history,
+        peer_histories=peer_histories,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(
+            minimum_peer_sample=2, annual_premium_decay=Decimal(0)
+        ),
+    )
+
+    assert resolved.statistical_premium == Decimal(1)
+    assert resolved.point_estimate == Decimal("15")
+
+
+def test_sparse_ar_estimate_is_shrunk_and_remains_low_confidence(monkeypatch):
+    dates = tuple(datetime.date(year, 12, 31) for year in range(2021, 2026))
+    premium_series = [(date, Decimal("0.8")) for date in dates]
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_aligned_peer_premiums",
+        staticmethod(lambda *args: premium_series),
+    )
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_autoregressive_persistence",
+        staticmethod(lambda values: Decimal(0)),
+    )
+
+    forecast = MultipleResolver._statistical_premium_forecast(
+        HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),
+        (HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),),
+        Decimal(1),
+        Decimal(1),
+        MultipleResolutionConfiguration(),
+        [],
+    )
+
+    assert forecast.history_weight == Decimal(5) / Decimal(12)
+    assert abs(forecast.shrunk_phi - Decimal(7) / Decimal(24)) < Decimal("1e-26")
+    assert forecast.statistical_premium > Decimal("0.8")
+    assert (
+        MultipleResolver._persistence_confidence(forecast.sample_size, forecast.raw_phi)
+        == MultipleConfidence.LOW
+    )
+
+
+def test_forward_peer_summary_takes_precedence_over_ltm_baseline():
+    target, report, forecast, intrinsic = _basic_resolver_inputs()
+    report = report.model_copy(
+        update={
+            "forward_summaries": [
+                PeerMultipleSummary(
+                    basis=RelativeValuationBasis.EV_TO_EBITDA,
+                    median=Decimal("8"),
+                    minimum=Decimal("7"),
+                    maximum=Decimal("9"),
+                    percentile_25=Decimal("7.5"),
+                    percentile_75=Decimal("8.5"),
+                    sample_size=4,
+                )
+            ]
+        }
+    )
+
+    resolved = MultipleResolver().resolve(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        target=target,
+        target_history=None,
+        peer_report=report,
+        target_forecast=forecast,
+        intrinsic_valuation=intrinsic,
+        horizon_years=Decimal(1),
+        policy=MultipleResolutionConfiguration(minimum_peer_sample=2),
+    )
+
+    assert resolved.peer_anchor_source == "forward"
+    assert resolved.market_anchor == Decimal("8")
+    assert resolved.current_target_anchor == target.enterprise_value / Decimal("125")
+    assert resolved.peer_confidence == MultipleConfidence.MEDIUM
+    assert not any("current LTM" in warning for warning in resolved.warnings)
 
 
 def test_sufficient_synchronized_premium_history_increases_confidence():
@@ -632,7 +822,31 @@ def test_sufficient_synchronized_premium_history_increases_confidence():
 
     assert resolved.target_history_confidence == MultipleConfidence.HIGH
     assert resolved.premium_persistence_confidence == MultipleConfidence.MEDIUM
-    assert resolved.confidence == MultipleConfidence.MEDIUM
+    assert resolved.confidence == MultipleConfidence.LOW
+
+
+def _stable_premium_histories(count: int = 12):
+    dates = tuple(datetime.date(2014 + index, 12, 31) for index in range(count))
+    target_history = HistoricalMultipleSummary(
+        basis=RelativeValuationBasis.EV_TO_EBITDA,
+        observations=tuple(
+            HistoricalMultipleObservation(observed_on=date, value=Decimal("20"))
+            for date in dates
+        ),
+        median=Decimal("20"),
+    )
+    peer_histories = tuple(
+        HistoricalMultipleSummary(
+            basis=RelativeValuationBasis.EV_TO_EBITDA,
+            observations=tuple(
+                HistoricalMultipleObservation(observed_on=date, value=Decimal("10"))
+                for date in dates
+            ),
+            median=Decimal("10"),
+        )
+        for _ in range(2)
+    )
+    return target_history, peer_histories
 
 
 def _basic_resolver_inputs():
@@ -808,11 +1022,13 @@ def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):
         minimum_peer_sample=2,
         annual_premium_decay=Decimal("0.2"),
     )
+    target_history, peer_histories = _stable_premium_histories()
 
     one_year = MultipleResolver().resolve(
         basis=RelativeValuationBasis.EV_TO_EBITDA,
         target=target,
-        target_history=None,
+        target_history=target_history,
+        peer_histories=peer_histories,
         peer_report=report,
         target_forecast=forecast,
         intrinsic_valuation=intrinsic,
@@ -822,7 +1038,8 @@ def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):
     two_year = MultipleResolver().resolve(
         basis=RelativeValuationBasis.EV_TO_EBITDA,
         target=target,
-        target_history=None,
+        target_history=target_history,
+        peer_histories=peer_histories,
         peer_report=report,
         target_forecast=forecast,
         intrinsic_valuation=intrinsic,
@@ -871,17 +1088,11 @@ def test_stronger_target_economics_increase_fundamental_support():
         strong,
         report.peers,
         [],
-        fundamental_anchor=Decimal("15"),
-        base_anchor=Decimal("10"),
-        observed_premium=Decimal(1),
     )
     weak_support, _ = MultipleResolver._fundamental_support(
         weak,
         report.peers,
         [],
-        fundamental_anchor=Decimal("15"),
-        base_anchor=Decimal("10"),
-        observed_premium=Decimal(1),
     )
 
     assert strong_support > weak_support

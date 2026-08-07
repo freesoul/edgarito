@@ -297,6 +297,8 @@ class PeerMultipleSummary(BaseModel):
     median: Decimal
     minimum: Decimal
     maximum: Decimal
+    percentile_25: Optional[Decimal] = None
+    percentile_75: Optional[Decimal] = None
     sample_size: int = Field(ge=1)
 
 
@@ -305,6 +307,7 @@ class ComparableMultiplesReport(BaseModel):
     target: CompanyTradingMultiples
     peers: list[CompanyTradingMultiples] = Field(default_factory=list)
     summaries: list[PeerMultipleSummary] = Field(default_factory=list)
+    forward_summaries: list[PeerMultipleSummary] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -343,7 +346,11 @@ class ResolvedMultiple(BaseModel):
     lower_bound: Decimal = Field(gt=0)
     upper_bound: Decimal = Field(gt=0)
     fundamental_anchor: Decimal = Field(gt=0)
+    fundamental_premium: Optional[Decimal] = None
     peer_anchor: Optional[Decimal] = None
+    peer_anchor_source: str = "unavailable"
+    peer_anchor_percentile_25: Optional[Decimal] = None
+    peer_anchor_percentile_75: Optional[Decimal] = None
     historical_anchor: Optional[Decimal] = None
     historical_percentile_25: Optional[Decimal] = None
     historical_percentile_75: Optional[Decimal] = None
@@ -355,8 +362,14 @@ class ResolvedMultiple(BaseModel):
     observed_premium: Optional[Decimal] = None
     resolved_premium: Optional[Decimal] = None
     historical_peer_premium: Optional[Decimal] = None
+    historical_peer_premium_25: Optional[Decimal] = None
+    historical_peer_premium_75: Optional[Decimal] = None
     premium_history_sample_size: int = Field(default=0, ge=0)
-    premium_mean_reversion_beta: Optional[Decimal] = Field(default=None, ge=0, le=1)
+    premium_mean_reversion_beta: Optional[Decimal] = Field(default=None, ge=-1, le=1)
+    shrunk_premium_persistence: Decimal = Field(default=0, ge=0, le=1)
+    statistical_premium: Optional[Decimal] = None
+    premium_history_weight: Decimal = Field(default=0, ge=0, le=1)
+    premium_observation_interval_years: Optional[Decimal] = Field(default=None, gt=0)
     historical_persistence: Decimal = Field(ge=0, le=1)
     fundamental_support: Decimal = Field(ge=0, le=1)
     horizon_retention: Decimal = Field(ge=0, le=1)

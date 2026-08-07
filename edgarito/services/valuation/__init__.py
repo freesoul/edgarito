@@ -4,6 +4,7 @@ from edgarito.services.valuation.assumptions import (
 )
 from edgarito.services.valuation.comparable_implied import (
     ComparableImpliedValuationService,
+    ForwardPeerMultiplesService,
     HistoricalMultiplesService,
     MultipleResolver,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "FcffDcfParameters",
     "FcffDcfResult",
     "FcffDcfService",
+    "ForwardPeerMultiplesService",
     "ModelRole",
     "ModelSuitability",
     "MultipleStatus",

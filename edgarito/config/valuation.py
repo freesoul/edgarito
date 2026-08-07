@@ -337,10 +337,20 @@ class MultipleResolutionConfiguration(_ProfileModel):
     forecast_premium_mean_reversion: bool = True
     minimum_peer_sample: int = Field(default=4, ge=1, le=50)
     annual_premium_decay: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
-    insufficient_history_persistence: Decimal = Field(
-        default=Decimal("0.50"), ge=0, le=1
+    premium_persistence_prior: Decimal = Field(default=Decimal("0.50"), ge=0, le=1)
+    full_premium_history_observations: int = Field(default=12, ge=4, le=100)
+    insufficient_history_persistence: Optional[Decimal] = Field(
+        default=None, ge=0, le=1
     )
-    persistence_range_width: Decimal = Field(default=Decimal("0.15"), ge=0, le=1)
+    persistence_range_width: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description=(
+            "Deprecated compatibility field; ranges now use peer and premium "
+            "evidence rather than a fixed persistence step"
+        ),
+    )
     winsorize_percentiles: tuple[Decimal, Decimal] = (
         Decimal("10"),
         Decimal("90"),

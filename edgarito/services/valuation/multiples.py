@@ -634,6 +634,8 @@ class ComparableMultiplesService:
                         median=median(values),
                         minimum=min(values),
                         maximum=max(values),
+                        percentile_25=self._percentile(sorted(values), Decimal("0.25")),
+                        percentile_75=self._percentile(sorted(values), Decimal("0.75")),
                         sample_size=len(values),
                     )
                 )
@@ -650,6 +652,16 @@ class ComparableMultiplesService:
             summaries=summaries,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _percentile(values: list[Decimal], percentile: Decimal) -> Decimal:
+        if len(values) == 1:
+            return values[0]
+        position = percentile * Decimal(len(values) - 1)
+        lower = int(position)
+        upper = min(lower + 1, len(values) - 1)
+        weight = position - Decimal(lower)
+        return values[lower] + (values[upper] - values[lower]) * weight
 
 
 __all__ = ["ComparableMultiplesService", "LtmMultiplesService"]

@@ -303,9 +303,11 @@ uv run edgarito valuation --ticker RACE --market eu \
 The output shows the intrinsic DCF and a separate forward target-price range.
 The multiple resolver treats the selected peer median as a baseline and the
 target multiple as a ratio premium to that baseline; it never averages the two
-raw multiples. Synchronized historical target-versus-peer premiums estimate
-mean reversion, while a horizon-matched DCF forward multiple and observable peer
-economics measure fundamental support. Thin history or too few peers lowers
+raw multiples. Synchronized historical target-versus-peer premiums estimate a
+long-run premium and AR(1) persistence of deviations around that level. The
+statistical premium is then blended with an independent, horizon-matched
+DCF-implied premium; observable peer economics determine how much premium above
+the DCF anchor is supportable. Thin history or too few peers lowers
 separately reported confidence dimensions and produces warnings instead of
 fabricated precision. Use
 `--model comparables` to print only the relative result. Add, for example,
@@ -329,8 +331,8 @@ multiple:
       "forecast_premium_mean_reversion": true,
       "minimum_peer_sample": 4,
       "annual_premium_decay": "0.10",
-      "insufficient_history_persistence": "0.50",
-      "persistence_range_width": "0.15",
+      "premium_persistence_prior": "0.50",
+      "full_premium_history_observations": 12,
       "winsorize_percentiles": ["10", "90"]
     }
   }

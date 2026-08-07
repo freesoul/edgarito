@@ -1,5 +1,35 @@
 
 
+compare intrinsic and market-relative values without mixing the models
+uv run edgarito valuation --ticker RACE --market eu --provider-symbol yahoo=RACE.MI --profile configs/valuation/race.json --model both --peer RMS.PA --peer CFR.SW --peer MONC.MI --peer P911.DE
+
+
+
+- **Implement remaining valuation methods**
+      Equity DCF/DDM.
+      Residual Income.
+      NAV/SOTP framework with specialized REIT, resource, biotech, and segment adapters.
+
+- **Add deterministic red-flag detection**
+- **Create the full report pipeline**
+- **Add exports**
+      - Excel(s) with raw data, metrics, forecasts, valuation(s)... so we can manually tweak variables easily
+      - PDF report(s) 
+- **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs
+- Autochoose provider when multiple : keep the one with most recent data, or with more results.
+- margin of safety + bull/bear/base cases
+- Include whether current price market price is cheap in the report
+- Add a portfolio feature, that will do actions/report for the whole portfolio. (plus)
+- maybe modify to take into account ttm in forecasts (?)
+
+
+
+
+---
+
+
+former suggestions from ai:
+
 1. Retrieve financials
 2. Classify the company
 3. Estimate normalized current ROIC
@@ -11,7 +41,7 @@
 9. Resolve persistent market premium
 10. Produce intrinsic + relative valuation
 
-
+---
 
 Make terminal ROIC automatic
 Current normalized ROIC
@@ -25,39 +55,3 @@ competitive advantage persistence
 terminal ROIC
 
 
-
-
-check why RACE differs from analyst forecasts
-uv run edgarito valuation   --ticker RACE   --market eu   --profile configs/valuation/race.json
-
-compare intrinsic and market-relative values without mixing the models
-uv run edgarito valuation --ticker RACE --market eu --provider-symbol yahoo=RACE.MI --profile configs/valuation/race.json --model both --peer RMS.PA --peer CFR.SW --peer MONC.MI --peer P911.DE
-
-
-and whether the fixes applied for this to pass are reasonable
-
- uv run edgarito valuation --ticker MSFT
-usage: edgarito [-h]
-                {financials,metrics,forecast,valuation,valuation-models,classification,comparables,specialized-inputs} ...
-edgarito: error: FCFF DCF requires complete debt and cash inputs for FY2026; provide valuation.capital_bridge.net_debt in the profile or --net-debt
-
-
-
-
-
-- **Add valuation methods**
-      Equity DCF/DDM.
-      Residual Income.
-      NAV/SOTP framework with specialized REIT, resource, biotech, and segment adapters.
-
-- **Add deterministic red-flag detection**
-- **Create the full report pipeline**
-- **Add exports**
-      - Excel(s) with raw, metrics, forecasts...
-      - PDF report
-- **Add AI integrations last**, as commentary and evidence review on top of deterministic outputs
-- Add a portfolio feature, that will do actions/report for the whole portfolio.
-- Autochoose provider when multiple : keep the one with most recent data, or with more results.
-- Poll recent market data (eg. add  yahoofinance if necessary) and determine whether cheap
-- maybe modify to take into account ttm in forecasts
-- margin of safety + bull/bear/base cases

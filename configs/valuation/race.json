@@ -105,8 +105,8 @@
       "forecast_premium_mean_reversion": true,
       "minimum_peer_sample": 4,
       "annual_premium_decay": "0.10",
-      "insufficient_history_persistence": "0.50",
-      "persistence_range_width": "0.15",
+      "premium_persistence_prior": "0.50",
+      "full_premium_history_observations": 12,
       "winsorize_percentiles": ["10", "90"]
     }
   },
