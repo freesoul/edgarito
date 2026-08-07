@@ -22,6 +22,11 @@ ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY") or os.getenv(
 )
 FMP_API_KEY = os.getenv("FMP_API_KEY") or os.getenv("fmp_key")
 FRED_API_KEY = os.getenv("FRED_API_KEY") or os.getenv("fred_api_key")
+MASSIVE_API_KEY = (
+    os.getenv("MASSIVE_API_KEY")
+    or os.getenv("massive_api_key")
+    or os.getenv("POLYGON_API_KEY")
+)
 OPENFIGI_API_KEY = os.getenv("OPENFIGI_API_KEY") or os.getenv("openfigi_api_key")
 PROVIDER_CONFIGURATION = ProviderConfiguration.from_environment(os.environ)
 CLASSIFICATION_PROVIDER_CONFIGURATION = (

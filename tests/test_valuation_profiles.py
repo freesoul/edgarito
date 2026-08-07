@@ -1,24 +1,36 @@
+import datetime
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from edgarito.cli.__main__ import build_parser, main
+from edgarito.cli.__main__ import (
+    _resolve_comparable_peer_symbols,
+    build_parser,
+    main,
+)
 from edgarito.config import ForecastMethod, ValuationProfileLoader
 from edgarito.config.valuation import CashFlowTiming, ForecastValuationProfile
 from edgarito.schemas.normalization.classification import Sector
-from edgarito.services.valuation import ValuationInput
+from edgarito.services.valuation import (
+    BusinessArchetype,
+    CompanyLifecycle,
+    Cyclicality,
+    EconomicTrait,
+    ValuationInput,
+    ValuationProfile,
+)
 
 ROOT = Path(__file__).parents[1]
+PROFILE_FIXTURES = ROOT / "tests" / "fixtures" / "valuation"
 AAPL_FIXTURE = ROOT / "tests" / "fixtures" / "aapl_facts.json"
 
 
-def test_default_profile_is_loaded_from_the_root_configs_directory():
-    path = ValuationProfileLoader.default_path()
-    profile = ValuationProfileLoader.load()
+def test_default_profile_fixture_is_valid_and_complete():
+    profile = ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json")
 
-    assert path == ROOT / "configs" / "valuation" / "default.json"
     assert profile.name == "default"
     assert profile.forecast.default_method == ForecastMethod.FCFF
     assert profile.forecast.fcff.forecast_years == 5
@@ -44,7 +56,7 @@ def test_default_profile_is_loaded_from_the_root_configs_directory():
 
 
 def test_race_profile_overrides_provider_classification_with_luxury_economics():
-    profile = ValuationProfileLoader.load(ROOT / "configs" / "valuation" / "race.json")
+    profile = ValuationProfileLoader.load(PROFILE_FIXTURES / "race.json")
 
     assert profile.name == "race"
     assert profile.model_selection.sector == Sector.CONSUMER_DISCRETIONARY
@@ -73,11 +85,9 @@ def test_race_profile_overrides_provider_classification_with_luxury_economics():
     assert profile.valuation.share_repurchases.initial_purchase_price is None
 
 
-def test_company_profiles_are_explicit_scenarios_not_automatically_selected():
-    default = ValuationProfileLoader.load()
-    microsoft = ValuationProfileLoader.load(
-        ROOT / "configs" / "valuation" / "msft.json"
-    )
+def test_company_profiles_remain_distinct_from_default():
+    default = ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json")
+    microsoft = ValuationProfileLoader.load(PROFILE_FIXTURES / "msft.json")
 
     assert default.name == "default"
     assert microsoft.name == "msft"
@@ -86,6 +96,47 @@ def test_company_profiles_are_explicit_scenarios_not_automatically_selected():
         == Decimal("40")
     )
     assert microsoft.valuation.multistage.depreciable_asset_life_years == 6
+
+
+def test_ticker_profile_loading_precedence(tmp_path, monkeypatch):
+    profile_dir = tmp_path / "valuation"
+    profile_dir.mkdir(parents=True)
+    default_path = profile_dir / "default.json"
+    default_path.write_text(
+        (PROFILE_FIXTURES / "default.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ValuationProfileLoader,
+        "default_path",
+        classmethod(lambda cls: default_path),
+    )
+
+    default, generated_path, should_generate = (
+        ValuationProfileLoader.load_for_ticker("BRK/B")
+    )
+    assert default.name == "default"
+    assert generated_path == profile_dir / "brk-b.json"
+    assert should_generate
+
+    ticker_payload = default.model_copy(update={"name": "brk-b"})
+    generated_path.write_text(ticker_payload.model_dump_json(), encoding="utf-8")
+    selected, selected_path, should_generate = (
+        ValuationProfileLoader.load_for_ticker("BRK/B")
+    )
+    assert selected.name == "brk-b"
+    assert selected_path == generated_path
+    assert not should_generate
+
+    explicit_path = profile_dir / "scenario.json"
+    explicit_payload = default.model_copy(update={"name": "scenario"})
+    explicit_path.write_text(explicit_payload.model_dump_json(), encoding="utf-8")
+    selected, selected_path, should_generate = (
+        ValuationProfileLoader.load_for_ticker("BRK/B", explicit_path)
+    )
+    assert selected.name == "scenario"
+    assert selected_path == explicit_path
+    assert not should_generate
 
 
 def test_custom_profile_can_partially_override_defaults(tmp_path):
@@ -304,3 +355,140 @@ def _cache_aapl(cache_dir: Path) -> None:
         encoding="utf-8",
     )
     facts_path.write_text(AAPL_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def test_generated_ticker_profile_materializes_structural_inference_once(tmp_path):
+    path = tmp_path / "acme.json"
+    inferred = ValuationProfile(
+        provider="test",
+        company_id="ACME",
+        company_name="Acme",
+        ticker="ACME",
+        sector=Sector.TECHNOLOGY,
+        industry="Software - Infrastructure",
+        business_archetype=BusinessArchetype.GENERAL_OPERATING,
+        lifecycle=CompanyLifecycle.GROWTH,
+        cyclicality=Cyclicality.LOW,
+        economic_traits={EconomicTrait.PRICING_POWER},
+    )
+
+    generated, generated_path, created = ValuationProfileLoader.create_generated(
+        ticker="ACME",
+        base_profile=ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json"),
+        inferred_profile=inferred,
+        terminal_roic=Decimal("27.5"),
+        terminal_roic_confidence="high",
+        generated_on=datetime.date(2026, 8, 7),
+        peers=("msft", "GOOGL", "MSFT"),
+        path=path,
+    )
+
+    assert created
+    assert generated_path == path
+    assert generated.name == "acme"
+    assert generated.model_selection.sector == Sector.TECHNOLOGY
+    assert generated.model_selection.lifecycle == CompanyLifecycle.GROWTH
+    assert generated.model_selection.peer_count == 2
+    assert EconomicTrait.PRICING_POWER in generated.model_selection.economic_traits
+    assert (
+        generated.valuation.multistage.terminal_return_on_invested_capital
+        == Decimal("27.5")
+    )
+    assert generated.valuation.discount_rates.wacc is None
+    assert generated.valuation.terminal_value.perpetual_growth_rate is None
+    assert generated.valuation.capital_bridge.net_debt is None
+    assert generated.comparables.peers == ("MSFT", "GOOGL")
+    assert json.loads(path.read_text(encoding="utf-8"))["comparables"]["peers"] == [
+        "MSFT",
+        "GOOGL",
+    ]
+    assert ValuationProfileLoader.load(path) == generated
+
+    saved_symbols, saved_source = _resolve_comparable_peer_symbols(
+        SimpleNamespace(peer=None), generated, "ACME"
+    )
+    assert saved_symbols == ["MSFT", "GOOGL"]
+    assert saved_source == "valuation-profile"
+    cli_symbols, cli_source = _resolve_comparable_peer_symbols(
+        SimpleNamespace(peer=["ORCL", "ACME", "orcl"]), generated, "ACME"
+    )
+    assert cli_symbols == ["ORCL"]
+    assert cli_source is None
+
+    tuned = generated.model_copy(
+        update={
+            "valuation": generated.valuation.model_copy(
+                update={
+                    "multistage": generated.valuation.multistage.model_copy(
+                        update={"terminal_return_on_invested_capital": Decimal("25")}
+                    )
+                }
+            )
+        }
+    )
+    path.write_text(tuned.model_dump_json(indent=2), encoding="utf-8")
+    existing, _, created_again = ValuationProfileLoader.create_generated(
+        ticker="ACME",
+        base_profile=ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json"),
+        inferred_profile=inferred,
+        terminal_roic=Decimal("30"),
+        terminal_roic_confidence="high",
+        generated_on=datetime.date(2026, 8, 8),
+        path=path,
+    )
+    assert not created_again
+    assert existing.valuation.multistage.terminal_return_on_invested_capital == Decimal(
+        "25"
+    )
+
+
+def test_default_valuation_creates_and_reports_a_ticker_profile(
+    tmp_path, capsys, monkeypatch
+):
+    _cache_aapl(tmp_path)
+    profile_dir = tmp_path / "valuation"
+    profile_dir.mkdir(parents=True)
+    default_path = profile_dir / "default.json"
+    default_path.write_text(
+        (PROFILE_FIXTURES / "default.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ValuationProfileLoader,
+        "default_path",
+        classmethod(lambda cls: default_path),
+    )
+
+    exit_code = main(
+        [
+            "valuation",
+            "--ticker",
+            "AAPL",
+            "--model",
+            "fcff-dcf",
+            "--years",
+            "2",
+            "--wacc",
+            "8",
+            "--terminal-growth",
+            "2",
+            "--terminal-roic",
+            "15",
+            "--cache-dir",
+            str(tmp_path),
+            "--user-agent",
+            "Edgarito Tests (tests@example.com)",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    generated_path = profile_dir / "aapl.json"
+    assert exit_code == 0
+    assert generated_path.is_file()
+    assert f"Generated valuation profile: {generated_path.resolve()}" in output
+    assert "Valuation profile: aapl" in output
+    generated = ValuationProfileLoader.load(generated_path)
+    assert (
+        generated.valuation.multistage.terminal_return_on_invested_capital
+        == Decimal("15")
+    )

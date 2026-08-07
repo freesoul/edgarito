@@ -218,6 +218,10 @@ class PeerSelectionParameters(BaseModel):
     preferred_minimum: int = Field(default=5, ge=1, le=50)
     minimum_score: int = Field(default=50, ge=0, le=100)
     require_same_sector: bool = True
+    minimum_market_cap_ratio: Decimal = Field(
+        default=Decimal("0.25"), gt=0, le=1
+    )
+    maximum_market_cap_ratio: Decimal = Field(default=Decimal(4), ge=1)
 
 
 class PeerCandidateAssessment(BaseModel):
@@ -280,6 +284,7 @@ class LtmFundamentals(BaseModel):
     free_cash_flow: Optional[Decimal] = None
     capital_expenditures: Optional[Decimal] = None
     dividends_paid: Optional[Decimal] = None
+    return_on_invested_capital: Optional[Decimal] = None
     book_equity: Optional[Decimal] = None
     tangible_book_equity: Optional[Decimal] = None
     cash_and_equivalents: Optional[Decimal] = None

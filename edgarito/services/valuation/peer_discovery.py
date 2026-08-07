@@ -4,8 +4,9 @@ import asyncio
 import json
 import math
 import re
-from typing import Callable, Protocol
+from typing import Callable, Optional, Protocol
 
+import aiohttp
 import yfinance as yf
 
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
@@ -17,6 +18,118 @@ class PeerCandidateDiscoveryProvider(Protocol):
     async def discover(
         self, target: YahooCompanyFinancials, *, max_candidates: int = 30
     ) -> PeerDiscoveryResult: ...
+
+
+class MassiveRelatedCompaniesPeerDiscoveryProvider:
+    """Discover U.S. candidates from Massive's related-companies endpoint."""
+
+    _BASE_URL = "https://api.massive.com/v1/related-companies"
+    _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9._^-]*$")
+
+    def __init__(
+        self,
+        cache: FileSystemCache,
+        api_key: str,
+        *,
+        session: Optional[aiohttp.ClientSession] = None,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ):
+        if not api_key or not api_key.strip():
+            raise ValueError("A Massive API key is required")
+        self._cache = cache
+        self._api_key = api_key.strip()
+        self._session = session
+        self._use_cache = use_cache
+        self._make_cache = make_cache
+
+    async def discover(
+        self, target: YahooCompanyFinancials, *, max_candidates: int = 30
+    ) -> PeerDiscoveryResult:
+        symbol = target.symbol.strip().upper()
+        if not self._SYMBOL.fullmatch(symbol):
+            raise ValueError(f"Invalid Massive ticker: {target.symbol!r}")
+        cache_path = f"providers/massive/related-companies/{symbol}.json"
+        payload = None
+        if self._use_cache:
+            cached = self._cache.read(cache_path)
+            if cached is not None:
+                try:
+                    payload = json.loads(cached)
+                except json.JSONDecodeError:
+                    payload = None
+        if payload is None:
+            payload = await self._retrieve(symbol)
+            if self._make_cache:
+                self._cache.save(cache_path, json.dumps(payload, sort_keys=True))
+
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(results, list):
+            raise RuntimeError("Massive related companies returned an invalid response")
+        candidates = []
+        seen = {symbol}
+        for item in results:
+            candidate = (
+                str(item.get("ticker") or "").strip().upper()
+                if isinstance(item, dict)
+                else ""
+            )
+            if not self._SYMBOL.fullmatch(candidate) or candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(candidate)
+            if len(candidates) >= max_candidates:
+                break
+        confidence = (
+            "high" if len(candidates) >= 8 else "medium" if len(candidates) >= 5 else "low"
+        )
+        warnings = ()
+        if confidence == "low":
+            warnings = (
+                f"Massive returned only {len(candidates)} unique related tickers",
+            )
+        return PeerDiscoveryResult(
+            provider="massive-related",
+            target_ticker=symbol,
+            candidate_tickers=tuple(candidates),
+            methodology=(
+                "Massive Related Tickers candidates derived from news co-mentions "
+                "and returns relationships; downstream economic scoring remains required"
+            ),
+            confidence=confidence,
+            warnings=warnings,
+        )
+
+    async def _retrieve(self, symbol: str) -> dict:
+        owns_session = self._session is None
+        session = self._session or aiohttp.ClientSession()
+        try:
+            async with session.get(
+                f"{self._BASE_URL}/{symbol}",
+                params={"apiKey": self._api_key},
+                timeout=20,
+            ) as response:
+                content = await response.text()
+                if response.status == 429:
+                    raise RuntimeError("Massive related companies rate limit reached")
+                if response.status >= 400:
+                    raise RuntimeError(
+                        "Massive related companies failed with HTTP "
+                        f"{response.status} for {symbol}"
+                    )
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"Massive related companies retrieval failed for {symbol}"
+            ) from exc
+        finally:
+            if owns_session:
+                await session.close()
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "Massive related companies returned invalid JSON"
+            ) from exc
 
 
 class YahooScreenerPeerDiscoveryProvider:
@@ -42,6 +155,75 @@ class YahooScreenerPeerDiscoveryProvider:
         (re.compile(r"building products?"), "Building Products"),
         (re.compile(r"construction materials?"), "Construction Materials"),
     )
+    _EUROPE_REGIONS = frozenset(
+        {
+            "at",
+            "be",
+            "ch",
+            "cz",
+            "de",
+            "dk",
+            "ee",
+            "es",
+            "fi",
+            "fr",
+            "gb",
+            "gr",
+            "hu",
+            "ie",
+            "is",
+            "it",
+            "lt",
+            "lv",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "ro",
+            "se",
+        }
+    )
+    _COUNTRY_REGIONS = {
+        "austria": "at",
+        "belgium": "be",
+        "canada": "ca",
+        "czech republic": "cz",
+        "denmark": "dk",
+        "finland": "fi",
+        "france": "fr",
+        "germany": "de",
+        "ireland": "ie",
+        "italy": "it",
+        "netherlands": "nl",
+        "norway": "no",
+        "portugal": "pt",
+        "spain": "es",
+        "sweden": "se",
+        "switzerland": "ch",
+        "united kingdom": "gb",
+        "united states": "us",
+        "united states of america": "us",
+        "usa": "us",
+    }
+    _SYMBOL_REGIONS = {
+        ".AS": "nl",
+        ".BR": "be",
+        ".CO": "dk",
+        ".DE": "de",
+        ".HE": "fi",
+        ".IR": "ie",
+        ".L": "gb",
+        ".LS": "pt",
+        ".MC": "es",
+        ".MI": "it",
+        ".OL": "no",
+        ".PA": "fr",
+        ".PR": "cz",
+        ".ST": "se",
+        ".SW": "ch",
+        ".VI": "at",
+        ".WA": "pl",
+    }
 
     def __init__(
         self,
@@ -75,33 +257,58 @@ class YahooScreenerPeerDiscoveryProvider:
         field = "peer_group" if peer_group is not None else "sector"
         filter_value = peer_group or sector
         cache_key = re.sub(r"[^a-z0-9]+", "-", filter_value.casefold()).strip("-")
-        cache_path = f"providers/yahoo/screeners/{field}-{cache_key}.json"
-        response = None
-        if self._use_cache:
-            cached = self._cache.read(cache_path)
-            if cached is not None:
-                response = json.loads(cached)
-        if response is None:
-            query = yf.EquityQuery("eq", [field, filter_value])
-            try:
-                response = await asyncio.to_thread(
-                    self._screen,
-                    query,
-                    size=100,
-                    sortField="intradaymarketcap",
-                    sortAsc=False,
-                )
-            except Exception as exc:
+        base_query = yf.EquityQuery("eq", [field, filter_value])
+        target_region = self._region(target)
+        region_group = self._region_group(target_region)
+        query = self._regional_query(base_query, target_region)
+        scope = region_group or target_region or "global"
+        cache_path = f"providers/yahoo/screeners/{field}-{cache_key}-{scope}.json"
+        warnings = []
+        try:
+            response = await self._response(query, cache_path)
+        except Exception as exc:
+            if target_region is None:
                 return self._unavailable(
                     target.symbol, f"Yahoo sector screener failed: {exc}"
                 )
-            if self._make_cache:
-                self._cache.save(cache_path, json.dumps(response, sort_keys=True))
+            warnings.append(
+                f"Yahoo {scope} industry screen failed; global screen used: {exc}"
+            )
+            try:
+                response = await self._response(
+                    base_query,
+                    f"providers/yahoo/screeners/{field}-{cache_key}-global.json",
+                )
+            except Exception as fallback_exc:
+                return self._unavailable(
+                    target.symbol,
+                    f"Yahoo regional and global screens failed: {fallback_exc}",
+                )
+
+        quotes = response.get("quotes", []) if isinstance(response, dict) else []
+        minimum_regional = min(5, max_candidates)
+        if target_region is not None and len(quotes) < minimum_regional:
+            try:
+                global_response = await self._response(
+                    base_query,
+                    f"providers/yahoo/screeners/{field}-{cache_key}-global.json",
+                )
+                global_quotes = (
+                    global_response.get("quotes", [])
+                    if isinstance(global_response, dict)
+                    else []
+                )
+                quotes = [*quotes, *global_quotes]
+                warnings.append(
+                    f"Yahoo {scope} screen returned fewer than {minimum_regional} "
+                    "quotes; economically comparable global candidates were added"
+                )
+            except Exception as exc:
+                warnings.append(f"Yahoo global fallback screen failed: {exc}")
 
         target_cap = target.market_capitalization
         preferred_exchanges = self._preferred_exchanges(target.exchange)
         ranked_by_issuer = {}
-        quotes = response.get("quotes", [])
         primary_names = {
             str(quote.get("symbol") or "").strip().upper(): quote.get("longName")
             for quote in quotes
@@ -126,15 +333,27 @@ class YahooScreenerPeerDiscoveryProvider:
                 and candidate_cap
                 and candidate_cap > 0
             ):
-                distance = abs(math.log10(candidate_cap / float(target_cap)))
+                cap_ratio = candidate_cap / float(target_cap)
+                if cap_ratio < 0.25 or cap_ratio > 4:
+                    continue
+                distance = abs(math.log10(cap_ratio))
             else:
                 distance = math.inf
             exchange = str(quote.get("exchange") or "").upper()
-            listing_rank = (
+            exchange_rank = (
                 0
                 if exchange in preferred_exchanges
                 else 1
                 if "." not in symbol and symbol.isalpha()
+                else 2
+            )
+            candidate_region = self._quote_region(quote, symbol)
+            geography_rank = (
+                0
+                if target_region and candidate_region == target_region
+                else 1
+                if region_group
+                and self._region_group(candidate_region) == region_group
                 else 2
             )
             primary_symbol = symbol.split(".", maxsplit=1)[0]
@@ -145,21 +364,20 @@ class YahooScreenerPeerDiscoveryProvider:
                 or symbol
             ).casefold()
             issuer_key = re.sub(r"[^a-z0-9]", "", name)
-            rank = (listing_rank, distance, symbol)
+            rank = (geography_rank, exchange_rank, distance, symbol)
             if (
                 issuer_key not in ranked_by_issuer
                 or rank < ranked_by_issuer[issuer_key]
             ):
                 ranked_by_issuer[issuer_key] = rank
         symbols = tuple(
-            item[2] for item in sorted(ranked_by_issuer.values())[:max_candidates]
+            item[-1] for item in sorted(ranked_by_issuer.values())[:max_candidates]
         )
         confidence = (
             "high" if len(symbols) >= 15 else "medium" if len(symbols) >= 5 else "low"
         )
-        warnings = ()
         if confidence == "low":
-            warnings = (
+            warnings.append(
                 f"Only {len(symbols)} provider-supported sector candidates were discovered",
             )
         return PeerDiscoveryResult(
@@ -167,13 +385,38 @@ class YahooScreenerPeerDiscoveryProvider:
             target_ticker=target.symbol,
             candidate_tickers=symbols,
             methodology=(
-                f"Yahoo {field.replace('_', ' ')} {filter_value!r} equity screener; "
+                f"Yahoo {scope} {field.replace('_', ' ')} {filter_value!r} equity "
+                "screener with global fallback when regional coverage is sparse; "
                 "candidates ordered deterministically "
-                "by geography signal, market-cap proximity and ticker before economic scoring"
+                "by geography, 0.25x-4x market-cap proximity and ticker before "
+                "economic scoring"
             ),
             confidence=confidence,
-            warnings=warnings,
+            warnings=tuple(warnings),
         )
+
+    async def _response(self, query, cache_path):
+        if self._use_cache:
+            cached = self._cache.read(cache_path)
+            if cached is not None:
+                try:
+                    payload = json.loads(cached)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    return payload
+        response = await asyncio.to_thread(
+            self._screen,
+            query,
+            size=100,
+            sortField="intradaymarketcap",
+            sortAsc=False,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("Yahoo screener returned an invalid response")
+        if self._make_cache:
+            self._cache.save(cache_path, json.dumps(response, sort_keys=True))
+        return response
 
     @staticmethod
     def _unavailable(symbol, warning):
@@ -206,8 +449,183 @@ class YahooScreenerPeerDiscoveryProvider:
             return {"NYQ"}
         return set()
 
+    @classmethod
+    def _region(cls, target):
+        country = (target.country or "").strip().casefold()
+        if country in cls._COUNTRY_REGIONS:
+            return cls._COUNTRY_REGIONS[country]
+        if len(country) == 2:
+            return country
+        symbol = target.symbol.strip().upper()
+        return next(
+            (
+                region
+                for suffix, region in cls._SYMBOL_REGIONS.items()
+                if symbol.endswith(suffix)
+            ),
+            (
+                "us"
+                if any(
+                    exchange in (target.exchange or "").casefold()
+                    for exchange in ("nasdaq", "nyse")
+                )
+                else None
+            ),
+        )
+
+    @classmethod
+    def _regional_query(cls, base_query, region):
+        if region is None:
+            return base_query
+        regions = cls._EUROPE_REGIONS if region in cls._EUROPE_REGIONS else (region,)
+        filters = [yf.EquityQuery("eq", ["region", item]) for item in sorted(regions)]
+        region_query = (
+            filters[0] if len(filters) == 1 else yf.EquityQuery("or", filters)
+        )
+        return yf.EquityQuery("and", [region_query, base_query])
+
+    @classmethod
+    def _quote_region(cls, quote, symbol):
+        region = str(quote.get("region") or "").strip().casefold()
+        if region:
+            return cls._COUNTRY_REGIONS.get(region, region if len(region) == 2 else None)
+        return next(
+            (
+                value
+                for suffix, value in cls._SYMBOL_REGIONS.items()
+                if symbol.endswith(suffix)
+            ),
+            None,
+        )
+
+    @classmethod
+    def _region_group(cls, region):
+        return "europe" if region in cls._EUROPE_REGIONS else region
+
+
+class MarketAwarePeerDiscoveryProvider:
+    """Use Massive for U.S. issuers and Yahoo for fallback/global discovery."""
+
+    def __init__(
+        self,
+        yahoo: PeerCandidateDiscoveryProvider,
+        massive: PeerCandidateDiscoveryProvider | None = None,
+        *,
+        minimum_candidates: int = 5,
+    ):
+        self._yahoo = yahoo
+        self._massive = massive
+        self._minimum_candidates = minimum_candidates
+
+    async def discover(
+        self, target: YahooCompanyFinancials, *, max_candidates: int = 30
+    ) -> PeerDiscoveryResult:
+        if not self._is_us(target):
+            yahoo = await self._yahoo.discover(target, max_candidates=max_candidates)
+            return yahoo.model_copy(
+                update={
+                    "methodology": (
+                        "Non-U.S. issuer bypassed the U.S.-only Massive source; "
+                        + yahoo.methodology
+                    )
+                }
+            )
+
+        fallback_warnings = []
+        massive = None
+        if self._massive is None:
+            fallback_warnings.append(
+                "Massive API key is not configured; Yahoo fallback used"
+            )
+        else:
+            try:
+                massive = await self._massive.discover(
+                    target, max_candidates=max_candidates
+                )
+            except (RuntimeError, ValueError) as exc:
+                fallback_warnings.append(f"Massive discovery failed: {exc}")
+            if massive is not None and len(massive.candidate_tickers) >= min(
+                self._minimum_candidates, max_candidates
+            ):
+                return massive
+            if massive is not None:
+                fallback_warnings.extend(massive.warnings)
+                fallback_warnings.append(
+                    "Massive returned too few candidates; Yahoo fallback supplemented it"
+                )
+
+        try:
+            yahoo = await self._yahoo.discover(target, max_candidates=max_candidates)
+        except (RuntimeError, ValueError) as exc:
+            fallback_warnings.append(f"Yahoo fallback failed: {exc}")
+            yahoo = PeerDiscoveryResult(
+                provider="yahoo-screener",
+                target_ticker=target.symbol,
+                methodology="Yahoo fallback unavailable",
+                confidence="low",
+            )
+        combined = self._deduplicate(
+            (
+                *(massive.candidate_tickers if massive is not None else ()),
+                *yahoo.candidate_tickers,
+            ),
+            target.symbol,
+            max_candidates,
+        )
+        fallback_warnings.extend(yahoo.warnings)
+        confidence = (
+            "high" if len(combined) >= 10 else "medium" if len(combined) >= 5 else "low"
+        )
+        return PeerDiscoveryResult(
+            provider=(
+                "massive-related+yahoo-screener"
+                if massive is not None and massive.candidate_tickers
+                else "yahoo-screener"
+            ),
+            target_ticker=target.symbol,
+            candidate_tickers=combined,
+            methodology=(
+                "U.S. discovery uses Massive Related Tickers first, with Yahoo "
+                "industry/region screening on failure or sparse coverage; candidates "
+                "are de-duplicated before downstream valuation-comparability ranking"
+            ),
+            confidence=confidence,
+            warnings=tuple(dict.fromkeys(fallback_warnings)),
+        )
+
+    @staticmethod
+    def _deduplicate(candidates, target, maximum):
+        seen = {target.strip().upper()}
+        selected = []
+        for value in candidates:
+            symbol = value.strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            selected.append(symbol)
+            if len(selected) >= maximum:
+                break
+        return tuple(selected)
+
+    @staticmethod
+    def _is_us(target):
+        country = (target.country or "").strip().casefold()
+        if country:
+            return country in {
+                "us",
+                "usa",
+                "united states",
+                "united states of america",
+            }
+        exchange = (target.exchange or "").casefold()
+        return any(
+            value in exchange for value in ("nasdaq", "nyse", "new york", "amex")
+        )
+
 
 __all__ = [
+    "MarketAwarePeerDiscoveryProvider",
+    "MassiveRelatedCompaniesPeerDiscoveryProvider",
     "PeerCandidateDiscoveryProvider",
     "YahooScreenerPeerDiscoveryProvider",
 ]

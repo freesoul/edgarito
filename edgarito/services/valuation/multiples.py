@@ -30,6 +30,8 @@ class LtmMultiplesService:
     _FLOW_CONCEPTS = {
         FinancialConcept.REVENUE,
         FinancialConcept.OPERATING_INCOME,
+        FinancialConcept.PRETAX_INCOME,
+        FinancialConcept.INCOME_TAX_EXPENSE,
         FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
         FinancialConcept.NET_INCOME,
         FinancialConcept.OPERATING_CASH_FLOW,
@@ -129,6 +131,14 @@ class LtmMultiplesService:
         equity = balances[FinancialConcept.STOCKHOLDERS_EQUITY]
         tangible_book = self._tangible_book_equity(balances)
         shares, share_basis = self._shares(balances)
+        roic = self._return_on_invested_capital(
+            operating_income,
+            flows[FinancialConcept.PRETAX_INCOME],
+            flows[FinancialConcept.INCOME_TAX_EXPENSE],
+            equity,
+            gross_debt,
+            balances[FinancialConcept.CASH_AND_EQUIVALENTS],
+        )
 
         warnings = []
         if market_data.currency != currency:
@@ -160,6 +170,7 @@ class LtmMultiplesService:
             free_cash_flow=free_cash_flow,
             capital_expenditures=flows[FinancialConcept.CAPITAL_EXPENDITURES],
             dividends_paid=flows[FinancialConcept.DIVIDENDS_PAID],
+            return_on_invested_capital=roic,
             book_equity=equity,
             tangible_book_equity=tangible_book,
             cash_and_equivalents=cash,
@@ -264,6 +275,14 @@ class LtmMultiplesService:
         market_cap = price.close * shares if shares is not None else None
         comparable_market_cap = market_cap if market_data.currency == currency else None
         cash = balances[FinancialConcept.CASH_AND_EQUIVALENTS]
+        roic = self._return_on_invested_capital(
+            operating_income,
+            value(FinancialConcept.PRETAX_INCOME),
+            value(FinancialConcept.INCOME_TAX_EXPENSE),
+            balances[FinancialConcept.STOCKHOLDERS_EQUITY],
+            gross_debt,
+            cash,
+        )
         enterprise_value = self._enterprise_value(
             comparable_market_cap, gross_debt, cash
         )
@@ -293,6 +312,7 @@ class LtmMultiplesService:
             free_cash_flow=free_cash_flow,
             capital_expenditures=value(FinancialConcept.CAPITAL_EXPENDITURES),
             dividends_paid=value(FinancialConcept.DIVIDENDS_PAID),
+            return_on_invested_capital=roic,
             book_equity=balances[FinancialConcept.STOCKHOLDERS_EQUITY],
             tangible_book_equity=self._tangible_book_equity(balances),
             cash_and_equivalents=cash,
@@ -498,6 +518,39 @@ class LtmMultiplesService:
         if market_cap is None or gross_debt is None or cash is None:
             return None
         return market_cap + gross_debt - cash
+
+    @staticmethod
+    def _return_on_invested_capital(
+        operating_income: Decimal | None,
+        pretax_income: Decimal | None,
+        income_tax_expense: Decimal | None,
+        book_equity: Decimal | None,
+        gross_debt: Decimal | None,
+        cash: Decimal | None,
+    ) -> Decimal | None:
+        values = (operating_income, book_equity, gross_debt, cash)
+        if any(value is None for value in values):
+            return None
+        assert operating_income is not None
+        assert book_equity is not None
+        assert gross_debt is not None
+        assert cash is not None
+        invested_capital = book_equity + gross_debt - cash
+        if invested_capital <= 0:
+            return None
+        if (
+            pretax_income is not None
+            and pretax_income > 0
+            and income_tax_expense is not None
+            and income_tax_expense >= 0
+        ):
+            tax_rate = min(
+                Decimal("0.5"), income_tax_expense / pretax_income
+            )
+        else:
+            return None
+        nopat = operating_income * (Decimal(1) - tax_rate)
+        return nopat / invested_capital * Decimal(100)
 
     @staticmethod
     def _sum_optional(left: Decimal | None, right: Decimal | None) -> Decimal | None:

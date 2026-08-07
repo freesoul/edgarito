@@ -1,0 +1,60 @@
+{
+  "quotes": [
+    {
+      "symbol": "RACE.MI",
+      "longName": "Ferrari N.V.",
+      "quoteType": "EQUITY",
+      "marketCap": 60000000000,
+      "region": "it",
+      "exchange": "MIL"
+    },
+    {
+      "symbol": "MONC.MI",
+      "longName": "Moncler S.p.A.",
+      "quoteType": "EQUITY",
+      "marketCap": 15000000000,
+      "region": "it",
+      "exchange": "MIL"
+    },
+    {
+      "symbol": "STLAM.MI",
+      "longName": "Stellantis N.V.",
+      "quoteType": "EQUITY",
+      "marketCap": 45000000000,
+      "region": "it",
+      "exchange": "MIL"
+    },
+    {
+      "symbol": "RMS.PA",
+      "longName": "Hermes International SCA",
+      "quoteType": "EQUITY",
+      "marketCap": 210000000000,
+      "region": "fr",
+      "exchange": "PAR"
+    },
+    {
+      "symbol": "CFR.SW",
+      "longName": "Compagnie Financiere Richemont SA",
+      "quoteType": "EQUITY",
+      "marketCap": 90000000000,
+      "region": "ch",
+      "exchange": "EBS"
+    },
+    {
+      "symbol": "P911.DE",
+      "longName": "Dr. Ing. h.c. F. Porsche AG",
+      "quoteType": "EQUITY",
+      "marketCap": 50000000000,
+      "region": "de",
+      "exchange": "GER"
+    },
+    {
+      "symbol": "TINY.MI",
+      "longName": "Tiny Motors S.p.A.",
+      "quoteType": "EQUITY",
+      "marketCap": 1000000000,
+      "region": "it",
+      "exchange": "MIL"
+    }
+  ]
+}

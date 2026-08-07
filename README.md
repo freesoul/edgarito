@@ -16,6 +16,8 @@ cache_path=./cache
 user_agent="Your Name (your-email@example.com)"
 alphavantage_api_key="your-api-key"
 fmp_key="your-api-key"
+# Optional: primary U.S. peer discovery through Massive Related Tickers.
+# massive_api_key="your-api-key"
 # Optional: raises the rate limit for otherwise free ISIN mapping.
 # openfigi_api_key="your-api-key"
 ```
@@ -23,7 +25,13 @@ fmp_key="your-api-key"
 Replace the placeholders needed by the providers you use. OpenFIGI does not
 require a key; omit `openfigi_api_key` unless you want its higher rate limit.
 
-`user_agent` is required only when the SEC provider is selected. The SEC asks clients to identify themselves with contact information. `alphavantage_api_key` and `fmp_key` are required only for their respective providers. Yahoo requires no API key. `cache_path` defaults to `cache` when omitted.
+`user_agent` is required only when the SEC provider is selected. The SEC asks
+clients to identify themselves with contact information. `alphavantage_api_key`
+and `fmp_key` are required only for their respective providers.
+`massive_api_key` enables Massive as the primary U.S. peer-discovery source;
+`MASSIVE_API_KEY` and the legacy `POLYGON_API_KEY` environment name are also
+accepted. Yahoo requires no API key. `cache_path` defaults to `cache` when
+omitted.
 
 The CLI reads `.env` automatically. `--user-agent` and `--cache-dir` override their corresponding dotenv values for an individual command.
 
@@ -256,10 +264,19 @@ The default WACC, perpetual growth, and terminal ROIC are `null`: for
 valuation is enabled when provider-backed peer evidence is sufficient. A CLI or
 profile value always takes precedence over an automatically resolved value.
 
-Profile-enabled commands use the root default unless `--profile` is supplied.
-Company profiles are explicit scenarios and are never silently selected from a
-ticker. Explicitly supplied CLI options take precedence over the selected
-profile:
+For `valuation`, an explicit `--profile` wins first. Otherwise Edgarito loads an
+existing `configs/valuation/<ticker>.json`. If it does not exist, the first
+successful generic inference creates it from the default profile and uses its
+ticker name in the current output. The generated file materializes structural
+classification, lifecycle, cyclicality, economic traits, and terminal ROIC so
+they can be tuned. When comparable discovery succeeds, the economically
+selected symbols are stored in `comparables.peers`; later `valuation` and
+`comparables` runs reuse that saved candidate set and rank it again against
+current fundamentals. An explicit `--peer` list replaces the saved set.
+Time-sensitive WACC, terminal growth, forecast run-rate, debt, cash,
+investments, and shares remain `null` and continue to refresh automatically.
+Generated or user-edited ticker profiles are never overwritten. Explicitly
+supplied CLI options still take precedence over the selected profile:
 
 ```bash
 uv run edgarito forecast --ticker AAPL --profile configs/valuation/growth.json
@@ -273,20 +290,20 @@ uv run edgarito specialized-inputs --ticker PLD --type reit \
 Company-specific profiles may override unreliable provider classifications for
 valuation purposes. For example, the bundled Ferrari profile treats `RACE` as a
 consumer-discretionary luxury-goods business; Damodaran's `Apparel` row is used
-as the closest available luxury beta proxy:
+as the closest available luxury beta proxy. Because the filename matches the
+ticker, it is selected automatically:
 
 ```bash
-uv run edgarito valuation --ticker RACE --market eu \
-  --profile configs/valuation/race.json
+uv run edgarito valuation --ticker RACE --market eu
 ```
 
 The bundled Microsoft scenario models the current AI infrastructure build-out
 as a temporary reinvestment phase, rolls depreciation forward using a six-year
-asset life, and converges to a 40% terminal ROIC. Select it explicitly:
+asset life, and converges to a 40% terminal ROIC. It is likewise selected for
+`MSFT` automatically:
 
 ```bash
-uv run edgarito valuation --ticker MSFT \
-  --profile configs/valuation/msft.json
+uv run edgarito valuation --ticker MSFT
 ```
 
 Ferrari's profile no longer stores a 22.5x answer. It retains a conventional
@@ -296,7 +313,6 @@ market-relative valuation. Supply a candidate universe and request both models:
 ```bash
 uv run edgarito valuation --ticker RACE --market eu \
   --provider-symbol yahoo=RACE.MI \
-  --profile configs/valuation/race.json \
   --model both \
   --peer RMS.PA --peer CFR.SW --peer MONC.MI --peer P911.DE
 ```
@@ -786,8 +802,8 @@ driver-based FCFF result and the remaining valuation inputs are supplied.
 ## Select peers and compute LTM multiples
 
 `comparables` discovers a broad candidate universe and computes target and peer
-multiples from Yahoo's keyless company metadata, screener, quarterly statements,
-and latest close. Repeated `--peer` options explicitly replace discovery:
+multiples from Yahoo's keyless company metadata, quarterly statements, and
+latest close. Repeated `--peer` options explicitly replace discovery:
 
 ```bash
 uv run edgarito comparables --ticker GOOG \
@@ -798,18 +814,30 @@ uv run edgarito comparables --ticker GOOG \
   --peer AAPL
 ```
 
-Candidate discovery maps provider industry labels to a supported economic peer
-group when possible and falls back to a broad sector screen. It removes duplicate
-issuer listings before `PeerUniverseSelector` scores normalized industry,
-sector, business archetype, lifecycle, cyclicality, country, exchange, revenue
-scale, margins, cash conversion, leverage, capital intensity, and growth.
+For U.S. issuers, discovery uses Massive's
+[Related Tickers endpoint](https://massive.com/docs/rest/stocks/tickers/related-tickers)
+first when `massive_api_key` is configured. It falls back to Yahoo when Massive
+fails or returns fewer than the configured preferred minimum (five by default).
+Non-U.S. issuers bypass the U.S.-only Massive source and use Yahoo directly.
+Yahoo maps provider industry labels to a supported economic peer group when
+possible, screens the same or economically comparable region first, and adds a
+global industry/sector screen only when regional coverage is sparse.
+
+Discovery removes the target and duplicate issuer listings and rejects known
+market capitalizations outside 0.25x-4x of the target. `PeerUniverseSelector`
+then ranks normalized industry, sector, business archetype, lifecycle,
+cyclicality, country, exchange, revenue scale and growth, operating margin,
+ROIC when available, cash conversion, leverage, and capital intensity. The
+default profile selects up to eight of the best candidates.
 Cross-sector candidates are allowed by the generic profile but still need enough
 economic evidence to pass the score. `--require-same-sector`, `--minimum-score`,
 `--max-peers`, and `--preferred-minimum` control selection. Fewer than the
 configured minimum selected peers disables relative valuation instead of
 creating a precise-looking result from weak evidence.
 
-Yahoo's screener is not a canonical full-market security master: coverage,
+Massive's related-company signal is based on news and return relationships, so
+it is a candidate source rather than proof of valuation comparability. Yahoo's
+screener is not a canonical full-market security master: coverage,
 industry labels, primary-listing identification, and currencies vary by market.
 Discovery therefore remains a provider abstraction, reports its source and
 confidence, and never invents symbols when the provider cannot return a usable

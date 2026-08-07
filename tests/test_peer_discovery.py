@@ -1,0 +1,197 @@
+import asyncio
+import json
+from decimal import Decimal
+from pathlib import Path
+
+from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.valuation import (
+    MarketAwarePeerDiscoveryProvider,
+    MassiveRelatedCompaniesPeerDiscoveryProvider,
+    PeerDiscoveryResult,
+    YahooScreenerPeerDiscoveryProvider,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures" / "peer_discovery"
+
+
+class _Response:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def text(self):
+        return json.dumps(self._payload)
+
+
+class _Session:
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests = []
+
+    def get(self, url, **kwargs):
+        self.requests.append((url, kwargs))
+        return _Response(self.payload)
+
+
+class _StaticProvider:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    async def discover(self, target, *, max_candidates=30):
+        self.calls += 1
+        return self.result.model_copy(
+            update={"candidate_tickers": self.result.candidate_tickers[:max_candidates]}
+        )
+
+
+class _FailingProvider:
+    async def discover(self, target, *, max_candidates=30):
+        raise RuntimeError("fixture outage")
+
+
+def _result(provider, target, candidates, confidence="high"):
+    return PeerDiscoveryResult(
+        provider=provider,
+        target_ticker=target,
+        candidate_tickers=tuple(candidates),
+        methodology=f"{provider} fixture",
+        confidence=confidence,
+    )
+
+
+def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_path):
+    payload = json.loads(
+        (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
+    )
+    session = _Session(payload)
+    massive = MassiveRelatedCompaniesPeerDiscoveryProvider(
+        FileSystemCache(tmp_path),
+        "test-key",
+        session=session,
+        use_cache=False,
+        make_cache=False,
+    )
+    yahoo = _StaticProvider(_result("yahoo-screener", "AAPL", ("ORCL",)))
+    target = YahooCompanyFinancials(
+        symbol="AAPL",
+        company_name="Apple Inc.",
+        currency="USD",
+        exchange="NasdaqGS",
+        sector="Technology",
+        industry="Consumer Electronics",
+        country="United States",
+        market_capitalization=Decimal("3000000000000"),
+    )
+
+    primary = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
+    )
+
+    assert primary.provider == "massive-related"
+    assert primary.candidate_tickers == (
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "ADBE",
+    )
+    assert "AAPL" not in primary.candidate_tickers
+    assert yahoo.calls == 0
+    assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
+    assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
+
+    sparse_massive = _StaticProvider(
+        _result("massive-related", "AAPL", ("MSFT", "GOOGL"), "low")
+    )
+    fallback_yahoo = _StaticProvider(
+        _result(
+            "yahoo-screener",
+            "AAPL",
+            ("GOOGL", "AMZN", "META", "NVDA", "ADBE"),
+        )
+    )
+    fallback = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(
+            fallback_yahoo, sparse_massive, minimum_candidates=5
+        ).discover(target)
+    )
+
+    assert fallback.provider == "massive-related+yahoo-screener"
+    assert fallback.candidate_tickers == (
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "ADBE",
+    )
+    assert any("too few" in warning for warning in fallback.warnings)
+    assert fallback_yahoo.calls == 1
+
+    outage_yahoo = _StaticProvider(
+        _result("yahoo-screener", "AAPL", ("MSFT", "AMZN", "META", "NVDA", "ADBE"))
+    )
+    outage = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(outage_yahoo, _FailingProvider()).discover(
+            target
+        )
+    )
+    assert outage.provider == "yahoo-screener"
+    assert outage.candidate_tickers == ("MSFT", "AMZN", "META", "NVDA", "ADBE")
+    assert any("Massive discovery failed" in warning for warning in outage.warnings)
+
+
+def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_path):
+    response = json.loads(
+        (FIXTURES / "yahoo_race_europe.json").read_text(encoding="utf-8")
+    )
+    screen_calls = []
+
+    def screen(query, **kwargs):
+        screen_calls.append((query, kwargs))
+        return response
+
+    yahoo = YahooScreenerPeerDiscoveryProvider(
+        FileSystemCache(tmp_path),
+        screen=screen,
+        use_cache=False,
+        make_cache=False,
+    )
+    massive = _StaticProvider(_result("massive-related", "RACE.MI", ("F",)))
+    target = YahooCompanyFinancials(
+        symbol="RACE.MI",
+        company_name="Ferrari N.V.",
+        currency="EUR",
+        exchange="Milan",
+        sector="Consumer Cyclical",
+        industry="Auto Manufacturers",
+        country="Italy",
+        market_capitalization=Decimal("60000000000"),
+    )
+
+    result = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
+    )
+
+    assert result.provider == "yahoo-screener"
+    assert result.candidate_tickers == (
+        "STLAM.MI",
+        "MONC.MI",
+        "P911.DE",
+        "CFR.SW",
+        "RMS.PA",
+    )
+    assert "RACE.MI" not in result.candidate_tickers
+    assert "TINY.MI" not in result.candidate_tickers
+    assert massive.calls == 0
+    assert len(screen_calls) == 1
+    assert "Non-U.S. issuer bypassed" in result.methodology

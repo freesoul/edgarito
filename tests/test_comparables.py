@@ -150,6 +150,8 @@ def _financials(*, net_income: str = "12") -> NormalizedCompanyFinancials:
     flows = {
         FinancialConcept.REVENUE: "100",
         FinancialConcept.OPERATING_INCOME: "20",
+        FinancialConcept.PRETAX_INCOME: "16",
+        FinancialConcept.INCOME_TAX_EXPENSE: "4",
         FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "5",
         FinancialConcept.NET_INCOME: net_income,
         FinancialConcept.OPERATING_CASH_FLOW: "18",
@@ -210,11 +212,75 @@ def test_computes_ltm_fundamentals_enterprise_value_and_multiples():
     assert result.fundamentals.revenue == Decimal("400")
     assert result.fundamentals.ebitda == Decimal("100")
     assert result.fundamentals.free_cash_flow == Decimal("48")
+    assert result.fundamentals.return_on_invested_capital == Decimal("60") / Decimal(
+        "220"
+    ) * Decimal("100")
     assert result.market_capitalization == Decimal("500")
     assert result.enterprise_value == Decimal("520")
     assert multiples[RelativeValuationBasis.PE].value == Decimal("500") / Decimal("48")
     assert multiples[RelativeValuationBasis.EV_TO_EBITDA].value == Decimal("5.2")
     assert multiples[RelativeValuationBasis.DIVIDEND_YIELD].value == Decimal("0.8")
+
+
+def test_peer_selector_enforces_market_cap_band_and_scores_margin_and_roic():
+    target_profile = _profile("TARGET")
+    similar_profile = _profile("SIMILAR")
+    oversized_profile = _profile("OVERSIZED")
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    similar = target.model_copy(
+        update={
+            "ticker": "SIMILAR",
+            "company_id": "SIMILAR",
+            "company_name": "Similar Inc.",
+            "market_capitalization": target.market_capitalization * Decimal("1.5"),
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "revenue_growth": Decimal("8"),
+                    "return_on_invested_capital": Decimal("25"),
+                }
+            ),
+        }
+    )
+    oversized = similar.model_copy(
+        update={
+            "ticker": "OVERSIZED",
+            "company_id": "OVERSIZED",
+            "company_name": "Oversized Inc.",
+            "market_capitalization": target.market_capitalization * Decimal("5"),
+        }
+    )
+    target = target.model_copy(
+        update={
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "revenue_growth": Decimal("9"),
+                    "return_on_invested_capital": Decimal("27"),
+                }
+            )
+        }
+    )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        [similar_profile, oversized_profile],
+        PeerSelectionParameters(
+            max_peers=2,
+            preferred_minimum=1,
+            minimum_score=0,
+        ),
+        target_multiples=target,
+        candidate_multiples={"SIMILAR": similar, "OVERSIZED": oversized},
+    )
+
+    assert universe.selected_tickers == ("SIMILAR",)
+    similar_assessment = next(
+        item for item in universe.candidates if item.ticker == "SIMILAR"
+    )
+    oversized_assessment = next(
+        item for item in universe.candidates if item.ticker == "OVERSIZED"
+    )
+    assert any("ROIC" in reason for reason in similar_assessment.reasons)
+    assert any("outside" in reason for reason in oversized_assessment.exclusions)
 
 
 def test_marks_negative_denominators_and_currency_mismatch_explicitly():

@@ -143,7 +143,19 @@ class PeerUniverseSelector:
         ):
             exclusions.append("Specialized business economics differ from the target")
 
-        score = 0
+        market_cap_score, market_cap_reason, market_cap_exclusion = (
+            self._market_cap_comparability(
+                target_multiples,
+                candidate_multiples,
+                parameters,
+            )
+        )
+        if market_cap_exclusion:
+            exclusions.append(market_cap_exclusion)
+
+        score = market_cap_score
+        if market_cap_reason:
+            reasons.append(market_cap_reason)
         if target.sector is not None and candidate.sector == target.sector:
             score += 20
             reasons.append("Same sector")
@@ -207,8 +219,8 @@ class PeerUniverseSelector:
         if economic_score is not None:
             score = round(score * 0.75 + economic_score * 0.25)
             reasons.append(
-                "Observable margin, cash-conversion, leverage, and capital-"
-                f"intensity similarity: {economic_score}/100"
+                "Observable growth, operating margin, ROIC, cash-conversion, "
+                f"leverage, and capital-intensity similarity: {economic_score}/100"
             )
 
         return PeerCandidateAssessment(
@@ -235,6 +247,10 @@ class PeerUniverseSelector:
             return numerator / denominator
 
         pairs = [
+            (
+                ratio(left.operating_income, left.revenue),
+                ratio(right.operating_income, right.revenue),
+            ),
             (ratio(left.ebitda, left.revenue), ratio(right.ebitda, right.revenue)),
             (
                 ratio(left.free_cash_flow, left.revenue),
@@ -249,14 +265,27 @@ class PeerUniverseSelector:
                 ratio(right.capital_expenditures, right.revenue),
             ),
         ]
+        target_growth = left.revenue_growth
+        candidate_growth = right.revenue_growth
+        if target_growth is None and target_profile.revenue_growth_rates:
+            target_growth = target_profile.revenue_growth_rates[-1]
+        if candidate_growth is None and candidate_profile.revenue_growth_rates:
+            candidate_growth = candidate_profile.revenue_growth_rates[-1]
+        if target_growth is not None and candidate_growth is not None:
+            pairs.append(
+                (
+                    target_growth / Decimal(100),
+                    candidate_growth / Decimal(100),
+                )
+            )
         if (
-            target_profile.revenue_growth_rates
-            and candidate_profile.revenue_growth_rates
+            left.return_on_invested_capital is not None
+            and right.return_on_invested_capital is not None
         ):
             pairs.append(
                 (
-                    target_profile.revenue_growth_rates[-1] / Decimal(100),
-                    candidate_profile.revenue_growth_rates[-1] / Decimal(100),
+                    left.return_on_invested_capital / Decimal(100),
+                    right.return_on_invested_capital / Decimal(100),
                 )
             )
         similarities = []
@@ -274,6 +303,48 @@ class PeerUniverseSelector:
             return None
         average = sum(similarities, Decimal(0)) / Decimal(len(similarities))
         return round(float(average * Decimal(100)))
+
+    @staticmethod
+    def _market_cap_comparability(target, candidate, parameters):
+        if target is None or candidate is None:
+            return 0, None, None
+        target_cap = target.market_capitalization
+        candidate_cap = candidate.market_capitalization
+        if (
+            target_cap is None
+            or candidate_cap is None
+            or target_cap <= 0
+            or candidate_cap <= 0
+            or target.currency != candidate.currency
+        ):
+            return 0, None, None
+        ratio = candidate_cap / target_cap
+        if (
+            ratio < parameters.minimum_market_cap_ratio
+            or ratio > parameters.maximum_market_cap_ratio
+        ):
+            return (
+                0,
+                None,
+                "Market capitalization is outside the configured "
+                f"{parameters.minimum_market_cap_ratio}x-"
+                f"{parameters.maximum_market_cap_ratio}x target range",
+            )
+        proximity = min(ratio, Decimal(1) / ratio)
+        score = (
+            10
+            if proximity >= Decimal("0.67")
+            else 7
+            if proximity >= Decimal("0.4")
+            else 4
+        )
+        return (
+            score,
+            "Market capitalization is within the configured "
+            f"{parameters.minimum_market_cap_ratio}x-"
+            f"{parameters.maximum_market_cap_ratio}x target range",
+            None,
+        )
 
     @staticmethod
     def _same_company(target: ValuationProfile, candidate: ValuationProfile) -> bool:

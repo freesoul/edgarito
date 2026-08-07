@@ -70,6 +70,8 @@ from edgarito.services.valuation.multiples import (
     LtmMultiplesService,
 )
 from edgarito.services.valuation.peer_discovery import (
+    MarketAwarePeerDiscoveryProvider,
+    MassiveRelatedCompaniesPeerDiscoveryProvider,
     PeerCandidateDiscoveryProvider,
     YahooScreenerPeerDiscoveryProvider,
 )
@@ -124,6 +126,8 @@ __all__ = [
     "MultipleResolver",
     "HistoricalMultiplesService",
     "LtmMultiplesService",
+    "MarketAwarePeerDiscoveryProvider",
+    "MassiveRelatedCompaniesPeerDiscoveryProvider",
     "PeerCandidateAssessment",
     "PeerCandidateDiscoveryProvider",
     "PeerDiscoveryResult",

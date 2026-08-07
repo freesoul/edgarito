@@ -72,6 +72,8 @@ from edgarito.services.valuation import (
     ForwardPeerMultiplesService,
     HistoricalMultiplesService,
     LtmMultiplesService,
+    MarketAwarePeerDiscoveryProvider,
+    MassiveRelatedCompaniesPeerDiscoveryProvider,
     MultipleResolver,
     PeerDiscoveryResult,
     PeerSelectionParameters,
@@ -96,6 +98,7 @@ from edgarito.settings import (
     EDGARITO_USER_AGENT,
     FMP_API_KEY,
     FRED_API_KEY,
+    MASSIVE_API_KEY,
     OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
@@ -611,8 +614,8 @@ def _add_valuation_profile_argument(
         type=Path,
         metavar="PATH",
         help=(
-            "Forecast/valuation JSON profile; defaults to "
-            "configs/valuation/default.json"
+            "Forecast/valuation JSON profile; valuation otherwise uses an existing "
+            "configs/valuation/<ticker>.json or generates one from the default"
         ),
     )
 
@@ -734,7 +737,14 @@ async def _run_forecast(args: argparse.Namespace) -> int:
 
 
 async def _run_valuation(args: argparse.Namespace) -> int:
-    profile = ValuationProfileLoader.load(args.profile)
+    generated_profile_path = None
+    should_generate_profile = False
+    if args.ticker:
+        profile, generated_profile_path, should_generate_profile = (
+            ValuationProfileLoader.load_for_ticker(args.ticker, args.profile)
+        )
+    else:
+        profile = ValuationProfileLoader.load(args.profile)
     selected_model = args.model or (
         "both" if profile.relative_valuation.enabled else "fcff-dcf"
     )
@@ -838,8 +848,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         financials,
         automatic_inputs.get("classification"),
         ValuationProfileOverrides(
+            sector=profile.model_selection.sector,
+            industry=profile.model_selection.industry,
+            business_archetype=profile.model_selection.business_archetype,
             lifecycle=profile.model_selection.lifecycle,
             cyclicality=profile.model_selection.cyclicality,
+            economic_traits=set(profile.model_selection.economic_traits),
         ),
     )
     configured_terminal_roic = (
@@ -866,6 +880,33 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         lifecycle=profile_context.lifecycle,
         cyclicality=profile_context.cyclicality,
     )
+    if should_generate_profile and args.ticker and generated_profile_path is not None:
+        profile = ValuationProfileLoader.build_generated(
+            ticker=args.ticker,
+            base_profile=profile,
+            inferred_profile=profile_context,
+            terminal_roic=terminal_roic.value,
+            terminal_roic_confidence=terminal_roic.confidence,
+            generated_on=valuation_date,
+            path=generated_profile_path,
+        )
+        if selected_model == "fcff-dcf":
+            profile, generated_profile_path, created = (
+                ValuationProfileLoader.create_generated(
+                    ticker=args.ticker,
+                    base_profile=profile,
+                    inferred_profile=profile_context,
+                    terminal_roic=terminal_roic.value,
+                    terminal_roic_confidence=terminal_roic.confidence,
+                    generated_on=valuation_date,
+                    path=generated_profile_path,
+                )
+            )
+            should_generate_profile = False
+            if created:
+                print(
+                    f"Generated valuation profile: {generated_profile_path.resolve()}"
+                )
     resolved = replace(
         resolved,
         assumption_set=resolved.assumption_set.model_copy(
@@ -1031,8 +1072,10 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         target_symbol = (
             provider_symbols.get(ProviderName.YAHOO, args.ticker).strip().upper()
         )
-        peer_symbols = list(
-            dict.fromkeys(symbol.strip().upper() for symbol in (args.peer or []))
+        peer_symbols, peer_source = _resolve_comparable_peer_symbols(
+            args,
+            profile,
+            target_symbol,
         )
         (
             report,
@@ -1044,8 +1087,31 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             profile,
             target_symbol,
             peer_symbols,
+            peer_source=peer_source,
             as_of=valuation_date,
         )
+        if (
+            should_generate_profile
+            and args.ticker
+            and generated_profile_path is not None
+        ):
+            profile, generated_profile_path, created = (
+                ValuationProfileLoader.create_generated(
+                    ticker=args.ticker,
+                    base_profile=profile,
+                    inferred_profile=profile_context,
+                    terminal_roic=terminal_roic.value,
+                    terminal_roic_confidence=terminal_roic.confidence,
+                    generated_on=valuation_date,
+                    peers=report.universe.selected_tickers,
+                    path=generated_profile_path,
+                )
+            )
+            should_generate_profile = False
+            if created:
+                print(
+                    f"Generated valuation profile: {generated_profile_path.resolve()}"
+                )
         report = ForwardPeerMultiplesService().build(
             report,
             {
@@ -1181,17 +1247,38 @@ async def _run_classification(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_comparable_peer_symbols(args, valuation_profile, target_symbol):
+    cli_peers = getattr(args, "peer", None) or ()
+    configured_peers = valuation_profile.comparables.peers
+    source = None if cli_peers else "valuation-profile" if configured_peers else None
+    values = cli_peers or configured_peers
+    target = target_symbol.strip().upper()
+    symbols = []
+    seen = {target}
+    for value in values:
+        symbol = value.strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+    return symbols, source
+
+
 async def _run_comparables(args: argparse.Namespace) -> int:
-    valuation_profile = ValuationProfileLoader.load(args.profile)
+    valuation_profile, _, _ = ValuationProfileLoader.load_for_ticker(
+        args.ticker, args.profile
+    )
     target_symbol = args.ticker.strip().upper()
-    peer_symbols = list(
-        dict.fromkeys(symbol.strip().upper() for symbol in (args.peer or []))
+    peer_symbols, peer_source = _resolve_comparable_peer_symbols(
+        args,
+        valuation_profile,
+        target_symbol,
     )
     report, _, _, _ = await _build_comparable_report(
         args,
         valuation_profile,
         target_symbol,
         peer_symbols,
+        peer_source=peer_source,
         as_of=args.as_of,
     )
     print(ComparableMultiplesConsolePresenter().render(report))
@@ -1204,6 +1291,7 @@ async def _build_comparable_report(
     target_symbol,
     peer_symbols,
     *,
+    peer_source=None,
     as_of=None,
 ):
     configuration = valuation_profile.comparables
@@ -1230,7 +1318,19 @@ async def _build_comparable_report(
             else configuration.require_same_sector
         ),
     )
-    discovery = None
+    discovery = (
+        PeerDiscoveryResult(
+            provider="valuation-profile",
+            target_ticker=target_symbol,
+            candidate_tickers=tuple(peer_symbols),
+            methodology=(
+                f"Saved comparable peers from valuation profile {valuation_profile.name!r}"
+            ),
+            confidence="high",
+        )
+        if peer_symbols and peer_source == "valuation-profile"
+        else None
+    )
     cache = FileSystemCache(Path(args.cache_dir))
     if not peer_symbols:
         async with YahooFinanceClient(cache) as client:
@@ -1246,10 +1346,25 @@ async def _build_comparable_report(
                         use_cache=False,
                         make_cache=True,
                     )
-                discovery = await YahooScreenerPeerDiscoveryProvider(
+                yahoo_discovery = YahooScreenerPeerDiscoveryProvider(
                     cache,
                     use_cache=not args.refresh,
                     make_cache=True,
+                )
+                massive_discovery = (
+                    MassiveRelatedCompaniesPeerDiscoveryProvider(
+                        cache,
+                        MASSIVE_API_KEY,
+                        use_cache=not args.refresh,
+                        make_cache=True,
+                    )
+                    if MASSIVE_API_KEY
+                    else None
+                )
+                discovery = await MarketAwarePeerDiscoveryProvider(
+                    yahoo_discovery,
+                    massive_discovery,
+                    minimum_candidates=parameters.preferred_minimum,
                 ).discover(
                     target_source,
                     max_candidates=max(12, parameters.max_peers * 3),

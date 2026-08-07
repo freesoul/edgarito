@@ -1,0 +1,15 @@
+{
+  "request_id": "fixture-request",
+  "results": [
+    {"ticker": "MSFT"},
+    {"ticker": "GOOGL"},
+    {"ticker": "AMZN"},
+    {"ticker": "META"},
+    {"ticker": "NVDA"},
+    {"ticker": "ADBE"},
+    {"ticker": "AAPL"},
+    {"ticker": "MSFT"}
+  ],
+  "status": "OK",
+  "ticker": "AAPL"
+}

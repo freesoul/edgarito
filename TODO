@@ -1,34 +1,8 @@
 
 
-- When infering a stock without a config json for its ticker, create automatically the json under configs with the generated config, so it can be tuned.
+- when a config json exist for a ticker (eg race.json for ferrari) make sure we load it even if no profile argument is passed with its path.
 
-
----
-
-We want to provide automatically discovered peers when no peers are manually passed by the config or the user.
-
-Implement or improve the existing peer discovery. These are some specs:
-
-* For US stocks, use Massive's Related Companies/Related Tickers endpoint as the primary peer source.
-* If Massive fails, returns too few peers, or for non-US/European stocks, fall back to Yahoo Finance/yfinance.
-* With Yahoo, discover candidates from the same industry/peer group, preferably same or economically comparable region.
-* Do not blindly accept all returned peers. Filter/rank candidates by valuation comparability:
-  * same or closely related industry/business
-  * market cap roughly 0.25x-4x the target
-  * similar revenue growth
-  * similar operating margin
-  * similar ROIC when available
-* Return approximately 5-10 best peers, ranked by similarity.
-* Avoid including the target itself and remove duplicates.
-* Make the provider/fallback logic explicit and resilient to missing data.
-* Make sure tests cover at least one US stock and one European stock.
-
-
-
-
-
----
-
+- some files grew too big (like cli/presentation/console.py). refactorize into parts.
 
 
 1. **Finish generic valuation core**

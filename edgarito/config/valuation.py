@@ -1,4 +1,6 @@
+import datetime
 import json
+import re
 import sysconfig
 from decimal import Decimal
 from enum import Enum
@@ -22,6 +24,7 @@ from edgarito.services.valuation.models import (
     TerminalMetric,
     TerminalValueMethod,
     ValuationInput,
+    ValuationProfile,
 )
 
 DEFAULT_VALUATION_PROFILE_PATH = Path("configs/valuation/default.json")
@@ -323,10 +326,29 @@ class ModelSelectionConfiguration(_ProfileModel):
 
 
 class ComparableSelectionConfiguration(_ProfileModel):
+    peers: tuple[str, ...] = ()
     max_peers: int = Field(default=8, ge=1, le=50)
     preferred_minimum: int = Field(default=5, ge=1, le=50)
     minimum_score: int = Field(default=50, ge=0, le=100)
     require_same_sector: bool = True
+
+    @field_validator("peers", mode="before")
+    @classmethod
+    def normalize_peers(cls, values) -> tuple[str, ...]:
+        if values is None:
+            return ()
+        if isinstance(values, str):
+            values = (values,)
+        peers = []
+        seen = set()
+        for value in values:
+            symbol = str(value).strip().upper()
+            if not re.fullmatch(r"[A-Z0-9][A-Z0-9._^-]*", symbol):
+                raise ValueError(f"Invalid comparable peer symbol: {value!r}")
+            if symbol not in seen:
+                seen.add(symbol)
+                peers.append(symbol)
+        return tuple(peers)
 
     @model_validator(mode="after")
     def validate_peer_counts(self) -> "ComparableSelectionConfiguration":
@@ -480,6 +502,141 @@ class ValuationProfileLoader:
             if candidate.is_file():
                 return candidate
         return source_checkout
+
+    @classmethod
+    def ticker_path(cls, ticker: str) -> Path:
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", ticker.strip().casefold()).strip(
+            ".-"
+        )
+        if not normalized or normalized in {"default", ".", ".."}:
+            raise ValueError(f"Ticker cannot be used as a profile name: {ticker!r}")
+        return cls.default_path().parent / f"{normalized}.json"
+
+    @classmethod
+    def load_for_ticker(
+        cls,
+        ticker: str,
+        explicit_path: str | Path | None = None,
+    ) -> tuple[ForecastValuationProfile, Path, bool]:
+        """Load an explicit/ticker/default profile and report generation need."""
+        if explicit_path is not None:
+            path = Path(explicit_path).expanduser()
+            return cls.load(path), path, False
+        ticker_path = cls.ticker_path(ticker)
+        if ticker_path.is_file():
+            return cls.load(ticker_path), ticker_path, False
+        return cls.load(), ticker_path, True
+
+    @classmethod
+    def create_generated(
+        cls,
+        *,
+        ticker: str,
+        base_profile: ForecastValuationProfile,
+        inferred_profile: ValuationProfile,
+        terminal_roic: Decimal,
+        terminal_roic_confidence: str,
+        generated_on: datetime.date,
+        peers: tuple[str, ...] = (),
+        path: Path | None = None,
+    ) -> tuple[ForecastValuationProfile, Path, bool]:
+        """Create a ticker profile once, preserving dynamic point-in-time inputs."""
+        profile_path = path or cls.ticker_path(ticker)
+        if profile_path.is_file():
+            return cls.load(profile_path), profile_path, False
+
+        generated = cls.build_generated(
+            ticker=ticker,
+            base_profile=base_profile,
+            inferred_profile=inferred_profile,
+            terminal_roic=terminal_roic,
+            terminal_roic_confidence=terminal_roic_confidence,
+            generated_on=generated_on,
+            peers=peers,
+            path=profile_path,
+        )
+        payload = generated.model_dump(mode="json")
+        payload["model_selection"]["economic_traits"] = sorted(
+            payload["model_selection"]["economic_traits"]
+        )
+        payload["model_selection"]["available_inputs"] = sorted(
+            payload["model_selection"]["available_inputs"]
+        )
+        content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+        try:
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            with profile_path.open("x", encoding="utf-8") as handle:
+                handle.write(content)
+        except FileExistsError:
+            return cls.load(profile_path), profile_path, False
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot create generated valuation profile {profile_path}: {exc}"
+            ) from exc
+        return generated, profile_path, True
+
+    @classmethod
+    def build_generated(
+        cls,
+        *,
+        ticker: str,
+        base_profile: ForecastValuationProfile,
+        inferred_profile: ValuationProfile,
+        terminal_roic: Decimal,
+        terminal_roic_confidence: str,
+        generated_on: datetime.date,
+        peers: tuple[str, ...] = (),
+        path: Path | None = None,
+    ) -> ForecastValuationProfile:
+        """Build a generated profile in memory so discovery can finish before write."""
+        profile_path = path or cls.ticker_path(ticker)
+        normalized_peers = ComparableSelectionConfiguration.normalize_peers(peers)
+        configured = base_profile.model_selection
+        selection = configured.model_copy(
+            update={
+                "sector": configured.sector or inferred_profile.sector,
+                "industry": configured.industry or inferred_profile.industry,
+                "business_archetype": (
+                    configured.business_archetype or inferred_profile.business_archetype
+                ),
+                "lifecycle": configured.lifecycle or inferred_profile.lifecycle,
+                "cyclicality": configured.cyclicality or inferred_profile.cyclicality,
+                "economic_traits": frozenset(
+                    configured.economic_traits | inferred_profile.economic_traits
+                ),
+                "peer_count": (
+                    configured.peer_count
+                    if configured.peer_count is not None
+                    else len(normalized_peers) or None
+                ),
+            }
+        )
+        multistage = base_profile.valuation.multistage.model_copy(
+            update={"terminal_return_on_invested_capital": terminal_roic}
+        )
+        valuation = base_profile.valuation.model_copy(update={"multistage": multistage})
+        comparables = base_profile.comparables.model_copy(
+            update={
+                "peers": base_profile.comparables.peers or normalized_peers,
+            }
+        )
+        generated = base_profile.model_copy(
+            update={
+                "name": profile_path.stem,
+                "description": (
+                    f"Auto-generated for {ticker.strip().upper()} on "
+                    f"{generated_on.isoformat()}. Structural company inference and "
+                    f"terminal ROIC ({terminal_roic_confidence} confidence) are "
+                    "materialized for tuning, including economically selected peers "
+                    "when discovery succeeds; market rates, terminal growth, forecast "
+                    "run-rate, and capital-bridge values remain dynamic."
+                ),
+                "model_selection": selection,
+                "valuation": valuation,
+                "comparables": comparables,
+            }
+        )
+        return generated
 
 
 __all__ = [

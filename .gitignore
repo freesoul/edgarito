@@ -8,3 +8,4 @@ dist/
 examples/
 .pytest_cache
 .ruff_cache/
+*.backup.json
