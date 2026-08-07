@@ -1,15 +1,4 @@
-
-
-
-1. **Finish generic valuation core**
-
-   * Automatic terminal ROIC.
-   * Automatic peer discovery.
-   * TTM/latest-quarter aware forecasts.
-   * Current debt/cash/shares.
-   * Cross-company regression tests.
-
-2. **Decision-oriented valuation**
+1. **Decision-oriented valuation**
 
    * Bear/base/bull cases.
    * Sensitivity tables.
@@ -17,7 +6,7 @@
    * Cheap/fair/expensive vs current price.
    * Reverse DCF / implied market expectations.
 
-3. **Remaining valuation models**
+2. **Remaining valuation models**
 
    * FCFE / Equity DCF.
    * DDM.
@@ -25,7 +14,7 @@
    * NAV/SOTP.
    * Specialized REIT, bank/insurance, resource, biotech adapters.
 
-4. **Improve forecasting**
+3. **Improve forecasting**
 
    * Management guidance.
    * Consensus forecasts as optional scenario.
@@ -34,14 +23,14 @@
    * Debt/share-count forecasts.
    * Cyclical normalization.
 
-5. **Improve relative valuation**
+4. **Improve relative valuation**
 
    * Forward peer multiples.
    * Better premium persistence/history.
    * Peer diagnostics.
    * Better uncertainty ranges/confidence.
 
-6. **Deterministic red flags**
+5. **Deterministic red flags**
 
    * FCF vs earnings.
    * Debt.
@@ -52,33 +41,32 @@
    * cash conversion.
    * concentration/accounting issues.
 
-7. **Data/provider quality**
+6. **Data/provider quality**
 
    * Auto-select best provider by freshness/completeness.
    * Reconcile discrepancies.
    * Source/provenance everywhere.
    * Staleness/data-quality warnings.
 
-8. **Report architecture**
+7. **Report architecture**
 
    * One canonical analysis/report object used by CLI, Excel, PDF and AI.
 
-9. **Exports**
+8. **Exports**
 
    * Excel first, with editable assumptions and calculations.
    * PDF afterward.
 
-10. **Portfolio mode**
+9. **Portfolio mode**
 
 * Run analysis across holdings.
 * Rank valuation/upside/MoS/red flags.
 * Portfolio concentration and rebalance support.
 
-11. **AI last**
+10. **AI last**
 
 * Filing/news commentary.
 * Explain deterministic outputs.
 * Thesis review.
 * Never use AI as the hidden source of valuation numbers.
-
 

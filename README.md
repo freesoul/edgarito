@@ -566,16 +566,22 @@ When terminal ROIC is not explicit, the resolver estimates normalized annual
 NOPAT / invested capital, measures its stability and excess-return duration,
 then applies lifecycle and cyclicality evidence to the persistence of the spread
 over WACC. Temporary peaks are median-normalized rather than carried into
-perpetuity. The result, confidence, methodology, persistence evidence, bounds,
-and warnings are printed. `--terminal-roic` and a profile ROIC remain explicit
-overrides.
+perpetuity. When a medium- or high-confidence selected peer universe exposes
+ROIC, its median is a minority input to the normalized company anchor; weak peer
+evidence is excluded. The result, confidence, methodology, persistence evidence,
+bounds, and warnings are printed. `--terminal-roic` and a profile ROIC remain
+explicit overrides.
 
 The forecast seed is also explicit. Complete annual history remains the
 normalization base, while four current fiscal quarters provide a TTM run-rate.
 During Q1-Q3, the first forecast year combines actual YTD operating results with
 a forecast of the remaining fiscal period; TTM is not inserted as another
-completed fiscal year. Non-calendar fiscal-year ends are preserved. Missing
-quarterly inputs fall back to the latest complete FY and are labeled as such.
+completed fiscal year. If the fiscal year has already ended but its final period
+is not yet considered available, the engine uses the latest four reported
+quarters as a run-rate and starts with the next unelapsed fiscal year. A labeled
+YTD-annualized fallback is used only when four consecutive quarters are missing.
+Non-calendar fiscal-year ends are preserved. Missing quarterly inputs fall back
+to the latest complete FY and are labeled as such.
 
 Debt, cash, investments, and the point-in-time share count come from the latest
 coherent period available by the valuation date, preferring a quarterly balance
@@ -830,12 +836,16 @@ market capitalizations outside 0.25x-4x of the target. `PeerUniverseSelector`
 then ranks normalized industry, sector, business archetype, lifecycle,
 cyclicality, country, exchange, revenue scale and growth, operating margin,
 ROIC when available, cash conversion, leverage, and capital intensity. The
-default profile selects up to eight of the best candidates.
+default profile selects up to eight of the best candidates. Confidence combines
+provider confidence, selected count, overall score, and median observable
+economic similarity; a large but economically weak set is therefore not labeled
+high confidence.
 Cross-sector candidates are allowed by the generic profile but still need enough
 economic evidence to pass the score. `--require-same-sector`, `--minimum-score`,
 `--max-peers`, and `--preferred-minimum` control selection. Fewer than the
-configured minimum selected peers disables relative valuation instead of
-creating a precise-looking result from weak evidence.
+configured minimum selected peers, or low economic-comparability confidence,
+disables relative valuation instead of creating a precise-looking result from
+weak evidence.
 
 Massive's related-company signal is based on news and return relationships, so
 it is a candidate source rather than proof of valuation comparability. Yahoo's

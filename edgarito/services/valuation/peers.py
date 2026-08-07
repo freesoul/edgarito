@@ -1,5 +1,6 @@
 import re
 from decimal import Decimal
+from statistics import median
 
 from edgarito.services.valuation.models import (
     BusinessArchetype,
@@ -73,9 +74,8 @@ class PeerUniverseSelector:
             for item in assessments
             if not item.exclusions and item.score >= parameters.minimum_score
         ]
-        selected_tickers = tuple(
-            item.ticker for item in eligible[: parameters.max_peers]
-        )
+        selected_assessments = eligible[: parameters.max_peers]
+        selected_tickers = tuple(item.ticker for item in selected_assessments)
         selected = set(selected_tickers)
         assessments = [
             item.model_copy(update={"selected": item.ticker in selected})
@@ -92,13 +92,26 @@ class PeerUniverseSelector:
             warnings.append("No provider-supported candidate universe was available")
         if discovery is not None:
             warnings.extend(discovery.warnings)
-        confidence = (
-            "high"
-            if len(selected_tickers) >= parameters.preferred_minimum
-            else "medium"
-            if len(selected_tickers) >= max(2, parameters.preferred_minimum // 2)
-            else "low"
+        economic_scores = [
+            item.economic_similarity
+            for item in selected_assessments
+            if item.economic_similarity is not None
+        ]
+        if economic_scores and median(economic_scores) < 35:
+            warnings.append(
+                "Selected peers have weak median observable economic similarity "
+                f"({median(economic_scores):.0f}/100)"
+            )
+        confidence = self._selection_confidence(
+            selected_assessments,
+            parameters.preferred_minimum,
+            discovery.confidence if discovery is not None else "high",
         )
+        if confidence == "low" and selected_tickers:
+            warnings.append(
+                "Peer evidence confidence is low; relative valuation should be "
+                "skipped rather than presented with false precision"
+            )
         return PeerUniverse(
             target_ticker=target.ticker,
             target_company_id=target.company_id,
@@ -228,9 +241,46 @@ class PeerUniverseSelector:
             company_id=candidate.company_id,
             company_name=candidate.company_name,
             score=max(0, min(100, score)),
+            economic_similarity=economic_score,
             reasons=reasons,
             exclusions=exclusions,
         )
+
+    @staticmethod
+    def _selection_confidence(selected, preferred_minimum, provider_confidence):
+        levels = {"low": 0, "medium": 1, "high": 2}
+        count = len(selected)
+        count_level = (
+            "high"
+            if count >= preferred_minimum
+            else "medium"
+            if count >= max(2, preferred_minimum // 2)
+            else "low"
+        )
+        score_median = median(item.score for item in selected) if selected else 0
+        score_level = (
+            "high" if score_median >= 70 else "medium" if score_median >= 55 else "low"
+        )
+        economic = [
+            item.economic_similarity
+            for item in selected
+            if item.economic_similarity is not None
+        ]
+        economic_median = median(economic) if economic else None
+        economic_level = (
+            "high"
+            if economic_median is None or economic_median >= 55
+            else "medium"
+            if economic_median >= 35
+            else "low"
+        )
+        selected_level = min(
+            levels[count_level],
+            levels[score_level],
+            levels[economic_level],
+            levels.get(provider_confidence, 0),
+        )
+        return ("low", "medium", "high")[selected_level]
 
     @staticmethod
     def _economic_similarity(

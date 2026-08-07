@@ -218,9 +218,7 @@ class PeerSelectionParameters(BaseModel):
     preferred_minimum: int = Field(default=5, ge=1, le=50)
     minimum_score: int = Field(default=50, ge=0, le=100)
     require_same_sector: bool = True
-    minimum_market_cap_ratio: Decimal = Field(
-        default=Decimal("0.25"), gt=0, le=1
-    )
+    minimum_market_cap_ratio: Decimal = Field(default=Decimal("0.25"), gt=0, le=1)
     maximum_market_cap_ratio: Decimal = Field(default=Decimal(4), ge=1)
 
 
@@ -230,6 +228,7 @@ class PeerCandidateAssessment(BaseModel):
     company_name: str
     score: int = Field(ge=0, le=100)
     selected: bool = False
+    economic_similarity: Optional[int] = Field(default=None, ge=0, le=100)
     reasons: list[str] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
 

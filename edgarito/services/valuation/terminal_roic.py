@@ -100,6 +100,10 @@ class TerminalRoicResolver:
             persistence = Decimal("0.40")
             confidence = "low"
             source = "automatic: peer ROIC evidence"
+            anchor_methodology = (
+                f"company history was unavailable, so the median of "
+                f"{len(peer_values)} selected peer ROIC observations anchors the spread"
+            )
             warnings.append(
                 "Company ROIC history was unavailable; terminal ROIC relies on peer evidence"
             )
@@ -115,6 +119,10 @@ class TerminalRoicResolver:
             persistence = Decimal("0.35")
             confidence = "low"
             source = "automatic: WACC and company maturity fallback"
+            anchor_methodology = (
+                "historical and peer ROIC were unavailable, so lifecycle and "
+                "cyclicality set a conservative excess-return spread over WACC"
+            )
             warnings.append(
                 "Historical and peer ROIC evidence was unavailable; a low-confidence "
                 "maturity-adjusted WACC spread was used"
@@ -130,8 +138,16 @@ class TerminalRoicResolver:
             )
             confidence = self._confidence(values, normalized)
             source = "automatic: normalized historical ROIC"
+            anchor_methodology = (
+                "normalized company ROIC is the median of up to five annual NOPAT / "
+                "average invested-capital observations"
+            )
             if peer_values:
                 source += " blended with peer ROIC"
+                anchor_methodology += (
+                    f"; the median of {len(peer_values)} selected peer ROIC observations "
+                    "receives a minority 25% weight"
+                )
             if len(values) < 3:
                 warnings.append(
                     "Fewer than three usable annual ROIC observations lower confidence"
@@ -158,10 +174,9 @@ class TerminalRoicResolver:
             else:
                 warnings.append("Terminal ROIC was capped at 60%")
         methodology = (
-            "WACC + persistence × (normalized ROIC anchor - WACC); normalized ROIC "
-            "is the median of up to five annual NOPAT / average invested-capital "
-            "observations. Persistence reflects history length, dispersion, excess-"
-            "return duration, lifecycle and cyclicality"
+            "WACC + persistence × (sustainable ROIC anchor - WACC); "
+            f"{anchor_methodology}. Persistence reflects history length, dispersion, "
+            "excess-return duration, lifecycle and cyclicality"
         )
         assumption = self._assumption(
             financials,

@@ -1,11 +1,15 @@
 import argparse
 import asyncio
 import datetime
+from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
 from edgarito.cli.presentation.console import ComparableMultiplesConsolePresenter
 from edgarito.config.valuation import ValuationProfileLoader
+from edgarito.schemas.market import SecurityMarketData
+from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.normalization.classification import (
     CompanyClassificationNormalizer,
@@ -15,6 +19,7 @@ from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.valuation import (
+    ComparableMultiplesReport,
     ComparableMultiplesService,
     EcbMarketDataCurrencyConverter,
     LtmMultiplesService,
@@ -28,6 +33,24 @@ from edgarito.services.valuation import (
     YahooScreenerPeerDiscoveryProvider,
 )
 from edgarito.settings import MASSIVE_API_KEY
+
+
+@dataclass(frozen=True)
+class ComparableReportBundle:
+    report: ComparableMultiplesReport
+    target_financials: NormalizedCompanyFinancials
+    target_market: SecurityMarketData
+    peer_sources: dict[str, tuple[NormalizedCompanyFinancials, SecurityMarketData]]
+
+    @property
+    def reliable_peer_roics(self) -> tuple[Decimal, ...]:
+        if self.report.universe.discovery_confidence == "low":
+            return ()
+        return tuple(
+            peer.fundamentals.return_on_invested_capital
+            for peer in self.report.peers
+            if peer.fundamentals.return_on_invested_capital is not None
+        )
 
 
 def _resolve_comparable_peer_symbols(args, valuation_profile, target_symbol):
@@ -56,7 +79,7 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         valuation_profile,
         target_symbol,
     )
-    report, _, _, _ = await _build_comparable_report(
+    bundle = await _build_comparable_report(
         args,
         valuation_profile,
         target_symbol,
@@ -64,7 +87,7 @@ async def _run_comparables(args: argparse.Namespace) -> int:
         peer_source=peer_source,
         as_of=args.as_of,
     )
-    print(ComparableMultiplesConsolePresenter().render(report))
+    print(ComparableMultiplesConsolePresenter().render(bundle.report))
     return 0
 
 
@@ -264,11 +287,11 @@ async def _build_comparable_report(
         report = report.model_copy(
             update={"warnings": [*report.warnings, *retrieval_warnings]}
         )
-    return (
-        report,
-        normalized_financials[target_symbol],
-        normalized_markets[target_symbol],
-        {
+    return ComparableReportBundle(
+        report=report,
+        target_financials=normalized_financials[target_symbol],
+        target_market=normalized_markets[target_symbol],
+        peer_sources={
             symbol: (normalized_financials[symbol], normalized_markets[symbol])
             for symbol in universe.selected_tickers
             if symbol in normalized_financials and symbol in normalized_markets

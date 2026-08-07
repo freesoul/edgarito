@@ -18,6 +18,7 @@ class ForecastSeedType(str, Enum):
     FISCAL_YEAR = "FY"
     TTM = "TTM"
     YTD_PLUS_FORECAST = "YTD+forecast"
+    YTD_RUN_RATE = "YTD run-rate"
 
 
 class SimplifiedFcfForecastParameters(BaseModel):

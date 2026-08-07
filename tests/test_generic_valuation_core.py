@@ -25,7 +25,10 @@ from edgarito.services.valuation import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
+    FcffDcfCapitalBridge,
     FcffDcfCapitalBridgeResolver,
+    FcffDcfParameters,
+    FcffDcfService,
     PeerDiscoveryResult,
     PeerSelectionParameters,
     PeerUniverseSelector,
@@ -151,6 +154,30 @@ def test_explicit_terminal_roic_overrides_automatic_evidence():
     assert result.value == Decimal("24")
     assert result.source == "explicit CLI override"
     assert result.confidence == "high"
+
+
+def test_reliable_peer_roic_evidence_is_blended_without_replacing_company_history():
+    financials = _roic_financials("DURABLE", [18, 19, 20, 19, 20])
+    resolver = TerminalRoicResolver()
+    standalone = resolver.resolve(
+        financials,
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2.5"),
+        valuation_date=VALUATION_DATE,
+        currency="USD",
+    )
+    peer_aware = resolver.resolve(
+        financials,
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2.5"),
+        valuation_date=VALUATION_DATE,
+        currency="USD",
+        peer_roics=(Decimal("10"), Decimal("11"), Decimal("12")),
+    )
+
+    assert peer_aware.value < standalone.value
+    assert peer_aware.normalized_roic == standalone.normalized_roic
+    assert "blended with peer ROIC" in peer_aware.source
 
 
 def test_higher_sustainable_roic_requires_less_reinvestment_and_raises_fcff():
@@ -335,6 +362,66 @@ def test_non_calendar_fiscal_year_keeps_fiscal_alignment():
     assert forecast.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
     assert forecast.current_fiscal_year == 2026
     assert forecast.observations[0].period_end == datetime.date(2026, 6, 30)
+
+
+def test_post_fiscal_year_reporting_gap_starts_with_next_unelapsed_fiscal_year():
+    forecast = FcffForecastService().forecast(
+        _forecast_financials(fiscal_end_month=6),
+        _explicit_forecast_parameters(),
+        as_of=VALUATION_DATE,
+    )
+
+    assert forecast.seed_type == ForecastSeedType.TTM
+    assert forecast.seed_period_end == datetime.date(2025, 12, 31)
+    assert forecast.observations[0].fiscal_year == 2027
+    assert forecast.observations[0].period_end == datetime.date(2027, 6, 30)
+    assert forecast.observations[0].period_end > VALUATION_DATE
+    assert "year ended" in forecast.seed_methodology
+
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc=Decimal("8"), perpetual_growth_rate=Decimal("2")),
+        FcffDcfCapitalBridge(
+            fiscal_year=2026,
+            period_end=datetime.date(2026, 6, 30),
+            unit="USD",
+            net_debt=Decimal("10"),
+            diluted_shares=Decimal("10"),
+            net_debt_source="controlled fixture",
+            shares_source="controlled fixture",
+        ),
+        valuation_date=VALUATION_DATE,
+    )
+    assert result.value_per_share.is_finite()
+
+
+def test_post_fiscal_year_gap_uses_labeled_ytd_run_rate_without_four_quarters():
+    financials = _forecast_financials(fiscal_end_month=6)
+    financials = financials.model_copy(
+        update={
+            "observations": [
+                item
+                for item in financials.observations
+                if not (
+                    item.granularity == Granularity.QUARTERLY
+                    and item.fiscal_year == 2025
+                    and item.fiscal_period == FiscalPeriod.Q3
+                )
+            ]
+        }
+    )
+
+    forecast = FcffForecastService().forecast(
+        financials,
+        _explicit_forecast_parameters(),
+        as_of=VALUATION_DATE,
+    )
+
+    assert forecast.seed_type == ForecastSeedType.YTD_RUN_RATE
+    assert forecast.actual_quarters == 2
+    assert forecast.observations[0].fiscal_year == 2027
+    assert forecast.observations[0].period_end == datetime.date(2027, 6, 30)
+    assert "annualized" in forecast.seed_methodology
 
 
 def test_forecast_seed_excludes_quarterly_data_filed_after_as_of_date():
@@ -557,3 +644,68 @@ def test_peer_selection_deduplicates_cross_listings_of_one_issuer():
     assert result.selected_tickers == ("DISTINCT", "ISSUER")
     excluded = next(item for item in result.candidates if item.ticker == "ISSUER.L")
     assert any("Duplicate listing" in reason for reason in excluded.exclusions)
+
+
+@pytest.mark.parametrize(
+    ("ticker", "roics", "cyclicality", "growth", "capex", "net_debt"),
+    [
+        ("RACE", [28, 30, 31, 30, 32], Cyclicality.LOW, "10", "8", "5"),
+        ("MSFT", [32, 35, 38, 40, 39], Cyclicality.LOW, "14", "24", "-10"),
+        ("MATURE", [10, 10, 11, 10, 10], Cyclicality.LOW, "4", "5", "20"),
+        ("CYCLICAL", [4, 18, 6, 20, 8], Cyclicality.HIGH, "7", "10", "35"),
+        ("CAPITAL", [7, 8, 8, 9, 8], Cyclicality.MODERATE, "5", "18", "45"),
+        ("LEVERAGED", [8, 9, 7, 8, 9], Cyclicality.MODERATE, "5", "7", "150"),
+    ],
+)
+def test_cross_company_generic_workflow_produces_auditable_finite_results(
+    ticker, roics, cyclicality, growth, capex, net_debt
+):
+    terminal = TerminalRoicResolver().resolve(
+        _roic_financials(ticker, roics),
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2.5"),
+        valuation_date=VALUATION_DATE,
+        currency="USD",
+        lifecycle=CompanyLifecycle.MATURE,
+        cyclicality=cyclicality,
+    )
+    parameters = _explicit_forecast_parameters().model_copy(
+        update={
+            "forecast_years": 5,
+            "revenue_growth": (Decimal(growth),),
+            "capex_to_revenue": (Decimal(capex),),
+        }
+    )
+    financials = _forecast_financials()
+    seed = FcffForecastService().forecast(financials, parameters, as_of=VALUATION_DATE)
+    forecast, plan = AdaptiveMultistageFcffForecastService().forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("2.5"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=terminal.value
+        ),
+        as_of=VALUATION_DATE,
+    )
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc=Decimal("8"), perpetual_growth_rate=Decimal("2.5")),
+        FcffDcfCapitalBridge(
+            fiscal_year=2026,
+            period_end=datetime.date(2026, 6, 30),
+            unit="USD",
+            net_debt=Decimal(net_debt),
+            diluted_shares=Decimal("10"),
+            net_debt_source="controlled archetype fixture",
+            shares_source="controlled archetype fixture",
+        ),
+        multistage_plan=plan,
+        valuation_date=VALUATION_DATE,
+    )
+
+    assert forecast.observations[0].period_end > VALUATION_DATE
+    assert result.enterprise_value.is_finite()
+    assert result.value_per_share.is_finite()
+    assert plan.terminal_reinvestment_rate == Decimal("250") / terminal.value
+    assert terminal.assumption.rationale

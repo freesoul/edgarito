@@ -317,6 +317,41 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             economic_traits=set(profile.model_selection.economic_traits),
         ),
     )
+    comparable_bundle = None
+    comparable_error = None
+    if selected_model in {"comparables", "both"}:
+        provider_symbols = _parse_provider_symbols(args.provider_symbol)
+        fallback_symbol = args.ticker or financials.ticker
+        if fallback_symbol is None:
+            comparable_error = (
+                "Automatic peer discovery requires a ticker or a provider symbol"
+            )
+        else:
+            target_symbol = (
+                provider_symbols.get(ProviderName.YAHOO, fallback_symbol)
+                .strip()
+                .upper()
+            )
+            peer_symbols, peer_source = _resolve_comparable_peer_symbols(
+                args,
+                profile,
+                target_symbol,
+            )
+            try:
+                comparable_bundle = await _build_comparable_report(
+                    args,
+                    profile,
+                    target_symbol,
+                    peer_symbols,
+                    peer_source=peer_source,
+                    as_of=valuation_date,
+                )
+            except (RuntimeError, ValueError) as exc:
+                comparable_error = str(exc)
+
+    peer_roics = ()
+    if comparable_bundle is not None:
+        peer_roics = comparable_bundle.reliable_peer_roics
     configured_terminal_roic = (
         args.terminal_roic
         if args.terminal_roic is not None
@@ -340,34 +375,29 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         ),
         lifecycle=profile_context.lifecycle,
         cyclicality=profile_context.cyclicality,
+        peer_roics=peer_roics,
     )
     if should_generate_profile and args.ticker and generated_profile_path is not None:
-        profile = ValuationProfileLoader.build_generated(
-            ticker=args.ticker,
-            base_profile=profile,
-            inferred_profile=profile_context,
-            terminal_roic=terminal_roic.value,
-            terminal_roic_confidence=terminal_roic.confidence,
-            generated_on=valuation_date,
-            path=generated_profile_path,
+        discovered_peers = (
+            comparable_bundle.report.universe.selected_tickers
+            if comparable_bundle is not None
+            else ()
         )
-        if selected_model == "fcff-dcf":
-            profile, generated_profile_path, created = (
-                ValuationProfileLoader.create_generated(
-                    ticker=args.ticker,
-                    base_profile=profile,
-                    inferred_profile=profile_context,
-                    terminal_roic=terminal_roic.value,
-                    terminal_roic_confidence=terminal_roic.confidence,
-                    generated_on=valuation_date,
-                    path=generated_profile_path,
-                )
+        profile, generated_profile_path, created = (
+            ValuationProfileLoader.create_generated(
+                ticker=args.ticker,
+                base_profile=profile,
+                inferred_profile=profile_context,
+                terminal_roic=terminal_roic.value,
+                terminal_roic_confidence=terminal_roic.confidence,
+                generated_on=valuation_date,
+                peers=discovered_peers,
+                path=generated_profile_path,
             )
-            should_generate_profile = False
-            if created:
-                print(
-                    f"Generated valuation profile: {generated_profile_path.resolve()}"
-                )
+        )
+        should_generate_profile = False
+        if created:
+            print(f"Generated valuation profile: {generated_profile_path.resolve()}")
     resolved = replace(
         resolved,
         assumption_set=resolved.assumption_set.model_copy(
@@ -529,50 +559,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         )
         if horizon_years <= 0:
             raise ValueError("--horizon-years must be positive")
-        provider_symbols = _parse_provider_symbols(args.provider_symbol)
-        target_symbol = (
-            provider_symbols.get(ProviderName.YAHOO, args.ticker).strip().upper()
-        )
-        peer_symbols, peer_source = _resolve_comparable_peer_symbols(
-            args,
-            profile,
-            target_symbol,
-        )
-        (
-            report,
-            comparable_financials,
-            comparable_market,
-            comparable_peer_sources,
-        ) = await _build_comparable_report(
-            args,
-            profile,
-            target_symbol,
-            peer_symbols,
-            peer_source=peer_source,
-            as_of=valuation_date,
-        )
-        if (
-            should_generate_profile
-            and args.ticker
-            and generated_profile_path is not None
-        ):
-            profile, generated_profile_path, created = (
-                ValuationProfileLoader.create_generated(
-                    ticker=args.ticker,
-                    base_profile=profile,
-                    inferred_profile=profile_context,
-                    terminal_roic=terminal_roic.value,
-                    terminal_roic_confidence=terminal_roic.confidence,
-                    generated_on=valuation_date,
-                    peers=report.universe.selected_tickers,
-                    path=generated_profile_path,
-                )
+        if comparable_bundle is None:
+            print(
+                "\nRelative valuation skipped: automatic peer evidence could not be "
+                f"prepared ({comparable_error or 'unknown provider failure'})."
             )
-            should_generate_profile = False
-            if created:
-                print(
-                    f"Generated valuation profile: {generated_profile_path.resolve()}"
-                )
+            return 0
+        report = comparable_bundle.report
+        comparable_financials = comparable_bundle.target_financials
+        comparable_market = comparable_bundle.target_market
+        comparable_peer_sources = comparable_bundle.peer_sources
         report = ForwardPeerMultiplesService().build(
             report,
             {
@@ -586,6 +582,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         if selected_model == "both":
             print("\n" + "=" * 84 + "\n")
         print(ComparableMultiplesConsolePresenter().render(report))
+        if report.universe.discovery_confidence == "low":
+            print(
+                "\nRelative valuation skipped: selected peer evidence has low "
+                "economic-comparability confidence."
+            )
+            return 0
         if len(report.universe.selected_tickers) < (
             relative_configuration.multiple_resolution.minimum_peer_sample
         ):
@@ -1161,6 +1163,7 @@ def _parse_mappings(values: Optional[list[str]], option: str) -> dict[str, str]:
             raise ValueError(f"Duplicate {option} mapping for {key}")
         mappings[normalized_key] = mapped_value
     return mappings
+
 
 def _parse_provider_symbols(values: Optional[list[str]]) -> dict[ProviderName, str]:
     raw_mappings = _parse_mappings(values, "--provider-symbol")

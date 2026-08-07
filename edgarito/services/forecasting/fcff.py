@@ -96,7 +96,7 @@ class FcffForecastService:
         if not periods:
             self._raise_missing_inputs(financials)
 
-        context = self._forecast_context(financials, periods, parameters)
+        context = self._forecast_context(financials, periods, parameters, as_of)
         historical_periods = periods[-parameters.historical_window :]
         paths, sources = self._driver_paths(parameters, list(context.path_periods))
         base = context.base
@@ -248,7 +248,7 @@ class FcffForecastService:
             observations=observations,
         )
 
-    def _forecast_context(self, financials, annual_periods, parameters):
+    def _forecast_context(self, financials, annual_periods, parameters, as_of):
         latest_annual = annual_periods[-1]
         quarterly = self._complete_quarterly_periods(financials)
         newer = [
@@ -293,6 +293,48 @@ class FcffForecastService:
             fiscal_end = self._fiscal_year_end(
                 latest.fiscal_year, latest_annual.period_end
             )
+            if as_of is not None and fiscal_end <= as_of:
+                next_fiscal_end = self._future_date(fiscal_end, 1)
+                if ltm is not None:
+                    return _ForecastContext(
+                        base=_HistoricalDrivers(
+                            **{**ltm.__dict__, "fiscal_year": latest.fiscal_year}
+                        ),
+                        latest_annual=latest_annual,
+                        path_periods=tuple(path_periods),
+                        seed_type=ForecastSeedType.TTM,
+                        seed_methodology=(
+                            f"The FY{latest.fiscal_year} year ended on "
+                            f"{fiscal_end.isoformat()} but final-period reporting was "
+                            "not yet available; four consecutive reported quarters "
+                            "form the current run-rate and the first forecast is the "
+                            "next unelapsed fiscal year"
+                        ),
+                        seed_period_end=latest.period_end,
+                        current_fiscal_year=latest.fiscal_year + 1,
+                        actual_quarters=4,
+                        fiscal_year_end=next_fiscal_end,
+                    )
+
+                run_rate = self._annualize_ytd(actual_ytd, len(current), fiscal_end)
+                path_periods.append(run_rate)
+                return _ForecastContext(
+                    base=run_rate,
+                    latest_annual=latest_annual,
+                    path_periods=tuple(path_periods),
+                    seed_type=ForecastSeedType.YTD_RUN_RATE,
+                    seed_methodology=(
+                        f"The FY{latest.fiscal_year} year ended on "
+                        f"{fiscal_end.isoformat()} before final-period reporting was "
+                        f"available; {len(current)} reported quarter(s) were annualized "
+                        "as a low-confidence run-rate and the first forecast is the "
+                        "next unelapsed fiscal year"
+                    ),
+                    seed_period_end=latest.period_end,
+                    current_fiscal_year=latest.fiscal_year + 1,
+                    actual_quarters=len(current),
+                    fiscal_year_end=next_fiscal_end,
+                )
             base = (
                 _HistoricalDrivers(
                     **{**ltm.__dict__, "fiscal_year": latest_annual.fiscal_year}
@@ -338,6 +380,25 @@ class FcffForecastService:
             fiscal_year_end=self._fiscal_year_end(
                 latest.fiscal_year + 1, latest_annual.period_end
             ),
+        )
+
+    @staticmethod
+    def _annualize_ytd(actual, quarter_count, fiscal_end):
+        scale = Decimal(4) / Decimal(quarter_count)
+        return _HistoricalDrivers(
+            fiscal_year=actual.fiscal_year,
+            period_end=fiscal_end,
+            unit=actual.unit,
+            revenue=actual.revenue * scale,
+            operating_income=actual.operating_income * scale,
+            pretax_income=actual.pretax_income * scale,
+            income_tax_expense=actual.income_tax_expense * scale,
+            depreciation_and_amortization=(
+                actual.depreciation_and_amortization * scale
+            ),
+            capital_expenditures=actual.capital_expenditures * scale,
+            # Working capital is a point-in-time balance, not an additive flow.
+            operating_working_capital=actual.operating_working_capital,
         )
 
     @classmethod

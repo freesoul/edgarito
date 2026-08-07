@@ -37,6 +37,7 @@ from edgarito.services.valuation import (
     MultipleConfidence,
     MultipleResolver,
     MultipleStatus,
+    PeerDiscoveryResult,
     PeerMultipleSummary,
     PeerSelectionParameters,
     PeerUniverseSelector,
@@ -281,6 +282,59 @@ def test_peer_selector_enforces_market_cap_band_and_scores_margin_and_roic():
     )
     assert any("ROIC" in reason for reason in similar_assessment.reasons)
     assert any("outside" in reason for reason in oversized_assessment.exclusions)
+
+
+def test_peer_confidence_falls_when_count_is_high_but_economic_fit_is_weak():
+    target_profile = _profile("TARGET")
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    profiles = [_profile(f"WEAK{index}") for index in range(5)]
+    candidates = {}
+    for profile in profiles:
+        candidates[profile.ticker] = target.model_copy(
+            update={
+                "ticker": profile.ticker,
+                "company_id": profile.company_id,
+                "company_name": profile.company_name,
+                "market_capitalization": target.market_capitalization * Decimal("1.1"),
+                "fundamentals": target.fundamentals.model_copy(
+                    update={
+                        "revenue_growth": Decimal("-30"),
+                        "operating_income": Decimal("4"),
+                        "ebitda": Decimal("5"),
+                        "free_cash_flow": Decimal("2"),
+                        "gross_debt": Decimal("400"),
+                        "capital_expenditures": Decimal("200"),
+                        "return_on_invested_capital": Decimal("2"),
+                    }
+                ),
+            }
+        )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        profiles,
+        PeerSelectionParameters(
+            max_peers=5,
+            preferred_minimum=5,
+            minimum_score=0,
+        ),
+        target_multiples=target,
+        candidate_multiples=candidates,
+        discovery=PeerDiscoveryResult(
+            provider="fixture-provider",
+            target_ticker="TARGET",
+            candidate_tickers=tuple(candidates),
+            methodology="controlled broad discovery",
+            confidence="high",
+        ),
+    )
+
+    assert len(universe.selected_tickers) == 5
+    assert universe.discovery_confidence == "low"
+    assert all(
+        assessment.economic_similarity is not None for assessment in universe.candidates
+    )
+    assert any("false precision" in warning for warning in universe.warnings)
 
 
 def test_marks_negative_denominators_and_currency_mismatch_explicitly():
