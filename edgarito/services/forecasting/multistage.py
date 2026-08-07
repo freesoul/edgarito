@@ -101,9 +101,15 @@ class AdaptiveMultistageFcffForecastService:
             availability_mode=availability_mode,
         )
         forecast.method = "adaptive_multistage_fcff"
-        forecast.assumption_sources[FcffForecastDriver.REVENUE_GROWTH] = (
-            ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
-        )
+        if (
+            requested_parameters.assumption_source_overrides.get(
+                FcffForecastDriver.REVENUE_GROWTH
+            )
+            != ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+        ):
+            forecast.assumption_sources[FcffForecastDriver.REVENUE_GROWTH] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
+            )
         if tax_is_adaptive:
             forecast.assumption_sources[FcffForecastDriver.TAX_RATE] = (
                 ForecastAssumptionSource.ADAPTIVE_MULTISTAGE

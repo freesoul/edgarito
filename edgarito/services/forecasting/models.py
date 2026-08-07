@@ -10,6 +10,7 @@ from edgarito.schemas.identifiers import SecurityIdentifiers
 
 class ForecastAssumptionSource(str, Enum):
     EXPLICIT = "explicit"
+    MANAGEMENT_GUIDANCE = "management_guidance"
     TRAILING_AVERAGE = "trailing_average"
     ADAPTIVE_MULTISTAGE = "adaptive_multistage"
 
@@ -147,6 +148,10 @@ class FcffForecastParameters(BaseModel):
     depreciation_to_revenue: Optional[tuple[Decimal, ...]] = None
     capex_to_revenue: Optional[tuple[Decimal, ...]] = None
     operating_working_capital_to_revenue: Optional[tuple[Decimal, ...]] = None
+    revenue_anchors: dict[int, Decimal] = Field(default_factory=dict)
+    assumption_source_overrides: dict[
+        FcffForecastDriver, ForecastAssumptionSource
+    ] = Field(default_factory=dict)
     historical_window: int = Field(default=3, ge=1, le=10)
 
     @field_validator(
@@ -239,6 +244,17 @@ class FcffForecastParameters(BaseModel):
                     f"{self.forecast_years} values"
                 )
         return self
+
+    @field_validator("revenue_anchors")
+    @classmethod
+    def validate_revenue_anchors(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        if any(year < 1900 or year > 2200 for year in value):
+            raise ValueError("Revenue anchor fiscal years are invalid")
+        if any(not amount.is_finite() or amount <= 0 for amount in value.values()):
+            raise ValueError("Revenue anchors must be finite and positive")
+        return value
 
 
 class FcffForecastObservation(BaseModel):

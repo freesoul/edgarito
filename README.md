@@ -20,6 +20,10 @@ fmp_key="your-api-key"
 # massive_api_key="your-api-key"
 # Optional: raises the rate limit for otherwise free ISIN mapping.
 # openfigi_api_key="your-api-key"
+# Optional: SEC management-guidance extraction for valuation forecasts.
+# openai_secret_api_key="your-api-key"
+# OPENAI_MODEL="gpt-5.6-luna"
+# OPENAI_REASONING_EFFORT="low"
 ```
 
 Replace the placeholders needed by the providers you use. OpenFIGI does not
@@ -32,6 +36,22 @@ and `fmp_key` are required only for their respective providers.
 `MASSIVE_API_KEY` and the legacy `POLYGON_API_KEY` environment name are also
 accepted. Yahoo requires no API key. `cache_path` defaults to `cache` when
 omitted.
+
+When `openai_secret_api_key` is configured, FCFF valuation also inspects recent
+SEC 8-K/6-K earnings filings as of the valuation date. It uses the OpenAI
+Responses API with Structured Outputs to extract explicit numerical management
+guidance, then independently verifies source evidence and applies only safe,
+consolidated full-year revenue, revenue-growth, operating/EBIT-margin, capex,
+and tax-rate mappings. Explicit CLI and valuation-profile drivers always win.
+Without the key, valuation behavior is unchanged.
+
+SEC full submissions and parsed exhibits are cached below
+`<cache_path>/providers/edgar/filings/`. Validated normalized extraction results
+are cached separately below
+`<cache_path>/extractions/openai/management_guidance/`, keyed by immutable filing
+content plus model, reasoning effort, prompt version, and schema version. The API
+key is never part of a cache path or payload. `--refresh` refetches SEC content,
+but unchanged content still reuses the normalized extraction.
 
 The CLI reads `.env` automatically. `--user-agent` and `--cache-dir` override their corresponding dotenv values for an individual command.
 

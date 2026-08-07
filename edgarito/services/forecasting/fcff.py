@@ -135,7 +135,13 @@ class FcffForecastService:
         projected_revenue = base.revenue
         previous_working_capital = base.operating_working_capital
         observations = []
+        first_fiscal_year = (
+            context.current_fiscal_year
+            if context.current_fiscal_year is not None
+            else base.fiscal_year + 1
+        )
         for index in range(parameters.forecast_years):
+            fiscal_year = first_fiscal_year + index
             growth = paths[FcffForecastDriver.REVENUE_GROWTH][index]
             operating_margin = paths[FcffForecastDriver.OPERATING_MARGIN][index]
             tax_rate = paths[FcffForecastDriver.TAX_RATE][index]
@@ -149,7 +155,12 @@ class FcffForecastService:
 
             if index == 0 and context.actual_ytd is not None:
                 actual = context.actual_ytd
-                projected_revenue = max(
+                revenue_anchor = parameters.revenue_anchors.get(fiscal_year)
+                if revenue_anchor is not None and revenue_anchor < actual.revenue:
+                    raise ValueError(
+                        f"FY{fiscal_year} revenue anchor is below reported YTD revenue"
+                    )
+                projected_revenue = revenue_anchor or max(
                     actual.revenue,
                     context.latest_annual.revenue * (Decimal(1) + growth / PERCENT),
                 )
@@ -191,7 +202,14 @@ class FcffForecastService:
                     projected_revenue / context.latest_annual.revenue - Decimal(1)
                 ) * PERCENT
             else:
-                projected_revenue *= Decimal(1) + growth / PERCENT
+                previous_revenue = projected_revenue
+                projected_revenue = parameters.revenue_anchors.get(
+                    fiscal_year
+                ) or projected_revenue * (Decimal(1) + growth / PERCENT)
+                if fiscal_year in parameters.revenue_anchors:
+                    growth = (
+                        projected_revenue / previous_revenue - Decimal(1)
+                    ) * PERCENT
                 operating_income = projected_revenue * operating_margin / PERCENT
                 nopat = operating_income * (Decimal(1) - tax_rate / PERCENT)
                 depreciation = projected_revenue * depreciation_ratio / PERCENT
@@ -206,12 +224,6 @@ class FcffForecastService:
                 nopat + depreciation - capital_expenditures - change_in_working_capital
             )
             forecast_year = index + 1
-            first_fiscal_year = (
-                context.current_fiscal_year
-                if context.current_fiscal_year is not None
-                else base.fiscal_year + 1
-            )
-            fiscal_year = first_fiscal_year + index
             first_period_end = context.fiscal_year_end or self._future_date(
                 context.latest_annual.period_end, 1
             )
@@ -601,6 +613,7 @@ class FcffForecastService:
             average = sum(historical_values, Decimal(0)) / len(historical_values)
             paths[driver] = (average,) * parameters.forecast_years
             sources[driver] = ForecastAssumptionSource.TRAILING_AVERAGE
+        sources.update(parameters.assumption_source_overrides)
         return paths, sources
 
     def _historical_values(

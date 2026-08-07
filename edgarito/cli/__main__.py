@@ -35,6 +35,7 @@ from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
 from edgarito.logger import configure_logger
+from edgarito.schemas.guidance.management import GuidanceOverlayResult
 from edgarito.schemas.market import ReferenceSeriesKind, ReferenceValueUnit
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -67,11 +68,15 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
 )
+from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
+from edgarito.services.guidance.overlay import GuidanceForecastOverlay
+from edgarito.services.guidance.service import ManagementGuidanceService
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.normalization.classification import (
     CompanyClassificationNormalizer,
 )
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
+from edgarito.services.openai import OpenAIClient
 from edgarito.services.providers.damodaran import DamodaranClient
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.edgar import EdgarClient
@@ -138,6 +143,9 @@ from edgarito.settings import (
     CLASSIFICATION_PROVIDER_CONFIGURATION,
     FMP_API_KEY,
     FRED_API_KEY,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OPENAI_REASONING_EFFORT,
     OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
@@ -1099,6 +1107,36 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         as_of=valuation_date,
         availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
     )
+    guidance_overlay: GuidanceOverlayResult | None = None
+    if OPENAI_API_KEY:
+        try:
+            forecast_parameters, guidance_overlay = (
+                await _management_guidance_overlay(
+                    args,
+                    financials,
+                    forecast_parameters,
+                    forecast,
+                    valuation_date,
+                )
+            )
+            additional_warnings.extend(guidance_overlay.warnings)
+            if guidance_overlay.applications:
+                forecast = forecast_service.forecast(
+                    financials,
+                    forecast_parameters,
+                    as_of=valuation_date,
+                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+                )
+        except Exception as exc:
+            additional_warnings.append(
+                "Management-guidance extraction unavailable; historical forecast "
+                f"retained ({exc})"
+            )
+            guidance_overlay = None
+    elif args.verbose or args.audit:
+        additional_warnings.append(
+            "AI management-guidance extraction skipped because OpenAI is not configured"
+        )
     seed_forecast = forecast
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
@@ -1569,10 +1607,24 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             flexible_revenue_growth=(
                 args.revenue_growth is None
                 and profile.forecast.fcff.revenue_growth is None
+                and not (
+                    guidance_overlay
+                    and any(
+                        item.driver == "revenue_growth"
+                        for item in guidance_overlay.applications
+                    )
+                )
             ),
             flexible_operating_margin=(
                 args.operating_margin is None
                 and profile.forecast.fcff.operating_margin is None
+                and not (
+                    guidance_overlay
+                    and any(
+                        item.driver == "operating_margin"
+                        for item in guidance_overlay.applications
+                    )
+                )
             ),
             flexible_terminal_roic=configured_terminal_roic is None,
             flexible_wacc=(args.wacc is None and discount_configuration.wacc is None),
@@ -1617,6 +1669,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         show_reverse_dcf=args.reverse_dcf,
         verbose=args.verbose or args.audit,
         additional_warnings=tuple(additional_warnings),
+        management_guidance=guidance_overlay,
     )
     if report_output:
         print(report_output)
@@ -1859,12 +1912,78 @@ def _fcff_parameters(args: argparse.Namespace, configured) -> FcffForecastParame
             if args.operating_working_capital_to_revenue is not None
             else configured.operating_working_capital_to_revenue
         ),
+        revenue_anchors=(
+            {} if args.revenue_growth is not None else configured.revenue_anchors
+        ),
+        assumption_source_overrides={
+            driver: source
+            for driver, source in configured.assumption_source_overrides.items()
+            if not (
+                args.revenue_growth is not None and driver.value == "revenue_growth"
+            )
+        },
         historical_window=(
             args.historical_window
             if args.historical_window is not None
             else configured.historical_window
         ),
     )
+
+
+async def _management_guidance_overlay(
+    args: argparse.Namespace,
+    financials: NormalizedCompanyFinancials,
+    parameters: FcffForecastParameters,
+    baseline,
+    valuation_date: datetime.date,
+) -> tuple[FcffForecastParameters, GuidanceOverlayResult]:
+    if not args.user_agent:
+        return parameters, GuidanceOverlayResult(
+            warnings=(
+                "Management guidance skipped: SEC retrieval requires --user-agent",
+            )
+        )
+    cache = FileSystemCache(args.cache_dir)
+    openai_client = OpenAIClient(
+        api_key=OPENAI_API_KEY,
+        model=OPENAI_MODEL,
+        reasoning_effort=OPENAI_REASONING_EFFORT,
+    )
+    try:
+        async with EdgarClient(cache, args.user_agent) as edgar:
+            discovery = await ManagementGuidanceService(
+                edgar,
+                ManagementGuidanceExtractor(openai_client, cache),
+            ).retrieve(
+                ticker=args.ticker or financials.ticker,
+                cik=args.cik,
+                as_of=valuation_date,
+                refresh_sec=args.refresh,
+            )
+        overlaid, overlay = GuidanceForecastOverlay().apply(
+            discovery.records,
+            baseline=baseline,
+            parameters=parameters,
+        )
+        validation_rejections = tuple(
+            f"Extraction rejected: {item.reason}" for item in discovery.rejected
+        )
+        return overlaid, overlay.model_copy(
+            update={
+                "rejected_reasons": tuple(
+                    dict.fromkeys(
+                        [*overlay.rejected_reasons, *validation_rejections]
+                    )
+                ),
+                "warnings": tuple(
+                    dict.fromkeys([*overlay.warnings, *discovery.warnings])
+                ),
+                "cache_hits": discovery.cache_hits,
+                "cache_misses": discovery.cache_misses,
+            }
+        )
+    finally:
+        await openai_client.close()
 
 
 async def _retrieve_automatic_assumption_inputs(

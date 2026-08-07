@@ -530,6 +530,10 @@ class FcffDcfService:
             forecast_actual_quarters=forecast.actual_quarters,
             financial_snapshot_retrieved_at=(forecast.financial_snapshot_retrieved_at),
             observation_availability_mode=forecast.availability_mode,
+            forecast_assumption_sources={
+                driver.value: source.value
+                for driver, source in forecast.assumption_sources.items()
+            },
             capital_bridge=capital_bridge,
             explicit_forecast_present_value=explicit_present_value,
             terminal_value=terminal_value,

@@ -1051,6 +1051,7 @@ class FcffDcfResult(BaseModel):
     forecast_actual_quarters: int = Field(default=0, ge=0, le=4)
     financial_snapshot_retrieved_at: Optional[datetime.datetime] = None
     observation_availability_mode: Optional[str] = None
+    forecast_assumption_sources: dict[str, str] = Field(default_factory=dict)
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult

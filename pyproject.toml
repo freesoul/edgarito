@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.11,<4",
+    "openai>=2,<3",
     "pydantic>=2.10,<3",
     "python-dotenv>=1,<2",
     "yfinance[repair]>=1.5,<2",

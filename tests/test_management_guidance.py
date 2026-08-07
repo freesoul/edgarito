@@ -1,0 +1,303 @@
+import asyncio
+import datetime
+from decimal import Decimal
+
+from edgarito.schemas.guidance.management import (
+    ExtractedGuidanceItem,
+    ExtractedGuidanceResponse,
+    GuidanceBasis,
+    GuidanceMetric,
+    GuidancePeriodType,
+    GuidanceScope,
+    GuidanceStatus,
+    GuidanceUnit,
+    GuidanceValueKind,
+    ManagementGuidance,
+)
+from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.forecasting.models import (
+    FcffForecast,
+    FcffForecastDriver,
+    FcffForecastObservation,
+    FcffForecastParameters,
+    ForecastAssumptionSource,
+)
+from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
+from edgarito.services.guidance.overlay import GuidanceForecastOverlay
+from edgarito.services.guidance.resolver import ManagementGuidanceResolver
+from edgarito.services.guidance.service import ManagementGuidanceService
+
+
+def _observation(year, revenue, growth="10", margin="20", tax="20", capex="5"):
+    revenue = Decimal(revenue)
+    return FcffForecastObservation(
+        forecast_year=year - 2024,
+        fiscal_year=year,
+        period_end=datetime.date(year, 12, 31),
+        revenue_growth=Decimal(growth),
+        revenue=revenue,
+        operating_margin=Decimal(margin),
+        operating_income=revenue * Decimal(margin) / 100,
+        tax_rate=Decimal(tax),
+        nopat=revenue * Decimal(margin) / 100 * (1 - Decimal(tax) / 100),
+        depreciation_to_revenue=Decimal("4"),
+        depreciation_and_amortization=revenue * Decimal(".04"),
+        capex_to_revenue=Decimal(capex),
+        capital_expenditures=revenue * Decimal(capex) / 100,
+        operating_working_capital_to_revenue=Decimal("10"),
+        operating_working_capital=revenue * Decimal(".1"),
+        change_in_operating_working_capital=Decimal("1"),
+        fcff=Decimal("10"),
+        unit="USD",
+    )
+
+
+def _baseline():
+    return FcffForecast(
+        provider="test",
+        company_id="1",
+        company_name="Test",
+        ticker="TEST",
+        base_fiscal_year=2024,
+        base_period_end=datetime.date(2024, 12, 31),
+        base_revenue=Decimal("105"),
+        base_operating_income=Decimal("21"),
+        base_tax_rate=Decimal("20"),
+        base_nopat=Decimal("16.8"),
+        base_depreciation_and_amortization=Decimal("4"),
+        base_capital_expenditures=Decimal("5"),
+        base_operating_working_capital=Decimal("10"),
+        unit="USD",
+        parameters=FcffForecastParameters(forecast_years=2),
+        historical_fiscal_years=(2023, 2024),
+        assumption_sources={
+            driver: ForecastAssumptionSource.TRAILING_AVERAGE
+            for driver in FcffForecastDriver
+        },
+        observations=[_observation(2025, "115.5"), _observation(2026, "127.05")],
+    )
+
+
+def _guidance(
+    metric,
+    *,
+    year=2025,
+    low=None,
+    high=None,
+    point=None,
+    kind=GuidanceValueKind.MONETARY,
+    currency="USD",
+    status=GuidanceStatus.ISSUED,
+    filed=datetime.date(2025, 2, 1),
+):
+    return ManagementGuidance(
+        metric=metric,
+        fiscal_year=year,
+        period_type=GuidancePeriodType.FISCAL_YEAR,
+        point=Decimal(point) if point is not None else None,
+        low=Decimal(low) if low is not None else None,
+        high=Decimal(high) if high is not None else None,
+        value_kind=kind,
+        currency=currency,
+        unit=currency or kind.value,
+        basis=GuidanceBasis.GAAP,
+        scope=GuidanceScope.CONSOLIDATED,
+        status=status,
+        filing_date=filed,
+        accession_number=f"accession-{filed}",
+        filing_form="8-K",
+        source_document="ex991.htm",
+        source_document_type="EX-99.1",
+        supporting_text="We expect this range.",
+        evidence_verified=True,
+        extraction_model="gpt-test",
+    )
+
+
+def test_revenue_guidance_midpoint_becomes_absolute_anchor():
+    revenue = _guidance(GuidanceMetric.REVENUE, low="120", high="130")
+    gross_margin = _guidance(
+        GuidanceMetric.GROSS_MARGIN,
+        low="50",
+        high="52",
+        kind=GuidanceValueKind.PERCENTAGE,
+        currency=None,
+    )
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [revenue, gross_margin],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    assert parameters.revenue_anchors == {2025: Decimal("125")}
+    assert parameters.assumption_source_overrides == {
+        FcffForecastDriver.REVENUE_GROWTH: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+    }
+    assert result.applications[0].methodology == (
+        "management guidance midpoint revenue anchor"
+    )
+    assert gross_margin in result.evidence_only
+
+
+def test_capex_uses_guided_revenue_but_gross_margin_never_maps_to_operating_margin():
+    revenue = _guidance(GuidanceMetric.REVENUE, low="120", high="130")
+    capex = _guidance(GuidanceMetric.CAPEX, point="15")
+    gross = _guidance(
+        GuidanceMetric.GROSS_MARGIN,
+        point="55",
+        kind=GuidanceValueKind.PERCENTAGE,
+        currency=None,
+    )
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [revenue, capex, gross],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    assert parameters.capex_to_revenue[0] == Decimal("12")
+    assert parameters.operating_margin is None
+    assert gross in result.evidence_only
+
+
+def test_explicit_cli_or_profile_driver_has_precedence_over_guidance():
+    requested = FcffForecastParameters(
+        forecast_years=2,
+        revenue_growth=Decimal("7"),
+        operating_margin=Decimal("23"),
+    )
+    revenue = _guidance(GuidanceMetric.REVENUE, low="120", high="130")
+    margin = _guidance(
+        GuidanceMetric.OPERATING_MARGIN,
+        low="20",
+        high="22",
+        kind=GuidanceValueKind.PERCENTAGE,
+        currency=None,
+    )
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [revenue, margin], baseline=_baseline(), parameters=requested
+    )
+
+    assert parameters == requested
+    assert result.applications == ()
+    assert any("explicit CLI/profile" in reason for reason in result.rejected_reasons)
+
+
+def test_current_resolver_uses_latest_filing_and_honors_withdrawal_and_lookahead():
+    old = _guidance(
+        GuidanceMetric.REVENUE,
+        low="100",
+        high="110",
+        filed=datetime.date(2025, 1, 1),
+    )
+    new = _guidance(
+        GuidanceMetric.REVENUE,
+        low="120",
+        high="130",
+        filed=datetime.date(2025, 2, 1),
+    )
+    future = _guidance(
+        GuidanceMetric.REVENUE,
+        low="140",
+        high="150",
+        filed=datetime.date(2025, 4, 1),
+    )
+
+    resolved = ManagementGuidanceResolver().resolve(
+        [old, new, future], as_of=datetime.date(2025, 3, 1)
+    )
+    assert resolved.records == (new,)
+
+    withdrawn = new.model_copy(update={"status": GuidanceStatus.WITHDRAWN})
+    resolved = ManagementGuidanceResolver().resolve(
+        [old, withdrawn], as_of=datetime.date(2025, 3, 1)
+    )
+    assert resolved.records == ()
+
+
+class _Ai:
+    model = "gpt-test"
+    reasoning_effort = "low"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def extract_structured(self, **kwargs):
+        self.calls += 1
+        return ExtractedGuidanceResponse(
+            guidance=[
+                ExtractedGuidanceItem(
+                    metric=GuidanceMetric.REVENUE,
+                    fiscal_year=2026,
+                    period_type=GuidancePeriodType.FISCAL_YEAR,
+                    low=Decimal("10"),
+                    high=Decimal("11"),
+                    value_kind=GuidanceValueKind.MONETARY,
+                    currency="USD",
+                    unit=GuidanceUnit.BILLIONS,
+                    scope=GuidanceScope.CONSOLIDATED,
+                    supporting_text="We expect FY2026 revenue of $10-$11 billion.",
+                )
+            ]
+        )
+
+
+class _Edgar:
+    def __init__(self, filing):
+        self.filing = filing
+        self.refresh_values = []
+
+    async def get_cik(self, ticker, use_cache=True, make_cache=True):
+        return 1
+
+    async def get_guidance_filings(self, cik, **kwargs):
+        self.refresh_values.append(kwargs["use_cache"])
+        return [self.filing.model_copy(update={"documents": ()})]
+
+    async def get_filing_documents(self, filing, **kwargs):
+        return self.filing
+
+
+def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_path):
+    document = SecFilingDocument(
+        filename="ex991.htm",
+        document_type="EX-99.1",
+        description="Financial results",
+        content="We expect FY2026 revenue of $10-$11 billion.",
+    )
+    filing = SecFiling(
+        cik=1,
+        accession_number="0000000001-26-000001",
+        form="8-K",
+        filing_date=datetime.date(2026, 1, 2),
+        items=("2.02",),
+        primary_document="primary.htm",
+        documents=(document,),
+    )
+    ai = _Ai()
+    edgar = _Edgar(filing)
+    service = ManagementGuidanceService(
+        edgar, ManagementGuidanceExtractor(ai, FileSystemCache(tmp_path))
+    )
+
+    first = asyncio.run(
+        service.retrieve(
+            ticker="TEST", cik=None, as_of=datetime.date(2026, 2, 1)
+        )
+    )
+    second = asyncio.run(
+        service.retrieve(
+            ticker="TEST",
+            cik=None,
+            as_of=datetime.date(2026, 2, 1),
+            refresh_sec=True,
+        )
+    )
+
+    assert ai.calls == 1
+    assert first.cache_misses == 1
+    assert second.cache_hits == 1
+    assert edgar.refresh_values == [True, False]

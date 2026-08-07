@@ -1,6 +1,8 @@
 import asyncio
+import datetime
 import json
 import logging
+import re
 import urllib.parse
 from typing import List, Optional
 
@@ -8,6 +10,7 @@ import aiohttp
 
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts, Fact
 from edgarito.schemas.providers.edgar.company_ticker import CompanyTickerResponse
+from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.schemas.providers.edgar.submission import (
     CompanySubmissionsResponse,
     FilingRecent,
@@ -16,6 +19,7 @@ from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 
 class EdgarClient:
+    GUIDANCE_FORMS = frozenset({"8-K", "8-K/A", "6-K", "6-K/A"})
     def __init__(
         self,
         cache: FileSystemCache,
@@ -143,6 +147,154 @@ class EdgarClient:
         schema = CompanyFacts(**raw_json)
         return schema
 
+    async def get_filings(
+        self,
+        cik: int,
+        *,
+        forms: set[str] | frozenset[str] | None = None,
+        as_of: datetime.date | None = None,
+        since: datetime.date | None = None,
+        use_cache: bool = True,
+        make_cache: bool = True,
+        include_older_submissions: bool = False,
+    ) -> list[SecFiling]:
+        """Return filing metadata with a strict filing-date look-ahead cutoff."""
+        submissions = (
+            await self.get_all_submissions(
+                cik, use_cache=use_cache, make_cache=make_cache
+            )
+            if include_older_submissions
+            else await self.get_submissions(
+                cik, use_cache=use_cache, make_cache=make_cache
+            )
+        )
+        selected_forms = {item.upper() for item in forms} if forms else None
+        filings: list[SecFiling] = []
+        for item in submissions.filings.recent.transpose():
+            if selected_forms is not None and item.form.upper() not in selected_forms:
+                continue
+            if as_of is not None and item.filingDate > as_of:
+                continue
+            if since is not None and item.filingDate < since:
+                continue
+            filings.append(self._sec_filing(cik, item))
+        return sorted(
+            filings,
+            key=lambda filing: (
+                filing.filing_date,
+                filing.acceptance_datetime or datetime.datetime.min,
+            ),
+            reverse=True,
+        )
+
+    async def get_guidance_filings(
+        self,
+        cik: int,
+        *,
+        as_of: datetime.date,
+        lookback_days: int = 180,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> list[SecFiling]:
+        return await self.get_filings(
+            cik,
+            forms=self.GUIDANCE_FORMS,
+            as_of=as_of,
+            since=as_of - datetime.timedelta(days=lookback_days),
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
+
+    async def get_filing_documents(
+        self,
+        filing: SecFiling,
+        *,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> SecFiling:
+        """Fetch and parse the full-submission SGML document blocks.
+
+        Raw full-submission text and parsed document JSON use distinct SEC cache
+        entries keyed by immutable CIK/accession identity.
+        """
+        base = (
+            f"providers/edgar/filings/{filing.cik}/"
+            f"{filing.accession_number}"
+        )
+        parsed_path = f"{base}/documents.json"
+        if use_cache:
+            cached = self._cache.read(parsed_path)
+            if cached is not None:
+                documents = tuple(
+                    SecFilingDocument.model_validate(item)
+                    for item in json.loads(cached)
+                )
+                return filing.model_copy(update={"documents": documents})
+
+        raw_path = f"{base}/full-submission.txt"
+        submission_text = self._cache.read(raw_path) if use_cache else None
+        if submission_text is None:
+            submission_text = await self._fetch_text_with_retry(filing.archive_url)
+            if make_cache:
+                self._cache.save(raw_path, submission_text)
+
+        documents = tuple(self.parse_submission_documents(submission_text))
+        if make_cache:
+            self._cache.save(
+                parsed_path,
+                json.dumps(
+                    [item.model_dump(mode="json") for item in documents],
+                    ensure_ascii=False,
+                ),
+            )
+        return filing.model_copy(update={"documents": documents})
+
+    @staticmethod
+    def parse_submission_documents(text: str) -> list[SecFilingDocument]:
+        """Split SEC full-submission SGML without interpreting document HTML."""
+        documents: list[SecFilingDocument] = []
+        blocks = re.findall(
+            r"<DOCUMENT>(.*?)(?:</DOCUMENT>|\Z)", text, flags=re.I | re.S
+        )
+        for block in blocks:
+            def value(tag: str, source: str = block) -> str:
+                match = re.search(
+                    rf"<{tag}>\s*([^\r\n<]*)", source, flags=re.I
+                )
+                return match.group(1).strip() if match else ""
+
+            text_match = re.search(r"<TEXT>(.*?)(?:</TEXT>|\Z)", block, re.I | re.S)
+            content = text_match.group(1).strip() if text_match else ""
+            filename = value("FILENAME")
+            document_type = value("TYPE")
+            if not filename and not content:
+                continue
+            documents.append(
+                SecFilingDocument(
+                    filename=filename or f"document-{len(documents) + 1}.txt",
+                    document_type=document_type or "UNKNOWN",
+                    description=value("DESCRIPTION"),
+                    sequence=value("SEQUENCE") or None,
+                    content=content,
+                )
+            )
+        return documents
+
+    @staticmethod
+    def _sec_filing(cik: int, item: FilingRecent | object) -> SecFiling:
+        raw_items = getattr(item, "items", "") or ""
+        return SecFiling(
+            cik=cik,
+            accession_number=item.accessionNumber,
+            form=item.form,
+            filing_date=item.filingDate,
+            acceptance_datetime=item.acceptanceDateTime,
+            report_date=item.reportDate,
+            items=tuple(part.strip() for part in raw_items.split(",") if part.strip()),
+            primary_document=item.primaryDocument,
+            primary_document_description=item.primaryDocDescription or "",
+        )
+
     async def _fetch_json_with_retry_and_cache(
         self,
         url: str,
@@ -206,4 +358,39 @@ class EdgarClient:
                         f"SEC returned an invalid JSON response for {url}"
                     ) from exc
 
+        raise RuntimeError(f"SEC request failed after {max_attempts} attempts: {url}")
+
+    async def _fetch_text_with_retry(
+        self,
+        url: str,
+        timeout: int = 20,
+        threshold_exceeded_delay: int = 2,
+        max_attempts: int = 5,
+    ) -> str:
+        host = urllib.parse.urlparse(url).netloc
+        headers = {
+            "Host": host,
+            "User-Agent": self._user_agent,
+            "Accept-Encoding": "gzip, deflate",
+        }
+        for attempt in range(1, max_attempts + 1):
+            async with self._session.get(url, timeout=timeout, headers=headers) as resp:
+                response_text = await resp.text(errors="replace")
+                if resp.status in (403, 429):
+                    if attempt == max_attempts:
+                        raise RuntimeError(
+                            f"SEC rate limit persisted after {max_attempts} attempts: {url}"
+                        )
+                    await asyncio.sleep(threshold_exceeded_delay * attempt)
+                    continue
+                if resp.status == 404:
+                    raise FileNotFoundError(f"404 Not Found: {url}")
+                if resp.status >= 500 and attempt < max_attempts:
+                    await asyncio.sleep(threshold_exceeded_delay * attempt)
+                    continue
+                if resp.status >= 400:
+                    raise RuntimeError(
+                        f"SEC request failed with HTTP {resp.status}: {url}"
+                    )
+                return response_text
         raise RuntimeError(f"SEC request failed after {max_attempts} attempts: {url}")

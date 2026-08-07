@@ -159,6 +159,13 @@ class FcffDcfConsolePresenter:
                 f"Forecast seed methodology: {result.forecast_seed_methodology}",
             ]
         )
+        if result.forecast_assumption_sources:
+            lines.append("Forecast driver sources:")
+            for driver, source in sorted(result.forecast_assumption_sources.items()):
+                lines.append(
+                    f"  {driver.replace('_', ' ').title()}: "
+                    f"{source.replace('_', '-')}"
+                )
         if (
             result.provider.casefold() == "yahoo"
             and result.observation_availability_mode == "current_snapshot"

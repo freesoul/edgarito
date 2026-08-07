@@ -28,6 +28,9 @@ MASSIVE_API_KEY = (
     or os.getenv("POLYGON_API_KEY")
 )
 OPENFIGI_API_KEY = os.getenv("OPENFIGI_API_KEY") or os.getenv("openfigi_api_key")
+OPENAI_API_KEY = os.getenv("openai_secret_api_key") or os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low")
 PROVIDER_CONFIGURATION = ProviderConfiguration.from_environment(os.environ)
 CLASSIFICATION_PROVIDER_CONFIGURATION = (
     ClassificationProviderConfiguration.from_environment(os.environ)

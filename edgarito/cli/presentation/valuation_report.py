@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from edgarito.cli.presentation._valuation_format import (
     format_currency,
     section,
@@ -12,6 +14,11 @@ from edgarito.cli.presentation.decision import DecisionValuationConsolePresenter
 from edgarito.cli.presentation.valuation import (
     ComparableImpliedValuationConsolePresenter,
     ComparableMultiplesConsolePresenter,
+)
+from edgarito.schemas.guidance.management import (
+    GuidanceOverlayResult,
+    GuidanceValueKind,
+    ManagementGuidance,
 )
 from edgarito.schemas.valuation.intrinsic import ValuationRunResult
 from edgarito.schemas.valuation.relative import ProviderNeutralRelativeValuation
@@ -40,6 +47,7 @@ class ValuationReportConsolePresenter:
         verbose: bool,
         provider_relative: ProviderNeutralRelativeValuation | None = None,
         additional_warnings: tuple[str, ...] = (),
+        management_guidance: GuidanceOverlayResult | None = None,
     ) -> str:
         blocks: list[str] = []
         if intrinsic is not None:
@@ -49,6 +57,12 @@ class ValuationReportConsolePresenter:
                     profile_name=profile_name,
                     verbose=verbose,
                     include_warnings=False,
+                )
+            )
+        if management_guidance is not None and management_guidance.applications:
+            blocks.append(
+                self._render_management_guidance(
+                    management_guidance, verbose=verbose
                 )
             )
         if peer_report is not None:
@@ -105,6 +119,80 @@ class ValuationReportConsolePresenter:
                 "\n".join(decision_presenter.render_summary(decision, verbose=verbose))
             )
         return "\n\n".join(block for block in blocks if block)
+
+    @classmethod
+    def _render_management_guidance(
+        cls, result: GuidanceOverlayResult, *, verbose: bool
+    ) -> str:
+        lines = [*section("MANAGEMENT GUIDANCE")]
+        for application in result.applications:
+            record = application.guidance
+            lines.append(
+                f"{record.period_label} {record.metric.value.replace('_', ' '):<20} "
+                f"{cls._guidance_range(record):>18}   "
+                f"base anchor {cls._guidance_value(application.value, record)}"
+            )
+        for record in result.evidence_only:
+            lines.append(
+                f"{record.period_label} {record.metric.value.replace('_', ' '):<20} "
+                f"{cls._guidance_range(record):>18}   evidence only"
+            )
+        source_records = [
+            *(item.guidance for item in result.applications),
+            *result.evidence_only,
+        ]
+        first = source_records[0]
+        source_labels = tuple(
+            dict.fromkeys(
+                f"SEC {record.filing_form} filed {record.filing_date.isoformat()}"
+                for record in source_records
+            )
+        )
+        lines.extend(
+            (
+                "",
+                f"Source: {', '.join(source_labels)}",
+                f"Extraction: OpenAI / {first.extraction_model}",
+            )
+        )
+        if verbose:
+            lines.append(
+                f"Extraction cache: {result.cache_hits} hit(s), "
+                f"{result.cache_misses} miss(es)"
+            )
+            for record in source_records:
+                lines.extend(
+                    (
+                        f"  {record.accession_number} | {record.source_document} | "
+                        f"{record.source_document_type}",
+                        f"    Evidence: {record.supporting_text}",
+                    )
+                )
+            lines.extend(f"  Rejected: {reason}" for reason in result.rejected_reasons)
+        return "\n".join(lines)
+
+    @classmethod
+    def _guidance_range(cls, record: ManagementGuidance) -> str:
+        if record.low is not None and record.high is not None:
+            return (
+                f"{cls._guidance_value(record.low, record)}–"
+                f"{cls._guidance_value(record.high, record)}"
+            )
+        return cls._guidance_value(record.midpoint or Decimal(0), record)
+
+    @staticmethod
+    def _guidance_value(value: Decimal, record: ManagementGuidance) -> str:
+        if record.value_kind == GuidanceValueKind.PERCENTAGE:
+            return f"{value:,.1f}%"
+        if record.value_kind == GuidanceValueKind.MONETARY:
+            currency = record.currency or record.unit
+            absolute = abs(value)
+            if absolute >= Decimal(1_000_000_000):
+                return f"{currency} {value / Decimal(1_000_000_000):,.1f}B"
+            if absolute >= Decimal(1_000_000):
+                return f"{currency} {value / Decimal(1_000_000):,.1f}M"
+            return f"{currency} {value:,.0f}"
+        return f"{value:,.2f}"
 
     @staticmethod
     def _render_warnings(messages: list[str], *, verbose: bool) -> str:

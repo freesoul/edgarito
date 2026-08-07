@@ -140,6 +140,33 @@ def test_infers_trailing_average_growth_and_fcf_margin():
     assert observation.free_cash_flow == Decimal("14.400")
 
 
+def test_fcff_absolute_revenue_anchor_replaces_historical_growth_for_that_year():
+    parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("5"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        capex_to_revenue=Decimal("6"),
+        operating_working_capital_to_revenue=Decimal("15"),
+        revenue_anchors={2025: Decimal("125")},
+        assumption_source_overrides={
+            FcffForecastDriver.REVENUE_GROWTH: (
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            )
+        },
+    )
+
+    forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
+
+    assert forecast.observations[0].revenue == Decimal("125")
+    assert forecast.observations[0].revenue_growth == Decimal("4.166666666666666666666666700")
+    assert (
+        forecast.assumption_sources[FcffForecastDriver.REVENUE_GROWTH]
+        == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+    )
+
+
 def test_parameters_reject_an_incomplete_year_specific_path():
     with pytest.raises(ValueError, match="must contain one value or 3 values"):
         SimplifiedFcfForecastParameters(

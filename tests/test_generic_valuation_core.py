@@ -354,6 +354,23 @@ def test_current_ytd_and_ttm_context_seed_the_current_fiscal_year_without_overla
     assert fallback.observations[0].fiscal_year == 2026
 
 
+def test_ytd_revenue_anchor_forecasts_only_the_guided_remaining_amount():
+    parameters = _explicit_forecast_parameters().model_copy(
+        update={"revenue_anchors": {2026: Decimal("125")}}
+    )
+
+    forecast = FcffForecastService().forecast(_forecast_financials(), parameters)
+
+    # Reported H1 revenue is 50; the implied remaining-year revenue is 75.
+    assert forecast.observations[0].revenue == Decimal("125")
+    assert forecast.observations[0].operating_income == Decimal("25")
+
+    invalid = parameters.model_copy(
+        update={"revenue_anchors": {2026: Decimal("40")}}
+    )
+    with pytest.raises(ValueError, match="below reported YTD revenue"):
+        FcffForecastService().forecast(_forecast_financials(), invalid)
+
 def test_non_calendar_fiscal_year_keeps_fiscal_alignment():
     forecast = FcffForecastService().forecast(
         _forecast_financials(fiscal_end_month=6), _explicit_forecast_parameters()
