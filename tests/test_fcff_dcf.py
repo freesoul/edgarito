@@ -129,7 +129,7 @@ def test_recent_quarterly_bridge_is_not_reported_as_stale():
         _forecast(),
         FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
         _capital_bridge(),
-        valuation_date=datetime.date(2026, 2, 1),
+        valuation_date=datetime.date(2026, 4, 15),
     )
 
     assert not any("Capital bridge is dated" in item for item in result.warnings)
@@ -276,6 +276,101 @@ def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
     assert result.net_debt == Decimal("75")
     assert result.diluted_shares == Decimal("9")
     assert "current shares outstanding" in result.shares_source
+
+
+def test_capital_bridge_prefers_latest_coherent_quarterly_balance_over_annual():
+    financials = _financials_with_bridge()
+    financials.observations = [
+        observation.model_copy(
+            update={
+                "fiscal_year": 2026,
+                "period_end": datetime.date(2026, 12, 31),
+            }
+        )
+        for observation in financials.observations
+    ]
+    financials.observations.extend(
+        _bridge_period(
+            fiscal_year=2026,
+            fiscal_period=FiscalPeriod.Q3,
+            period_end=datetime.date(2026, 9, 30),
+            values={
+                FinancialConcept.SHORT_TERM_DEBT: "3",
+                FinancialConcept.LONG_TERM_DEBT_CURRENT: "7",
+                FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "50",
+                FinancialConcept.CASH_AND_EQUIVALENTS: "11",
+                FinancialConcept.SHARES_OUTSTANDING: "8",
+            },
+        )
+    )
+
+    result = FcffDcfCapitalBridgeResolver().resolve(
+        financials,
+        fiscal_year=2026,
+        period_end=datetime.date(2026, 12, 31),
+        unit="USD",
+    )
+
+    assert result.period_end == datetime.date(2026, 9, 30)
+    assert result.gross_debt == Decimal("60")
+    assert result.cash_and_equivalents == Decimal("11")
+    assert result.diluted_shares == Decimal("8")
+    assert not any("latest annual" in warning for warning in result.warnings)
+
+
+def test_capital_bridge_duplicate_concept_date_uses_latest_filed_observation():
+    financials = _financials_with_bridge()
+    latest_cash = _bridge_observation(
+        FinancialConcept.CASH_AND_EQUIVALENTS,
+        "40",
+        Granularity.ANNUAL,
+        2025,
+        FiscalPeriod.FY,
+        datetime.date(2025, 12, 31),
+        filed=datetime.date(2026, 2, 1),
+    )
+    financials.observations = [latest_cash, *financials.observations]
+
+    result = FcffDcfCapitalBridgeResolver().resolve(
+        financials,
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        valuation_date=datetime.date(2026, 2, 2),
+    )
+
+    assert result.cash_and_equivalents == Decimal("40")
+    assert result.net_debt == Decimal("60")
+
+
+def test_capital_bridge_prefers_quarterly_current_shares_to_annual_shares():
+    financials = _financials_with_bridge()
+    financials.observations.extend(
+        _bridge_period(
+            fiscal_year=2026,
+            fiscal_period=FiscalPeriod.Q1,
+            period_end=datetime.date(2026, 3, 31),
+            values={
+                FinancialConcept.SHORT_TERM_DEBT: "10",
+                FinancialConcept.LONG_TERM_DEBT_CURRENT: "20",
+                FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "70",
+                FinancialConcept.CASH_AND_EQUIVALENTS: "25",
+                FinancialConcept.SHARES_OUTSTANDING: "8",
+                FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES: "12",
+            },
+        )
+    )
+
+    result = FcffDcfCapitalBridgeResolver().resolve(
+        financials,
+        fiscal_year=2026,
+        period_end=datetime.date(2026, 3, 31),
+        unit="USD",
+    )
+
+    assert result.diluted_shares == Decimal("8")
+    assert "current shares outstanding" in result.shares_source
+    assert result.shares_date == datetime.date(2026, 3, 31)
 
 
 def test_capital_bridge_accepts_reported_debt_when_short_term_line_is_absent():
@@ -515,6 +610,57 @@ def _financials_with_bridge() -> NormalizedCompanyFinancials:
             )
             for concept, value in values.items()
         ],
+    )
+
+
+def _bridge_period(
+    *,
+    fiscal_year: int,
+    fiscal_period: FiscalPeriod,
+    period_end: datetime.date,
+    values: dict[FinancialConcept, str],
+) -> list[FinancialObservation]:
+    granularity = (
+        Granularity.ANNUAL
+        if fiscal_period == FiscalPeriod.FY
+        else Granularity.QUARTERLY
+    )
+    return [
+        _bridge_observation(
+            concept,
+            value,
+            granularity,
+            fiscal_year,
+            fiscal_period,
+            period_end,
+        )
+        for concept, value in values.items()
+    ]
+
+
+def _bridge_observation(
+    concept: FinancialConcept,
+    value: str,
+    granularity: Granularity,
+    fiscal_year: int,
+    fiscal_period: FiscalPeriod,
+    period_end: datetime.date,
+    *,
+    filed: datetime.date | None = None,
+) -> FinancialObservation:
+    return FinancialObservation(
+        concept=concept,
+        statement=concept.statement,
+        value=Decimal(value),
+        unit="shares" if "shares" in concept.value else "USD",
+        granularity=granularity,
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_period,
+        period_end=period_end,
+        provider="test",
+        taxonomy="test",
+        source_concept=concept.value,
+        filed=filed,
     )
 
 

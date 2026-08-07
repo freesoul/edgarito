@@ -37,6 +37,8 @@ from edgarito.services.valuation.models import (
     TerminalValueMethod,
 )
 
+_CAPITAL_BRIDGE_STALE_DAYS = 180
+
 
 class FcffDcfCapitalBridgeResolver:
     """Resolve enterprise-to-equity inputs from the latest coherent period."""
@@ -98,21 +100,18 @@ class FcffDcfCapitalBridgeResolver:
         ]
         by_date: dict[datetime.date, dict[FinancialConcept, FinancialObservation]] = {}
         for item in eligible:
-            by_date.setdefault(item.period_end, {}).setdefault(item.concept, item)
+            values = by_date.setdefault(item.period_end, {})
+            existing = values.get(item.concept)
+            if existing is None or self._observation_preference_key(item) > (
+                self._observation_preference_key(existing)
+            ):
+                values[item.concept] = item
         bridge_date = self._latest_coherent_balance_date(by_date) or period_end
         by_concept = by_date.get(bridge_date, {})
         bridge_fiscal_year = next(
             (item.fiscal_year for item in by_concept.values()), fiscal_year
         )
         warnings: list[str] = []
-        selected_granularity = next(
-            (item.granularity for item in by_concept.values()), Granularity.ANNUAL
-        )
-        if selected_granularity == Granularity.ANNUAL:
-            warnings.append(
-                "Quarterly capital-bridge data were unavailable; latest annual "
-                "balance-sheet values are used"
-            )
 
         component_overrides = (gross_debt, cash_and_equivalents)
         debt_is_explicit = net_debt is not None or gross_debt is not None
@@ -170,13 +169,14 @@ class FcffDcfCapitalBridgeResolver:
 
         if (
             share_observation is not None
-            and abs((share_observation.period_end - bridge_date).days) > 95
+            and abs((share_observation.period_end - bridge_date).days)
+            > _CAPITAL_BRIDGE_STALE_DAYS
         ):
             warnings.append(
                 "Share count and debt/cash are from materially different dates: "
                 f"{share_observation.period_end.isoformat()} vs {bridge_date.isoformat()}"
             )
-        if (as_of - bridge_date).days > 180:
+        if (as_of - bridge_date).days > _CAPITAL_BRIDGE_STALE_DAYS:
             warnings.append(
                 f"Capital-bridge data are {(as_of - bridge_date).days} days old; "
                 "current quarterly values were unavailable"
@@ -241,25 +241,71 @@ class FcffDcfCapitalBridgeResolver:
             warnings=tuple(warnings),
         )
 
+    @classmethod
+    def _latest_coherent_balance_date(cls, by_date):
+        for granularity in (Granularity.QUARTERLY, Granularity.ANNUAL):
+            coherent_dates = [
+                selected_on
+                for selected_on, values in by_date.items()
+                if cls._has_coherent_balance(values, granularity)
+            ]
+            if coherent_dates:
+                return max(coherent_dates)
+        return max(by_date, default=None)
+
     @staticmethod
-    def _latest_coherent_balance_date(by_date):
-        for selected_on in sorted(by_date, reverse=True):
-            values = by_date[selected_on]
-            has_cash = FinancialConcept.CASH_AND_EQUIVALENTS in values
-            has_debt = any(
-                concept in values
+    def _has_coherent_balance(
+        values: dict[FinancialConcept, FinancialObservation],
+        granularity: Granularity,
+    ) -> bool:
+        cash = values.get(FinancialConcept.CASH_AND_EQUIVALENTS)
+        debt = any(
+            values.get(concept) is not None
+            for concept in (
+                FinancialConcept.SHORT_TERM_DEBT,
+                FinancialConcept.LONG_TERM_DEBT_CURRENT,
+                FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
+            )
+        )
+        return (
+            cash is not None
+            and debt
+            and cash.granularity == granularity
+            and any(
+                values[concept].granularity == granularity
                 for concept in (
                     FinancialConcept.SHORT_TERM_DEBT,
                     FinancialConcept.LONG_TERM_DEBT_CURRENT,
                     FinancialConcept.LONG_TERM_DEBT_NONCURRENT,
                 )
+                if concept in values
             )
-            if has_cash and has_debt:
-                return selected_on
-        return max(by_date, default=None)
+        )
 
     @staticmethod
-    def _latest_share_observation(eligible):
+    def _observation_preference_key(
+        observation: FinancialObservation,
+    ) -> tuple[bool, datetime.date, str, bool, str, Decimal]:
+        """Rank duplicate observations without depending on input order."""
+        return (
+            observation.granularity == Granularity.QUARTERLY,
+            observation.filed or datetime.date.min,
+            observation.accession_number or "",
+            bool(observation.form and observation.form.endswith("/A")),
+            observation.source_concept,
+            observation.value,
+        )
+
+    @classmethod
+    def _latest_observation(cls, observations):
+        return max(
+            observations,
+            key=lambda item: (item.period_end, *cls._observation_preference_key(item)),
+            default=None,
+        )
+
+    @classmethod
+    def _latest_share_observation(cls, eligible):
         shares = [
             item
             for item in eligible
@@ -277,8 +323,18 @@ class FcffDcfCapitalBridgeResolver:
             for item in shares
             if item.concept == FinancialConcept.SHARES_OUTSTANDING
         ]
-        pool = current or shares
-        return max(pool, key=lambda item: (item.period_end, item.granularity.value))
+        quarterly_current = [
+            item for item in current if item.granularity == Granularity.QUARTERLY
+        ]
+        if quarterly_current:
+            return cls._latest_observation(quarterly_current)
+        if current:
+            return cls._latest_observation(current)
+
+        quarterly_weighted = [
+            item for item in shares if item.granularity == Granularity.QUARTERLY
+        ]
+        return cls._latest_observation(quarterly_weighted or shares)
 
     @classmethod
     def _resolve_reported_net_debt(cls, by_concept, unit, fiscal_year):
@@ -472,7 +528,12 @@ class FcffDcfService:
                 "Explicit FCFF uses mid-year timing; terminal value remains at "
                 "the end of the final forecast year"
             )
-        if (selected_valuation_date - capital_bridge.period_end).days > 95:
+        if (selected_valuation_date - capital_bridge.period_end).days > (
+            _CAPITAL_BRIDGE_STALE_DAYS
+        ) and not any(
+            warning.startswith(("Capital-bridge data are", "Capital bridge is dated"))
+            for warning in warnings
+        ):
             warnings.append(
                 f"Capital bridge is dated {capital_bridge.period_end.isoformat()}, "
                 f"before the {selected_valuation_date.isoformat()} valuation date; "
