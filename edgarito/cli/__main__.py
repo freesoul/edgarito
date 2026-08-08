@@ -21,10 +21,12 @@ from edgarito.cli.presentation.console import (
     ForecastConsolePresenter,
     IndependentValuationModelsConsolePresenter,
     MetricsConsolePresenter,
+    RedFlagsConsolePresenter,
     SpecializedExtractionConsolePresenter,
     ValuationReportConsolePresenter,
     ValuationSelectionConsolePresenter,
 )
+from edgarito.config.red_flags import RedFlagsProfileLoader
 from edgarito.config.valuation import (
     ForecastMethod,
     ForecastValuationProfile,
@@ -88,6 +90,7 @@ from edgarito.services.reconciliation.classification import (
     CompanyClassificationService,
 )
 from edgarito.services.reconciliation.financials import FinancialDataService
+from edgarito.services.red_flags import InvestmentRedFlagsService
 from edgarito.services.valuation import (
     BusinessArchetype,
     CashFlowTiming,
@@ -180,6 +183,24 @@ async def _run_metrics(args: argparse.Namespace) -> int:
     )
 
     print(MetricsConsolePresenter().render(metrics, limit=args.limit))
+    return 0
+
+
+async def _run_red_flags(args: argparse.Namespace) -> int:
+    configuration = RedFlagsProfileLoader.load(args.profile)
+    granularity = Granularity(args.period)
+    concepts = {
+        concept
+        for category in configuration.enabled_categories
+        for concept in configuration.required_concepts(category)
+    }
+    financials = await _retrieve_financials(args, granularity, concepts)
+    report = InvestmentRedFlagsService(configuration).analyze(
+        financials,
+        granularity=granularity,
+    )
+
+    print(RedFlagsConsolePresenter().render(report, verbose=args.verbose))
     return 0
 
 
@@ -2386,6 +2407,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_financials(args))
         if args.command == "metrics":
             return asyncio.run(_run_metrics(args))
+        if args.command == "red-flags":
+            return asyncio.run(_run_red_flags(args))
         if args.command == "forecast":
             return asyncio.run(_run_forecast(args))
         if args.command == "valuation":

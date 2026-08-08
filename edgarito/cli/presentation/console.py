@@ -6,6 +6,7 @@ from edgarito.cli.presentation.financials import (
     MetricsConsolePresenter,
 )
 from edgarito.cli.presentation.forecast import ForecastConsolePresenter
+from edgarito.cli.presentation.red_flags import RedFlagsConsolePresenter
 from edgarito.cli.presentation.specialized import SpecializedExtractionConsolePresenter
 from edgarito.cli.presentation.valuation import (
     ComparableImpliedValuationConsolePresenter,
@@ -29,6 +30,7 @@ __all__ = [
     "MetricsConsolePresenter",
     "IndependentValuationModelsConsolePresenter",
     "ProviderNeutralRelativeValuationConsolePresenter",
+    "RedFlagsConsolePresenter",
     "SpecializedExtractionConsolePresenter",
     "ValuationSelectionConsolePresenter",
     "ValuationReportConsolePresenter",

@@ -23,6 +23,7 @@ class YahooConceptDefinition:
     source_concepts: tuple[str, ...]
     unit: str = "currency"
     absolute_value: bool = False
+    cash_outflow: bool = False
 
 
 CONCEPT_DEFINITIONS = (
@@ -197,6 +198,18 @@ CONCEPT_DEFINITIONS = (
         ("RepaymentOfDebt",),
         absolute_value=True,
     ),
+    YahooConceptDefinition(
+        FinancialConcept.STOCK_BASED_COMPENSATION,
+        "cash_flow_statements",
+        ("StockBasedCompensation",),
+        absolute_value=True,
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.ACQUISITION_CASH_PAID,
+        "cash_flow_statements",
+        ("PurchaseOfBusiness", "NetBusinessPurchaseAndSale"),
+        cash_outflow=True,
+    ),
 )
 
 
@@ -259,7 +272,13 @@ class YahooFinancialsNormalizer:
             )
             if value is None or source_concept is None:
                 continue
-            if definition.absolute_value:
+            if definition.cash_outflow:
+                # Yahoo cash-flow values use the cash-flow sign convention:
+                # purchases are negative and sale proceeds are positive.  The
+                # normalized acquisition concept is cash paid, so proceeds must
+                # not become positive acquisition spending through abs().
+                value = max(-value, Decimal(0))
+            elif definition.absolute_value:
                 value = abs(value)
             fiscal_year, fiscal_period = self._fiscal_period(
                 report.period_end, granularity, fiscal_end_month

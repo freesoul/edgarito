@@ -10,6 +10,15 @@ from edgarito.schemas.market import (
     SecurityMarketData,
     StockSplit,
 )
+from edgarito.schemas.red_flags import (
+    RedFlag,
+    RedFlagCategory,
+    RedFlagEvidence,
+    RedFlagSeverity,
+    RedFlagSourceObservation,
+    RedFlagWarning,
+    RedFlagsReport,
+)
 from edgarito.schemas.valuation import (
     AssumptionOrigin,
     AssumptionProvenance,
@@ -53,6 +62,13 @@ __all__ = [
     "ReferenceDatasetRelease",
     "ReferenceSeriesKind",
     "ReferenceValueUnit",
+    "RedFlag",
+    "RedFlagCategory",
+    "RedFlagEvidence",
+    "RedFlagSeverity",
+    "RedFlagSourceObservation",
+    "RedFlagWarning",
+    "RedFlagsReport",
     "SecurityIdentifiers",
     "SecurityMarketData",
     "SpecializedInputType",

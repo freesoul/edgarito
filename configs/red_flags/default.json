@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "default",
+  "description": "Conservative provider-neutral investment red-flag thresholds; unavailable data produces warnings rather than clean results.",
+  "history_periods": 5,
+  "fcf_vs_earnings": {
+    "enabled": true,
+    "severity": "high",
+    "minimum_fcf_to_net_income_pct": "80",
+    "flag_negative_fcf_with_positive_earnings": true
+  },
+  "debt": {
+    "enabled": true,
+    "severity": "high",
+    "maximum_net_debt_to_ebitda": "3.5",
+    "minimum_interest_coverage": "3"
+  },
+  "dilution_sbc": {
+    "enabled": true,
+    "severity": "medium",
+    "maximum_share_count_growth_pct": "3",
+    "maximum_diluted_share_premium_pct": "5",
+    "maximum_sbc_to_revenue_pct": "5"
+  },
+  "acquisitions": {
+    "enabled": true,
+    "severity": "medium",
+    "maximum_acquisition_to_revenue_pct": "10",
+    "maximum_acquisition_to_fcf_pct": "50",
+    "maximum_goodwill_growth_pct": "15"
+  },
+  "margins_growth": {
+    "enabled": true,
+    "severity": "medium",
+    "minimum_revenue_growth_pct": null,
+    "minimum_operating_margin_pct": null,
+    "maximum_operating_margin_decline_pp": "3"
+  },
+  "roic": {
+    "enabled": true,
+    "severity": "high",
+    "minimum_roic_pct": "8",
+    "maximum_roic_decline_pp": "3"
+  },
+  "cash_conversion": {
+    "enabled": true,
+    "severity": "medium",
+    "minimum_operating_cash_flow_to_net_income_pct": "80"
+  },
+  "concentration": {
+    "enabled": true,
+    "severity": "medium",
+    "maximum_customer_concentration_pct": "25",
+    "maximum_segment_concentration_pct": "40"
+  },
+  "accounting_quality": {
+    "enabled": true,
+    "severity": "high",
+    "maximum_receivables_growth_premium_pp": "10",
+    "maximum_inventory_growth_premium_pp": "10",
+    "maximum_goodwill_to_assets_pct": "50"
+  }
+}

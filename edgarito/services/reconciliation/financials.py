@@ -1,5 +1,7 @@
+import datetime
 import warnings
-from typing import Mapping, Optional
+from dataclasses import dataclass
+from typing import Mapping, Optional, Sequence
 
 from edgarito.config.providers import ProviderConfiguration
 from edgarito.enums.granularity import Granularity
@@ -8,6 +10,7 @@ from edgarito.enums.provider import ProviderName
 from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
+    FinancialObservation,
     NormalizedCompanyFinancials,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
@@ -32,8 +35,158 @@ from edgarito.services.reconciliation.providers import (
 )
 
 
+@dataclass(frozen=True)
+class FinancialDataScore:
+    """Quality dimensions used to choose one provider result.
+
+    Completeness is the proportion of the observations available from any
+    candidate that this candidate supplies.  It is intentionally calculated
+    over observation keys rather than values: automatic selection must not
+    reconcile, average, or otherwise combine provider data.
+    """
+
+    completeness: float
+    latest_period_end: Optional[datetime.date]
+    latest_filed: Optional[datetime.date]
+    retrieved_at: Optional[datetime.datetime]
+    observation_count: int
+
+    @property
+    def ranking_key(self) -> tuple[float, int, int, float, int]:
+        """Return a deterministic key with completeness ahead of freshness."""
+        return (
+            self.completeness,
+            self.latest_period_end.toordinal()
+            if self.latest_period_end is not None
+            else datetime.date.min.toordinal(),
+            self.latest_filed.toordinal()
+            if self.latest_filed is not None
+            else datetime.date.min.toordinal(),
+            self._retrieved_timestamp(),
+            self.observation_count,
+        )
+
+    def _retrieved_timestamp(self) -> float:
+        if self.retrieved_at is None:
+            return float("-inf")
+        return self.retrieved_at.astimezone(datetime.timezone.utc).timestamp()
+
+
+class FinancialDataSelector:
+    """Rank complete provider datasets without reconciling their observations."""
+
+    @classmethod
+    def rank(
+        cls,
+        candidates: Sequence[NormalizedCompanyFinancials],
+        *,
+        concepts: Optional[set[FinancialConcept]] = None,
+    ) -> list[tuple[NormalizedCompanyFinancials, FinancialDataScore]]:
+        candidates = list(candidates)
+        if not candidates:
+            raise ValueError("At least one financial data candidate is required")
+
+        candidate_keys = [
+            cls._observation_keys(candidate, concepts) for candidate in candidates
+        ]
+        expected_keys = set().union(*candidate_keys)
+        ranked = [
+            (
+                candidate,
+                cls.score(
+                    candidate,
+                    expected_keys=expected_keys,
+                    concepts=concepts,
+                ),
+            )
+            for candidate in candidates
+        ]
+        return sorted(
+            ranked,
+            key=lambda item: item[1].ranking_key,
+            reverse=True,
+        )
+
+    @classmethod
+    def select(
+        cls,
+        candidates: Sequence[NormalizedCompanyFinancials],
+        *,
+        concepts: Optional[set[FinancialConcept]] = None,
+    ) -> NormalizedCompanyFinancials:
+        """Return the best complete dataset, leaving every dataset untouched."""
+        return cls.rank(candidates, concepts=concepts)[0][0]
+
+    @classmethod
+    def score(
+        cls,
+        financials: NormalizedCompanyFinancials,
+        *,
+        expected_keys: Optional[set[tuple]] = None,
+        concepts: Optional[set[FinancialConcept]] = None,
+    ) -> FinancialDataScore:
+        keys = cls._observation_keys(financials, concepts)
+        expected_count = len(expected_keys) if expected_keys is not None else len(keys)
+        completeness = (
+            len(keys & (expected_keys or keys)) / expected_count
+            if expected_count
+            else 0.0
+        )
+        observations = cls._observations(financials, concepts)
+        latest_period_end = max(
+            (observation.period_end for observation in observations),
+            default=None,
+        )
+        latest_filed = max(
+            (
+                observation.filed
+                for observation in observations
+                if observation.filed is not None
+            ),
+            default=None,
+        )
+        return FinancialDataScore(
+            completeness=completeness,
+            latest_period_end=latest_period_end,
+            latest_filed=latest_filed,
+            retrieved_at=financials.retrieved_at,
+            observation_count=len(keys),
+        )
+
+    @staticmethod
+    def _observations(
+        financials: NormalizedCompanyFinancials,
+        concepts: Optional[set[FinancialConcept]],
+    ) -> list[FinancialObservation]:
+        return [
+            observation
+            for observation in financials.observations
+            if not concepts or observation.concept in concepts
+        ]
+
+    @classmethod
+    def _observation_keys(
+        cls,
+        financials: NormalizedCompanyFinancials,
+        concepts: Optional[set[FinancialConcept]],
+    ) -> set[tuple]:
+        return {
+            (
+                observation.concept,
+                observation.granularity,
+                observation.fiscal_year,
+                observation.fiscal_period,
+            )
+            for observation in cls._observations(financials, concepts)
+        }
+
+
 class FinancialDataService:
-    """Retrieve normalized financials and optionally crosscheck other providers."""
+    """Retrieve normalized financials and optionally crosscheck other providers.
+
+    An omitted provider uses all configured providers to select one dataset.  An
+    explicit provider retains the original primary-plus-crosscheck behavior.
+    """
 
     def __init__(
         self,
@@ -58,6 +211,7 @@ class FinancialDataService:
         self._identifier_resolver = identifier_resolver
         self._owned_clients = []
         self.last_crosschecks: list[CrosscheckReport] = []
+        self.last_selection_failures: list[tuple[ProviderName, str]] = []
 
     async def __aenter__(self):
         return self
@@ -105,7 +259,20 @@ class FinancialDataService:
             )
 
         market_configuration = self._configuration.for_market(market)
-        selected_provider = provider or market_configuration.default_provider
+        self.last_crosschecks = []
+        self.last_selection_failures = []
+
+        if provider is None:
+            return await self._retrieve_best_available(
+                identifiers=identifiers,
+                granularity=granularity,
+                concepts=concepts,
+                use_cache=use_cache,
+                make_cache=make_cache,
+                available_providers=market_configuration.available_providers,
+            )
+
+        selected_provider = provider
         if selected_provider not in market_configuration.available_providers:
             raise ValueError(
                 f"Provider '{selected_provider.value}' is not available for {market.value}"
@@ -124,7 +291,6 @@ class FinancialDataService:
             use_cache=use_cache,
             make_cache=make_cache,
         )
-        self.last_crosschecks = []
         primary_provider = self._provider(selected_provider)
         primary = await primary_provider.retrieve(query)
         primary.identifiers = self._identifiers_from_result(
@@ -139,6 +305,58 @@ class FinancialDataService:
                 market_configuration.available_providers,
             )
         return primary
+
+    async def _retrieve_best_available(
+        self,
+        *,
+        identifiers: SecurityIdentifiers,
+        granularity: Optional[Granularity],
+        concepts: Optional[set[FinancialConcept]],
+        use_cache: bool,
+        make_cache: bool,
+        available_providers: tuple[ProviderName, ...],
+    ) -> NormalizedCompanyFinancials:
+        """Retrieve every configured provider and return one unmodified result."""
+        candidates: list[NormalizedCompanyFinancials] = []
+        failures: list[tuple[ProviderName, str]] = []
+
+        for provider_name in available_providers:
+            try:
+                provider_identifiers = await self._resolve_identifiers(
+                    identifiers,
+                    provider_name,
+                    use_cache=use_cache,
+                    make_cache=make_cache,
+                )
+                query = FinancialsQuery(
+                    identifiers=provider_identifiers,
+                    granularity=granularity,
+                    concepts=concepts,
+                    use_cache=use_cache,
+                    make_cache=make_cache,
+                )
+                result = await self._provider(provider_name).retrieve(query)
+                result.identifiers = self._identifiers_from_result(
+                    provider_identifiers, provider_name, result
+                )
+                if not FinancialDataSelector._observation_keys(result, concepts):
+                    raise ValueError("provider returned no usable observations")
+                candidates.append(result)
+            except Exception as exc:
+                failures.append((provider_name, str(exc)))
+
+        self.last_selection_failures = failures
+        if not candidates:
+            details = "; ".join(
+                f"{provider_name.value}: {message}"
+                for provider_name, message in failures
+            )
+            raise ValueError(
+                "No configured financial data provider returned usable data"
+                + (f" ({details})" if details else "")
+            )
+
+        return FinancialDataSelector.select(candidates, concepts=concepts)
 
     async def _crosscheck_available_providers(
         self,

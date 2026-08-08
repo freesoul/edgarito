@@ -56,6 +56,8 @@ class FinancialConcept(str, Enum):
     DIVIDENDS_PAID = "dividends_paid"
     DEBT_ISSUANCE = "debt_issuance"
     DEBT_REPAYMENT = "debt_repayment"
+    STOCK_BASED_COMPENSATION = "stock_based_compensation"
+    ACQUISITION_CASH_PAID = "acquisition_cash_paid"
     DIVIDENDS_PER_SHARE = "dividends_per_share"
     SHARES_OUTSTANDING = "shares_outstanding"
     WEIGHTED_AVERAGE_BASIC_SHARES = "weighted_average_basic_shares"
@@ -106,6 +108,8 @@ CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.DIVIDENDS_PAID: FinancialStatement.CASH_FLOW,
     FinancialConcept.DEBT_ISSUANCE: FinancialStatement.CASH_FLOW,
     FinancialConcept.DEBT_REPAYMENT: FinancialStatement.CASH_FLOW,
+    FinancialConcept.STOCK_BASED_COMPENSATION: FinancialStatement.CASH_FLOW,
+    FinancialConcept.ACQUISITION_CASH_PAID: FinancialStatement.CASH_FLOW,
     FinancialConcept.DIVIDENDS_PER_SHARE: FinancialStatement.CASH_FLOW,
     FinancialConcept.SHARES_OUTSTANDING: FinancialStatement.BALANCE_SHEET,
     FinancialConcept.WEIGHTED_AVERAGE_BASIC_SHARES: (

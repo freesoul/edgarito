@@ -10,7 +10,11 @@ from edgarito.services.reconciliation.crosscheck import (
     FinancialDataCrosscheckWarning,
     FinancialsCrosschecker,
 )
-from edgarito.services.reconciliation.financials import FinancialDataService
+from edgarito.services.reconciliation.financials import (
+    FinancialDataScore,
+    FinancialDataSelector,
+    FinancialDataService,
+)
 
 __all__ = [
     "ClassificationCrosscheckReport",
@@ -20,6 +24,8 @@ __all__ = [
     "CrosscheckIssueKind",
     "CrosscheckReport",
     "FinancialDataCrosscheckWarning",
+    "FinancialDataScore",
+    "FinancialDataSelector",
     "FinancialDataService",
     "FinancialsCrosschecker",
 ]

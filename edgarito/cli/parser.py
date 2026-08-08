@@ -33,6 +33,9 @@ def build_parser() -> argparse.ArgumentParser:
     metrics = subparsers.add_parser(
         "metrics", help="Calculate metrics from normalized financials"
     )
+    red_flags = subparsers.add_parser(
+        "red-flags", help="Detect investment red flags in normalized financials"
+    )
     forecast = subparsers.add_parser(
         "forecast", help="Project annual driver-based FCFF"
     )
@@ -57,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
+    _add_retrieval_arguments(red_flags, include_period=False)
+    red_flags.add_argument(
+        "--period",
+        choices=("annual", "quarterly"),
+        default="annual",
+        help="Period granularity to analyze (default: annual)",
+    )
+    _add_red_flags_profile_argument(red_flags)
     _add_retrieval_arguments(forecast, include_period=False)
     _add_retrieval_arguments(valuation, include_period=False)
     _add_retrieval_arguments(valuation_models, include_period=False)
@@ -657,6 +668,19 @@ def _add_valuation_profile_argument(
             "Forecast/valuation JSON profile; valuation otherwise uses an existing "
             "configs/valuation/<ticker>.json or generates one from the default"
         ),
+    )
+
+
+def _add_red_flags_profile_argument(
+    command_parser: argparse.ArgumentParser,
+) -> None:
+    command_parser.add_argument(
+        "--profile",
+        "--config",
+        dest="profile",
+        type=Path,
+        metavar="PATH",
+        help="Red-flags JSON profile; defaults to configs/red_flags/default.json",
     )
 
 

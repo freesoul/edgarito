@@ -330,6 +330,46 @@ def test_uses_depreciation_when_no_amortization_fact_is_reported():
     assert depreciation.derivation_kind == ObservationDerivationKind.CONCEPT_FALLBACK
 
 
+def test_uses_productive_assets_as_capital_expenditures_fallback():
+    facts = CompanyFacts.model_validate(
+        {
+            "cik": 1045810,
+            "entityName": "NVIDIA Corporation",
+            "facts": {
+                "dei": {},
+                "us-gaap": {
+                    "PaymentsToAcquireProductiveAssets": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2025-01-27",
+                                    "end": "2026-01-25",
+                                    "val": 1_250_000_000,
+                                    "accn": "0001045810-26-000001",
+                                    "fy": 2026,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-20",
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        granularity=Granularity.ANNUAL,
+        concepts={FinancialConcept.CAPITAL_EXPENDITURES},
+    )
+
+    capex = financials.observations[0]
+    assert capex.value == Decimal("1250000000")
+    assert capex.source_concept == "PaymentsToAcquireProductiveAssets"
+
+
 def test_recovers_prior_fy_balance_first_disclosed_as_quarterly_comparative():
     facts = CompanyFacts.model_validate(
         {

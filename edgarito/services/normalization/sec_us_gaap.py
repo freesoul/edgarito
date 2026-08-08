@@ -245,7 +245,10 @@ CONCEPT_DEFINITIONS = (
     ),
     ConceptDefinition(
         FinancialConcept.CAPITAL_EXPENDITURES,
-        ("PaymentsToAcquirePropertyPlantAndEquipment",),
+        (
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+        ),
     ),
     ConceptDefinition(
         FinancialConcept.DIVIDENDS_PAID,
@@ -263,6 +266,20 @@ CONCEPT_DEFINITIONS = (
         (
             "RepaymentsOfLongTermDebt",
             "RepaymentsOfDebt",
+        ),
+    ),
+    ConceptDefinition(
+        FinancialConcept.STOCK_BASED_COMPENSATION,
+        (
+            "ShareBasedCompensation",
+            "ShareBasedCompensationArrangementByShareBasedPaymentAwardEquityInstrumentsOtherThanOptionsGrantsInPeriodTotal",
+        ),
+    ),
+    ConceptDefinition(
+        FinancialConcept.ACQUISITION_CASH_PAID,
+        (
+            "PaymentsToAcquireBusinessesNetOfCashAcquired",
+            "PaymentsToAcquireBusinesses",
         ),
     ),
     ConceptDefinition(
