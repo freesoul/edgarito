@@ -40,6 +40,7 @@ from edgarito.services.export import (
     CompanyAnalysisReportService,
     ExportSection,
     FcffForecastExport,
+    FcffForecastYtdAnchorExport,
     FinancialDataExportService,
     ForecastExport,
     ForecastExportService,
@@ -54,6 +55,7 @@ from edgarito.services.forecasting import (
     FcffForecastDriver,
     FcffForecastObservation,
     FcffForecastParameters,
+    FcffForecastYtdAnchor,
     ForecastAssumptionSource,
     SimplifiedFcfForecast,
     SimplifiedFcfForecastObservation,
@@ -240,6 +242,28 @@ def test_metrics_and_forecasts_copy_formulas_inputs_and_adaptive_plan():
         provider="normalized-sec",
         company_id="1",
         company_name="Example Co",
+        seed_type="YTD+forecast",
+        ytd_anchor=FcffForecastYtdAnchor(
+            fiscal_year=2025,
+            ytd_period_end=datetime.date(2025, 6, 30),
+            fiscal_year_end=datetime.date(2025, 12, 31),
+            actual_quarters=2,
+            actual_revenue=Decimal("50"),
+            actual_operating_income=Decimal("10"),
+            actual_pretax_income=Decimal("8"),
+            actual_income_tax_expense=Decimal("2"),
+            actual_tax_rate=Decimal("25"),
+            actual_depreciation_and_amortization=Decimal("2"),
+            actual_capital_expenditures=Decimal("4"),
+            actual_operating_working_capital=Decimal("5"),
+            latest_annual_revenue=Decimal("100"),
+            revenue_growth=Decimal("5"),
+            operating_margin=Decimal("20"),
+            tax_rate=Decimal("20"),
+            depreciation_to_revenue=Decimal("4"),
+            capex_to_revenue=Decimal("5"),
+            operating_working_capital_to_revenue=Decimal("10"),
+        ),
         base_fiscal_year=2024,
         base_period_end=PERIOD_END,
         base_revenue=Decimal("100"),
@@ -281,6 +305,8 @@ def test_metrics_and_forecasts_copy_formulas_inputs_and_adaptive_plan():
     )
     fcff_export = ForecastExportService().export(fcff)
     assert isinstance(fcff_export.forecast, FcffForecastExport)
+    assert isinstance(fcff_export.forecast.ytd_anchor, FcffForecastYtdAnchorExport)
+    assert fcff_export.forecast.ytd_anchor.actual_revenue == Decimal("50")
     assert fcff_export.forecast.assumption_sources[0][1] == (
         ForecastAssumptionSource.TRAILING_AVERAGE
     )

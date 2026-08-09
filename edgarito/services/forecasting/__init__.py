@@ -5,13 +5,14 @@ from edgarito.services.forecasting.fcff import (
 from edgarito.services.forecasting.free_cash_flow import SimplifiedFcfForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
-    ForwardGrowthEvidence,
     FcffForecast,
     FcffForecastDriver,
     FcffForecastObservation,
     FcffForecastParameters,
+    FcffForecastYtdAnchor,
     ForecastAssumptionSource,
     ForecastSeedType,
+    ForwardGrowthEvidence,
     FreeCashFlowForecast,
     FreeCashFlowForecastObservation,
     FreeCashFlowForecastParameters,
@@ -31,6 +32,7 @@ __all__ = [
     "FcffForecastDriver",
     "FcffForecastObservation",
     "FcffForecastParameters",
+    "FcffForecastYtdAnchor",
     "FcffForecastService",
     "ForecastAssumptionSource",
     "ForecastSeedType",

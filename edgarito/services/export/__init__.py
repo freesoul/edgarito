@@ -22,6 +22,7 @@ from .models import (
     FcffForecastExport,
     FcffForecastObservationExport,
     FcffForecastParametersExport,
+    FcffForecastYtdAnchorExport,
     FinancialDataExport,
     FinancialObservationExport,
     ForecastExport,
@@ -62,6 +63,11 @@ from .services import (
     ValuationExportService,
     ValuationReportExportService,
 )
+from .valuation_excel import (
+    ValuationExcelExportService,
+    ValuationExcelRenderer,
+    render_valuation_excel,
+)
 
 __all__ = [
     "AdaptiveMultistagePlanExport",
@@ -87,6 +93,7 @@ __all__ = [
     "FcffForecastExport",
     "FcffForecastObservationExport",
     "FcffForecastParametersExport",
+    "FcffForecastYtdAnchorExport",
     "FinancialDataExport",
     "FinancialDataExportService",
     "FinancialObservationExport",
@@ -117,6 +124,8 @@ __all__ = [
     "ValuationDispersionExport",
     "ValuationExport",
     "ValuationExportService",
+    "ValuationExcelExportService",
+    "ValuationExcelRenderer",
     "ValuationInputProvenanceExport",
     "ValuationModelResultExport",
     "ValuationProfileExport",
@@ -124,4 +133,5 @@ __all__ = [
     "ValuationSelectionExport",
     "ValuationWarningExport",
     "render_excel",
+    "render_valuation_excel",
 ]

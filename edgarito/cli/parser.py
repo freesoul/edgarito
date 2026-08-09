@@ -482,6 +482,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     valuation.add_argument(
+        "--excel-output",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Write a parameterized FCFF DCF Excel workbook; parent directories are "
+            "created and an existing file is overwritten"
+        ),
+    )
+    valuation.add_argument(
         "--financial-snapshot-max-age-hours",
         type=int,
         default=24,

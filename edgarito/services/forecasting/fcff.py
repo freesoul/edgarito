@@ -19,6 +19,7 @@ from edgarito.services.forecasting.models import (
     FcffForecastDriver,
     FcffForecastObservation,
     FcffForecastParameters,
+    FcffForecastYtdAnchor,
     ForecastAssumptionSource,
     ForecastSeedType,
 )
@@ -251,6 +252,41 @@ class FcffForecastService:
             )
             previous_working_capital = operating_working_capital
 
+        ytd_anchor = None
+        if (
+            context.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+            and context.actual_ytd is not None
+        ):
+            actual_ytd = context.actual_ytd
+            ytd_anchor = FcffForecastYtdAnchor(
+                fiscal_year=first_fiscal_year,
+                ytd_period_end=actual_ytd.period_end,
+                fiscal_year_end=context.fiscal_year_end or actual_ytd.period_end,
+                actual_quarters=context.actual_quarters,
+                actual_revenue=actual_ytd.revenue,
+                actual_operating_income=actual_ytd.operating_income,
+                actual_pretax_income=actual_ytd.pretax_income,
+                actual_income_tax_expense=actual_ytd.income_tax_expense,
+                actual_tax_rate=self._effective_tax_rate(actual_ytd),
+                actual_depreciation_and_amortization=(
+                    actual_ytd.depreciation_and_amortization
+                ),
+                actual_capital_expenditures=actual_ytd.capital_expenditures,
+                actual_operating_working_capital=actual_ytd.operating_working_capital,
+                latest_annual_revenue=context.latest_annual.revenue,
+                revenue_anchor=parameters.revenue_anchors.get(first_fiscal_year),
+                revenue_growth=paths[FcffForecastDriver.REVENUE_GROWTH][0],
+                operating_margin=paths[FcffForecastDriver.OPERATING_MARGIN][0],
+                tax_rate=paths[FcffForecastDriver.TAX_RATE][0],
+                depreciation_to_revenue=paths[
+                    FcffForecastDriver.DEPRECIATION_TO_REVENUE
+                ][0],
+                capex_to_revenue=paths[FcffForecastDriver.CAPEX_TO_REVENUE][0],
+                operating_working_capital_to_revenue=paths[
+                    FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE
+                ][0],
+            )
+
         return FcffForecast(
             provider=financials.provider,
             company_id=financials.company_id,
@@ -284,6 +320,7 @@ class FcffForecastService:
             warnings=self._incomplete_quarter_warnings(
                 financials, context.seed_period_end
             ),
+            ytd_anchor=ytd_anchor,
         )
 
     @classmethod

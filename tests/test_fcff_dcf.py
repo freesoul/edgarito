@@ -2,10 +2,13 @@ import datetime
 import json
 from decimal import Decimal
 from pathlib import Path
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 import pytest
 
 from edgarito.cli.__main__ import main
+from edgarito.cli.parser import build_parser
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
@@ -13,10 +16,13 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.services.export import ValuationExcelRenderer
 from edgarito.services.forecasting import (
     FcffForecast,
     FcffForecastObservation,
     FcffForecastParameters,
+    FcffForecastYtdAnchor,
+    ForecastSeedType,
 )
 from edgarito.services.valuation import (
     CashFlowTiming,
@@ -31,6 +37,7 @@ from edgarito.services.valuation import (
 )
 
 ROOT = Path(__file__).parents[1]
+XML_NS = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
 def test_fcff_dcf_discounts_forecast_terminal_value_and_equity_bridge():
@@ -190,6 +197,369 @@ def test_exit_multiple_supports_explicit_terminal_metrics():
     assert result.terminal_value.terminal_metric == Decimal("170")
     assert result.terminal_value.terminal_value == Decimal("1360")
     assert any("market-relative scenario" in item for item in result.warnings)
+
+
+@pytest.mark.parametrize(
+    ("terminal_method", "expected_terminal_formula"),
+    (
+        (TerminalValueMethod.PERPETUITY_GROWTH, "perpetuity_growth"),
+        (TerminalValueMethod.EXIT_MULTIPLE, "exit_multiple"),
+    ),
+)
+def test_valuation_excel_export_contains_linked_formulas_yellow_inputs_and_cached_values(
+    tmp_path, terminal_method, expected_terminal_formula
+):
+    parameters = (
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2")
+        if terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
+        else FcffDcfParameters(
+            wacc="10",
+            terminal_method=terminal_method,
+            exit_multiple="8",
+            exit_metric=TerminalMetric.EBITDA,
+        )
+    )
+    forecast = _consistent_forecast()
+    result = FcffDcfService().value(forecast, parameters, _capital_bridge())
+    output = tmp_path / "nested" / f"valuation-{terminal_method.value}.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output)
+
+    with ZipFile(output) as archive:
+        workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+        names = [
+            sheet.attrib["name"]
+            for sheet in workbook.findall("main:sheets/main:sheet", XML_NS)
+        ]
+        assert names == [
+            "Valuation Summary",
+            "FCFF Inputs",
+            "FCFF Forecast",
+            "DCF Calculation",
+        ]
+        calc_pr = workbook.find("main:calcPr", XML_NS)
+        assert calc_pr is not None
+        assert (
+            calc_pr.attrib.get("calcMode") == "auto"
+            or calc_pr.attrib.get("fullCalcOnLoad") == "1"
+            or calc_pr.attrib.get("forceFullCalc") == "1"
+        )
+
+        styles = ElementTree.fromstring(archive.read("xl/styles.xml"))
+        fills = styles.find("main:fills", XML_NS)
+        cell_xfs = styles.find("main:cellXfs", XML_NS)
+        assert fills is not None and cell_xfs is not None
+
+        inputs = ElementTree.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+        input_cell = inputs.find(".//main:c[@r='C6']", XML_NS)
+        assert input_cell is not None
+        input_style = cell_xfs[int(input_cell.attrib["s"])]
+        fill = fills[int(input_style.attrib["fillId"])]
+        foreground = fill.find("main:patternFill/main:fgColor", XML_NS)
+        assert foreground is not None
+        assert foreground.attrib.get("rgb", "").endswith("FFFF00")
+        validations = inputs.findall(".//main:dataValidation", XML_NS)
+        validation_refs = {item.attrib["sqref"] for item in validations}
+        assert {
+            "B13",
+            "B14",
+            "B17",
+            "B12",
+            "B15",
+            "B16",
+            "B18",
+            "B19",
+            "B20",
+            "C6:C7",
+            "D6:D7",
+            "E6:E7",
+            "F6:F7",
+            "G6:G7",
+            "H6:H7",
+        }.issubset(validation_refs)
+
+        forecast_sheet = ElementTree.fromstring(
+            archive.read("xl/worksheets/sheet3.xml")
+        )
+        forecast_formula = forecast_sheet.find(".//main:c[@r='C6']/main:f", XML_NS)
+        assert forecast_formula is not None
+        assert "FCFF Inputs" in forecast_formula.text
+
+        dcf_sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet4.xml"))
+        formula_nodes = dcf_sheet.findall(".//main:f", XML_NS)
+        formulas = [node.text or "" for node in formula_nodes]
+        assert any("FCFF Forecast" in formula for formula in formulas)
+        terminal_formula = dcf_sheet.find(".//main:c[@r='D10']/main:f", XML_NS)
+        assert terminal_formula is not None
+        assert "IF" in terminal_formula.text
+        assert expected_terminal_formula in terminal_formula.text
+        assert "NA()" in terminal_formula.text
+        assert "ISNUMBER" in terminal_formula.text
+        terminal_metric_formula = dcf_sheet.find(".//main:c[@r='D9']/main:f", XML_NS)
+        assert terminal_metric_formula is not None
+        assert '"exit_multiple"' in terminal_metric_formula.text
+
+        terminal_cell = dcf_sheet.find(".//main:c[@r='D10']/main:v", XML_NS)
+        terminal_metric_cell = dcf_sheet.find(".//main:c[@r='D9']/main:v", XML_NS)
+        summary_value = ElementTree.fromstring(
+            archive.read("xl/worksheets/sheet1.xml")
+        ).find(".//main:c[@r='B15']/main:v", XML_NS)
+        assert terminal_cell is not None
+        if terminal_method == TerminalValueMethod.PERPETUITY_GROWTH:
+            assert terminal_metric_cell is None or terminal_metric_cell.text in (
+                None,
+                "",
+            )
+        assert summary_value is not None
+        assert Decimal(terminal_cell.text) == result.terminal_value.terminal_value
+        assert float(summary_value.text) == pytest.approx(
+            float(result.enterprise_value)
+        )
+
+
+def test_valuation_excel_export_allows_missing_base_fcff_and_writes_blank_cells(
+    tmp_path,
+):
+    forecast = _consistent_forecast().model_copy(update={"base_fcff": None})
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    output = tmp_path / "missing-base-fcff.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output)
+
+    with ZipFile(output) as archive:
+        for worksheet_name, cell_ref in (
+            ("xl/worksheets/sheet1.xml", "B14"),
+            ("xl/worksheets/sheet3.xml", "B18"),
+        ):
+            worksheet = ElementTree.fromstring(archive.read(worksheet_name))
+            cell = worksheet.find(f".//main:c[@r='{cell_ref}']", XML_NS)
+            assert cell is not None
+            assert cell.find("main:f", XML_NS) is None
+            assert cell.find("main:v", XML_NS) is None
+
+
+def test_valuation_excel_export_rejects_ytd_plus_forecast_before_writing(tmp_path):
+    forecast = _consistent_forecast()
+    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    output = tmp_path / "unsupported-ytd.xlsx"
+
+    with pytest.raises(ValueError, match="ForecastSeedType.YTD_PLUS_FORECAST"):
+        ValuationExcelRenderer().render(forecast, result, output)
+
+    assert not output.exists()
+
+
+def test_valuation_excel_export_reproduces_ytd_anchor_formulas_and_inputs(tmp_path):
+    forecast = _consistent_forecast()
+    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
+    forecast.ytd_anchor = FcffForecastYtdAnchor(
+        fiscal_year=2026,
+        ytd_period_end=datetime.date(2026, 6, 30),
+        fiscal_year_end=datetime.date(2026, 12, 31),
+        actual_quarters=2,
+        actual_revenue=Decimal("500"),
+        actual_operating_income=Decimal("60"),
+        actual_pretax_income=Decimal("40"),
+        actual_income_tax_expense=Decimal("10"),
+        actual_tax_rate=Decimal("25"),
+        actual_depreciation_and_amortization=Decimal("8"),
+        actual_capital_expenditures=Decimal("12"),
+        actual_operating_working_capital=Decimal("40"),
+        latest_annual_revenue=Decimal("1000"),
+        revenue_growth=Decimal("10"),
+        operating_margin=Decimal("10"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("2"),
+        capex_to_revenue=Decimal("3"),
+        operating_working_capital_to_revenue=Decimal("10"),
+    )
+    forecast.observations = [
+        forecast.observations[0].model_copy(
+            update={
+                "revenue_growth": Decimal("10"),
+                "revenue": Decimal("1100"),
+                "operating_margin": Decimal(120) / Decimal(1100) * 100,
+                "operating_income": Decimal("120"),
+                "tax_rate": Decimal("22.5"),
+                "nopat": Decimal("93"),
+                "depreciation_to_revenue": Decimal(20) / Decimal(1100) * 100,
+                "depreciation_and_amortization": Decimal("20"),
+                "capex_to_revenue": Decimal(30) / Decimal(1100) * 100,
+                "capital_expenditures": Decimal("30"),
+                "operating_working_capital": Decimal("110"),
+                "change_in_operating_working_capital": Decimal("10"),
+                "fcff": Decimal("73"),
+            }
+        ),
+        forecast.observations[1].model_copy(
+            update={
+                "revenue": Decimal("1155"),
+                "operating_income": Decimal("173.25"),
+                "nopat": Decimal("138.6"),
+                "depreciation_and_amortization": Decimal("23.1"),
+                "capital_expenditures": Decimal("34.65"),
+                "operating_working_capital": Decimal("115.5"),
+                "change_in_operating_working_capital": Decimal("5.5"),
+                "fcff": Decimal("121.55"),
+            }
+        ),
+    ]
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    output = tmp_path / "ytd-valuation.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output)
+
+    with ZipFile(output) as archive:
+        shared_strings = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+        assert "YTD+forecast anchor (editable)" in "".join(shared_strings.itertext())
+        forecast_sheet = ElementTree.fromstring(
+            archive.read("xl/worksheets/sheet3.xml")
+        )
+        revenue_formula = forecast_sheet.find(".//main:c[@r='C6']/main:f", XML_NS)
+        operating_income_formula = forecast_sheet.find(
+            ".//main:c[@r='C8']/main:f", XML_NS
+        )
+        nopat_formula = forecast_sheet.find(".//main:c[@r='C10']/main:f", XML_NS)
+        depreciation_formula = forecast_sheet.find(".//main:c[@r='C12']/main:f", XML_NS)
+        capex_formula = forecast_sheet.find(".//main:c[@r='C14']/main:f", XML_NS)
+        assert revenue_formula is not None and "MAX" in revenue_formula.text
+        assert revenue_formula.text.count("FCFF Inputs") >= 3
+        assert operating_income_formula is not None
+        assert "actual YTD" not in operating_income_formula.text
+        assert "FCFF Inputs" in operating_income_formula.text
+        assert nopat_formula is not None and "IF(ISNUMBER" in nopat_formula.text
+        assert (
+            depreciation_formula is not None
+            and "FCFF Inputs" in depreciation_formula.text
+        )
+        assert capex_formula is not None and "FCFF Inputs" in capex_formula.text
+
+
+@pytest.mark.parametrize(
+    ("parameter_updates", "message"),
+    (
+        ({"perpetual_growth_rate": None}, "terminal growth"),
+        ({"perpetual_growth_rate": Decimal("10")}, "WACC must exceed"),
+        ({"wacc": Decimal("1")}, "WACC must exceed"),
+    ),
+)
+def test_valuation_excel_export_rejects_invalid_terminal_inputs(
+    tmp_path, parameter_updates, message
+):
+    forecast = _consistent_forecast()
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    invalid_parameters = result.parameters.model_construct(
+        **{**result.parameters.model_dump(), **parameter_updates}
+    )
+    invalid_result = result.model_copy(update={"parameters": invalid_parameters})
+    output = tmp_path / "invalid-inputs.xlsx"
+
+    with pytest.raises(ValueError, match=message):
+        ValuationExcelRenderer().render(forecast, invalid_result, output)
+
+    assert not output.exists()
+
+
+def test_cli_rejects_both_exit_multiple_excel_export_before_writing(tmp_path, capsys):
+    output = tmp_path / "both-exit-multiple.xlsx"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "valuation",
+                "--ticker",
+                "EX",
+                "--model",
+                "both",
+                "--terminal-method",
+                "exit_multiple",
+                "--excel-output",
+                str(output),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "requires a perpetuity-growth terminal method" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_valuation_parser_accepts_excel_output_path(tmp_path):
+    args = build_parser().parse_args(
+        ["valuation", "--ticker", "EX", "--excel-output", str(tmp_path / "model.xlsx")]
+    )
+
+    assert args.excel_output == tmp_path / "model.xlsx"
+
+
+def test_valuation_excel_export_rejects_formula_cache_divergence(tmp_path):
+    forecast = _consistent_forecast()
+    forecast.observations[0].revenue += Decimal("1")
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+
+    with pytest.raises(ValueError, match="revenue differs from the workbook formula"):
+        ValuationExcelRenderer().render(forecast, result, tmp_path / "invalid.xlsx")
+
+
+def test_valuation_excel_export_rejects_forecast_result_truncation(tmp_path):
+    forecast = _forecast()
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    forecast.observations.pop()
+
+    with pytest.raises(ValueError, match="observations but DCF result has"):
+        ValuationExcelRenderer().render(forecast, result, tmp_path / "misaligned.xlsx")
+
+
+def test_valuation_excel_export_preserves_discount_timing_basis(tmp_path):
+    parameters = FcffDcfParameters(wacc="10", perpetual_growth_rate="2")
+    forecast = _consistent_forecast()
+    service = FcffDcfService()
+    forecast_year_result = service.value(forecast, parameters, _capital_bridge())
+    calendar_result = service.value(
+        forecast,
+        parameters,
+        _capital_bridge(),
+        valuation_date=datetime.date(2026, 7, 1),
+    )
+    forecast_year_output = tmp_path / "forecast-year.xlsx"
+    calendar_output = tmp_path / "calendar.xlsx"
+    renderer = ValuationExcelRenderer()
+    renderer.render(forecast, forecast_year_result, forecast_year_output)
+    renderer.render(forecast, calendar_result, calendar_output)
+
+    def discount_period_formula(path):
+        with ZipFile(path) as archive:
+            sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet4.xml"))
+        return sheet.find(".//main:c[@r='B6']/main:f", XML_NS).text
+
+    forecast_year_formula = discount_period_formula(forecast_year_output)
+    calendar_formula = discount_period_formula(calendar_output)
+    assert forecast_year_formula.startswith("1-IF(")
+    assert "/365" in calendar_formula
 
 
 def test_fair_value_buybacks_account_for_cash_and_shares_without_fake_accretion():
@@ -483,6 +853,8 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
         str(tmp_path),
         "--user-agent",
         "Edgarito Tests (tests@example.com)",
+        "--excel-output",
+        str(tmp_path / "AAPL.xlsx"),
     ]
     exit_code = main(arguments)
 
@@ -495,6 +867,8 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
     assert "INTRINSIC VALUATION" in output
     assert "EV → EQUITY BRIDGE" in output
     assert "Intrinsic value/share" in output
+    assert "Exported valuation Excel workbook" in output
+    assert (tmp_path / "AAPL.xlsx").exists()
     assert "Net debt source:" not in output
 
     assert main([*arguments, "--audit"]) == 0
@@ -537,6 +911,49 @@ def _forecast() -> FcffForecast:
         assumption_sources={},
         observations=observations,
     )
+
+
+def _consistent_forecast() -> FcffForecast:
+    forecast = _forecast()
+    forecast.observations = [
+        observation.model_copy(
+            update={
+                "revenue": revenue,
+                "operating_income": operating_income,
+                "nopat": nopat,
+                "depreciation_and_amortization": depreciation,
+                "capital_expenditures": capex,
+                "operating_working_capital": working_capital,
+                "change_in_operating_working_capital": change_working_capital,
+                "fcff": fcff,
+            }
+        )
+        for observation, revenue, operating_income, nopat, depreciation, capex, working_capital, change_working_capital, fcff in (
+            (
+                forecast.observations[0],
+                Decimal("945"),
+                Decimal("141.75"),
+                Decimal("113.4"),
+                Decimal("18.9"),
+                Decimal("28.35"),
+                Decimal("94.5"),
+                Decimal("-5.5"),
+                Decimal("109.45"),
+            ),
+            (
+                forecast.observations[1],
+                Decimal("992.25"),
+                Decimal("148.8375"),
+                Decimal("119.07"),
+                Decimal("19.845"),
+                Decimal("29.7675"),
+                Decimal("99.225"),
+                Decimal("4.725"),
+                Decimal("104.4225"),
+            ),
+        )
+    ]
+    return forecast
 
 
 def _forecast_observation(

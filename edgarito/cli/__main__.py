@@ -60,7 +60,11 @@ from edgarito.schemas.valuation.relative import (
 )
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.export import CompanyAnalysisReportService, ExcelRenderer
+from edgarito.services.export import (
+    CompanyAnalysisReportService,
+    ExcelRenderer,
+    ValuationExcelRenderer,
+)
 from edgarito.services.financial_observation_availability import (
     ObservationAvailabilityMode,
 )
@@ -1109,6 +1113,14 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             archetype,
             "both" if profile.relative_valuation.enabled else "fcff-dcf",
         )
+    if getattr(args, "excel_output", None) is not None and selected_model not in {
+        "fcff-dcf",
+        "both",
+    }:
+        raise ValueError(
+            "Excel valuation export currently supports FCFF DCF only; the selected "
+            f"model ({selected_model}) does not produce an FCFF DCF result"
+        )
     if selected_model not in {"fcff-dcf", "comparables", "both"}:
         return await _run_profile_intrinsic_valuation(args, profile, selected_model)
     forecast_parameters = _fcff_parameters(args, profile.forecast.fcff)
@@ -1118,6 +1130,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         if args.terminal_method is not None
         else terminal_configuration.method
     )
+    if (
+        getattr(args, "excel_output", None) is not None
+        and selected_model == "both"
+        and terminal_method != TerminalValueMethod.PERPETUITY_GROWTH
+    ):
+        raise ValueError(
+            "Excel export with --model both requires a perpetuity-growth terminal "
+            "method because relative valuation requires a perpetuity-growth DCF "
+            "anchor"
+        )
     cash_flow_timing = (
         CashFlowTiming(args.cash_flow_timing)
         if args.cash_flow_timing is not None
@@ -1151,7 +1173,10 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     if OPENAI_API_KEY:
         original_forecast_parameters = forecast_parameters
         try:
-            candidate_parameters, candidate_overlay = await _management_guidance_overlay(
+            (
+                candidate_parameters,
+                candidate_overlay,
+            ) = await _management_guidance_overlay(
                 args,
                 financials,
                 original_forecast_parameters,
@@ -1625,6 +1650,14 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     analyst_target_price=args.analyst_target_price,
                     intrinsic_value_per_share=result.value_per_share,
                 )
+    if getattr(args, "excel_output", None) is not None:
+        output = ValuationExcelRenderer().render(
+            forecast,
+            result,
+            args.excel_output,
+            discount_timing_basis="calendar",
+        )
+        print(f"Exported valuation Excel workbook to {output}")
     current_price = (
         relative_result.current_price if relative_result is not None else None
     )
@@ -2026,9 +2059,7 @@ async def _management_guidance_overlay(
         return overlaid, overlay.model_copy(
             update={
                 "rejected_reasons": tuple(
-                    dict.fromkeys(
-                        [*overlay.rejected_reasons, *validation_rejections]
-                    )
+                    dict.fromkeys([*overlay.rejected_reasons, *validation_rejections])
                 ),
                 "warnings": tuple(
                     dict.fromkeys([*overlay.warnings, *discovery.warnings])
@@ -2056,9 +2087,7 @@ def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
         in {"revenue", "revenue_growth"}
         for item in records
     )
-    text = " ".join(
-        getattr(item, "supporting_text", "").casefold() for item in records
-    )
+    text = " ".join(getattr(item, "supporting_text", "").casefold() for item in records)
     capacity = any(
         term in text for term in ("capacity", "cleanroom", "fab", "shipment")
     )

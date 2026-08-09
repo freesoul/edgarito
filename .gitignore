@@ -11,3 +11,4 @@ examples/
 configs/valuation/*
 !cofnigs/valuation/default.json
 .kilo
+reports/

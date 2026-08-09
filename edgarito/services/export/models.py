@@ -277,6 +277,31 @@ class FcffForecastObservationExport(BaseModel):
     formula: str
 
 
+class FcffForecastYtdAnchorExport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fiscal_year: int
+    ytd_period_end: datetime.date
+    fiscal_year_end: datetime.date
+    actual_quarters: int
+    actual_revenue: Decimal
+    actual_operating_income: Decimal
+    actual_pretax_income: Decimal
+    actual_income_tax_expense: Decimal
+    actual_tax_rate: Decimal | None = None
+    actual_depreciation_and_amortization: Decimal
+    actual_capital_expenditures: Decimal
+    actual_operating_working_capital: Decimal
+    latest_annual_revenue: Decimal
+    revenue_anchor: Decimal | None = None
+    revenue_growth: Decimal
+    operating_margin: Decimal
+    tax_rate: Decimal
+    depreciation_to_revenue: Decimal
+    capex_to_revenue: Decimal
+    operating_working_capital_to_revenue: Decimal
+
+
 class FcffForecastExport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -311,6 +336,7 @@ class FcffForecastExport(BaseModel):
     ] = ()
     observations: tuple[FcffForecastObservationExport, ...] = ()
     warnings: tuple[str, ...] = ()
+    ytd_anchor: FcffForecastYtdAnchorExport | None = None
 
 
 class AdaptiveMultistagePlanExport(BaseModel):

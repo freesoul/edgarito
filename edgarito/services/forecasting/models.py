@@ -149,9 +149,9 @@ class FcffForecastParameters(BaseModel):
     capex_to_revenue: Optional[tuple[Decimal, ...]] = None
     operating_working_capital_to_revenue: Optional[tuple[Decimal, ...]] = None
     revenue_anchors: dict[int, Decimal] = Field(default_factory=dict)
-    assumption_source_overrides: dict[
-        FcffForecastDriver, ForecastAssumptionSource
-    ] = Field(default_factory=dict)
+    assumption_source_overrides: dict[FcffForecastDriver, ForecastAssumptionSource] = (
+        Field(default_factory=dict)
+    )
     historical_window: int = Field(default=3, ge=1, le=10)
 
     @field_validator(
@@ -247,9 +247,7 @@ class FcffForecastParameters(BaseModel):
 
     @field_validator("revenue_anchors")
     @classmethod
-    def validate_revenue_anchors(
-        cls, value: dict[int, Decimal]
-    ) -> dict[int, Decimal]:
+    def validate_revenue_anchors(cls, value: dict[int, Decimal]) -> dict[int, Decimal]:
         if any(year < 1900 or year > 2200 for year in value):
             raise ValueError("Revenue anchor fiscal years are invalid")
         if any(not amount.is_finite() or amount <= 0 for amount in value.values()):
@@ -280,6 +278,42 @@ class FcffForecastObservation(BaseModel):
         "NOPAT + depreciation and amortization - capital expenditures - "
         "change in operating working capital"
     )
+
+
+class FcffForecastYtdAnchor(BaseModel):
+    """Actual-to-date inputs used to build a YTD-plus-forecast first year.
+
+    The ordinary forecast seed is intentionally kept on the existing FCFF
+    fields.  This optional object preserves the additional flow and balance
+    sheet values needed when the first projected fiscal year combines actual
+    quarters with a forecast of the remaining period.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fiscal_year: int
+    ytd_period_end: datetime.date
+    fiscal_year_end: datetime.date
+    actual_quarters: int = Field(ge=1, le=3)
+    actual_revenue: Decimal
+    actual_operating_income: Decimal
+    actual_pretax_income: Decimal
+    actual_income_tax_expense: Decimal
+    actual_tax_rate: Optional[Decimal] = None
+    actual_depreciation_and_amortization: Decimal
+    actual_capital_expenditures: Decimal
+    actual_operating_working_capital: Decimal
+    latest_annual_revenue: Decimal
+    revenue_anchor: Optional[Decimal] = None
+
+    # These are the resolved first-year assumptions before the service turns
+    # the first-year outputs into effective driver percentages.
+    revenue_growth: Decimal
+    operating_margin: Decimal
+    tax_rate: Decimal
+    depreciation_to_revenue: Decimal
+    capex_to_revenue: Decimal
+    operating_working_capital_to_revenue: Decimal
 
 
 class FcffForecast(BaseModel):
@@ -314,6 +348,7 @@ class FcffForecast(BaseModel):
     assumption_sources: dict[FcffForecastDriver, ForecastAssumptionSource]
     observations: list[FcffForecastObservation] = Field(default_factory=list)
     warnings: tuple[str, ...] = ()
+    ytd_anchor: Optional[FcffForecastYtdAnchor] = None
 
 
 class AdaptiveMultistagePlan(BaseModel):

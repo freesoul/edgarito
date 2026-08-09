@@ -32,6 +32,7 @@ from .models import (
     FcffForecastExport,
     FcffForecastObservationExport,
     FcffForecastParametersExport,
+    FcffForecastYtdAnchorExport,
     FinancialDataExport,
     ForecastExport,
     ForecastKind,
@@ -295,6 +296,13 @@ def _fcff_forecast(source: FcffForecast) -> FcffForecastExport:
             for observation in source.observations
         ),
         warnings=tuple(source.warnings),
+        ytd_anchor=(
+            FcffForecastYtdAnchorExport.model_validate(
+                deepcopy(source.ytd_anchor.model_dump(mode="python"))
+            )
+            if source.ytd_anchor is not None
+            else None
+        ),
     )
 
 

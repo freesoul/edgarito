@@ -337,6 +337,14 @@ def test_current_ytd_and_ttm_context_seed_the_current_fiscal_year_without_overla
     assert forecast.observations[0].fiscal_year == 2026
     assert forecast.observations[0].period_end == datetime.date(2026, 12, 31)
     assert "latest-four-quarter" in forecast.seed_methodology
+    assert forecast.ytd_anchor is not None
+    assert forecast.ytd_anchor.fiscal_year == 2026
+    assert forecast.ytd_anchor.ytd_period_end == datetime.date(2026, 6, 30)
+    assert forecast.ytd_anchor.fiscal_year_end == datetime.date(2026, 12, 31)
+    assert forecast.ytd_anchor.actual_revenue == Decimal("50")
+    assert forecast.ytd_anchor.latest_annual_revenue == Decimal("100")
+    assert forecast.ytd_anchor.actual_tax_rate == Decimal("25")
+    assert forecast.ytd_anchor.revenue_growth == Decimal("10")
 
     annual_only = financials.model_copy(
         update={
@@ -351,6 +359,7 @@ def test_current_ytd_and_ttm_context_seed_the_current_fiscal_year_without_overla
         annual_only, _explicit_forecast_parameters()
     )
     assert fallback.seed_type == ForecastSeedType.FISCAL_YEAR
+    assert fallback.ytd_anchor is None
     assert fallback.observations[0].fiscal_year == 2026
 
 
@@ -365,11 +374,10 @@ def test_ytd_revenue_anchor_forecasts_only_the_guided_remaining_amount():
     assert forecast.observations[0].revenue == Decimal("125")
     assert forecast.observations[0].operating_income == Decimal("25")
 
-    invalid = parameters.model_copy(
-        update={"revenue_anchors": {2026: Decimal("40")}}
-    )
+    invalid = parameters.model_copy(update={"revenue_anchors": {2026: Decimal("40")}})
     with pytest.raises(ValueError, match="below reported YTD revenue"):
         FcffForecastService().forecast(_forecast_financials(), invalid)
+
 
 def test_non_calendar_fiscal_year_keeps_fiscal_alignment():
     forecast = FcffForecastService().forecast(
@@ -389,6 +397,7 @@ def test_post_fiscal_year_reporting_gap_starts_with_next_unelapsed_fiscal_year()
     )
 
     assert forecast.seed_type == ForecastSeedType.TTM
+    assert forecast.ytd_anchor is None
     assert forecast.seed_period_end == datetime.date(2025, 12, 31)
     assert forecast.observations[0].fiscal_year == 2027
     assert forecast.observations[0].period_end == datetime.date(2027, 6, 30)
