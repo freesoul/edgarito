@@ -57,9 +57,23 @@ def build_parser() -> argparse.ArgumentParser:
         "specialized-inputs",
         help="Extract REIT, resource, biotech, or SOTP valuation inputs",
     )
+    export = subparsers.add_parser(
+        "export", help="Export normalized financials and metrics to Excel"
+    )
 
     for command_parser in (financials, metrics):
         _add_retrieval_arguments(command_parser)
+    _add_retrieval_arguments(export, include_limit=False)
+    export.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        metavar="PATH",
+        help=(
+            "Excel output path; parent directories are created and an existing "
+            "file is overwritten"
+        ),
+    )
     _add_retrieval_arguments(red_flags, include_period=False)
     red_flags.add_argument(
         "--period",
@@ -601,7 +615,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_retrieval_arguments(
-    command_parser: argparse.ArgumentParser, *, include_period: bool = True
+    command_parser: argparse.ArgumentParser,
+    *,
+    include_period: bool = True,
+    include_limit: bool = True,
 ) -> None:
     _add_identifier_arguments(command_parser)
 
@@ -624,9 +641,13 @@ def _add_retrieval_arguments(
             default="annual",
             help="Period granularity to display (default: annual)",
         )
-        command_parser.add_argument(
-            "--limit", type=int, default=5, help="Number of latest periods to display"
-        )
+        if include_limit:
+            command_parser.add_argument(
+                "--limit",
+                type=int,
+                default=5,
+                help="Number of latest periods to display",
+            )
     command_parser.add_argument(
         "--refresh", action="store_true", help="Ignore cached provider snapshots"
     )

@@ -60,6 +60,7 @@ from edgarito.schemas.valuation.relative import (
 )
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.export import CompanyAnalysisReportService, ExcelRenderer
 from edgarito.services.financial_observation_availability import (
     ObservationAvailabilityMode,
 )
@@ -183,6 +184,22 @@ async def _run_metrics(args: argparse.Namespace) -> int:
     )
 
     print(MetricsConsolePresenter().render(metrics, limit=args.limit))
+    return 0
+
+
+async def _run_export(args: argparse.Namespace) -> int:
+    granularity = _granularity(args.period)
+    financials = await _retrieve_financials(args, granularity, None)
+    metrics = FinancialMetricsService().calculate(
+        financials,
+        granularity=granularity,
+    )
+    report = CompanyAnalysisReportService().compose(
+        financials=financials,
+        metrics=metrics,
+    )
+    output = ExcelRenderer().render(report, args.output)
+    print(f"Exported Excel workbook to {output}")
     return 0
 
 
@@ -2407,6 +2424,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return asyncio.run(_run_financials(args))
         if args.command == "metrics":
             return asyncio.run(_run_metrics(args))
+        if args.command == "export":
+            return asyncio.run(_run_export(args))
         if args.command == "red-flags":
             return asyncio.run(_run_red_flags(args))
         if args.command == "forecast":
