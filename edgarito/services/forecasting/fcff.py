@@ -16,6 +16,7 @@ from edgarito.services.financial_observation_availability import (
 )
 from edgarito.services.forecasting.models import (
     FcffForecast,
+    FcffForecastDcfStub,
     FcffForecastDriver,
     FcffForecastObservation,
     FcffForecastParameters,
@@ -419,6 +420,7 @@ class FcffForecastService:
             ytd_anchor_capex_ratio = paths[FcffForecastDriver.CAPEX_TO_REVENUE][0]
 
         ytd_anchor = None
+        dcf_stub = None
         if (
             context.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
             and context.actual_ytd is not None
@@ -451,6 +453,46 @@ class FcffForecastService:
                 operating_working_capital_to_revenue=paths[
                     FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE
                 ][0],
+            )
+            first_observation = observations[0]
+            actual_tax_rate = self._effective_tax_rate(actual_ytd)
+            if actual_tax_rate is None:
+                actual_tax_rate = paths[FcffForecastDriver.TAX_RATE][0]
+            actual_ytd_nopat = actual_ytd.operating_income * (
+                Decimal(1) - actual_tax_rate / PERCENT
+            )
+            dcf_stub = FcffForecastDcfStub(
+                forecast_year=first_observation.forecast_year,
+                fiscal_year=first_observation.fiscal_year,
+                period_start=actual_ytd.period_end,
+                period_end=first_observation.period_end,
+                unit=first_observation.unit,
+                annual_nopat=first_observation.nopat,
+                actual_ytd_nopat=actual_ytd_nopat,
+                annual_depreciation_and_amortization=(
+                    first_observation.depreciation_and_amortization
+                ),
+                actual_ytd_depreciation_and_amortization=(
+                    actual_ytd.depreciation_and_amortization
+                ),
+                annual_capital_expenditures=first_observation.capital_expenditures,
+                actual_ytd_capital_expenditures=actual_ytd.capital_expenditures,
+                fiscal_year_end_operating_working_capital=(
+                    first_observation.operating_working_capital
+                ),
+                actual_ytd_operating_working_capital=(
+                    actual_ytd.operating_working_capital
+                ),
+                fcff=(
+                    first_observation.nopat
+                    - actual_ytd_nopat
+                    + first_observation.depreciation_and_amortization
+                    - actual_ytd.depreciation_and_amortization
+                    - first_observation.capital_expenditures
+                    + actual_ytd.capital_expenditures
+                    - first_observation.operating_working_capital
+                    + actual_ytd.operating_working_capital
+                ),
             )
 
         if capex_constraints_applied:
@@ -501,6 +543,7 @@ class FcffForecastService:
                 financials, context.seed_period_end
             ),
             ytd_anchor=ytd_anchor,
+            dcf_stub=dcf_stub,
             capex_constraints_applied=tuple(capex_constraints_applied),
         )
         return self.regenerate_cell_audits(forecast)

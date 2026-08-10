@@ -28,6 +28,7 @@ from edgarito.services.forecasting import (
     ForecastSeedType,
     ForecastValue,
 )
+from edgarito.services.forecasting.models import FcffForecastDcfStub
 from edgarito.services.valuation import (
     CashFlowTiming,
     CompanyTradingMultiples,
@@ -225,6 +226,37 @@ def test_current_valuation_date_uses_calendar_stub_periods():
     assert first.period == Decimal(183) / Decimal(365)
     assert result.terminal_present_value.period == Decimal(548) / Decimal(365)
     assert any("Capital bridge is dated 2025-12-31" in item for item in result.warnings)
+
+
+def test_ytd_dcf_discounts_remaining_stub_before_later_full_year_observations():
+    forecast = _ytd_forecast()
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _ytd_capital_bridge(),
+        valuation_date=datetime.date(2026, 8, 10),
+    )
+
+    first, second = result.explicit_forecast_present_value.cash_flows
+    assert first.label == "FY2026E FCFF remaining stub"
+    assert first.amount == Decimal("8.45")
+    assert first.period == Decimal(143) / Decimal(365)
+    assert second.amount == forecast.observations[1].fcff
+    assert second.period == Decimal(508) / Decimal(365)
+    assert result.terminal_value.final_cash_flow == forecast.observations[-1].fcff
+    assert result.terminal_present_value.period == Decimal(508) / Decimal(365)
+
+
+def test_ytd_dcf_rejects_a_missing_remaining_stub_instead_of_using_full_year_fcff():
+    forecast = _ytd_forecast().model_copy(update={"dcf_stub": None})
+
+    with pytest.raises(ValueError, match="requires complete remaining stub"):
+        FcffDcfService().value(
+            forecast,
+            FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+            _ytd_capital_bridge(),
+            valuation_date=datetime.date(2026, 8, 10),
+        )
 
 
 def test_recent_quarterly_bridge_is_not_reported_as_stale():
@@ -559,12 +591,12 @@ def test_valuation_excel_export_allows_missing_base_fcff_and_writes_blank_cells(
 
 def test_valuation_excel_export_rejects_ytd_plus_forecast_before_writing(tmp_path):
     forecast = _consistent_forecast()
-    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
     result = FcffDcfService().value(
         forecast,
         FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
         _capital_bridge(),
     )
+    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
     output = tmp_path / "unsupported-ytd.xlsx"
 
     with pytest.raises(ValueError, match="ForecastSeedType.YTD_PLUS_FORECAST"):
@@ -575,7 +607,6 @@ def test_valuation_excel_export_rejects_ytd_plus_forecast_before_writing(tmp_pat
 
 def test_valuation_excel_export_reproduces_ytd_anchor_formulas_and_inputs(tmp_path):
     forecast = _consistent_forecast()
-    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
     forecast.ytd_anchor = FcffForecastYtdAnchor(
         fiscal_year=2026,
         ytd_period_end=datetime.date(2026, 6, 30),
@@ -633,6 +664,7 @@ def test_valuation_excel_export_reproduces_ytd_anchor_formulas_and_inputs(tmp_pa
         FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
         _capital_bridge(),
     )
+    forecast.seed_type = ForecastSeedType.YTD_PLUS_FORECAST
     output = tmp_path / "ytd-valuation.xlsx"
 
     ValuationExcelRenderer().render(forecast, result, output)
@@ -1169,6 +1201,69 @@ def _consistent_forecast() -> FcffForecast:
         )
     ]
     return forecast
+
+
+def _ytd_forecast() -> FcffForecast:
+    forecast = _consistent_forecast()
+    anchor = FcffForecastYtdAnchor(
+        fiscal_year=2026,
+        ytd_period_end=datetime.date(2026, 6, 30),
+        fiscal_year_end=datetime.date(2026, 12, 31),
+        actual_quarters=2,
+        actual_revenue=Decimal("500"),
+        actual_operating_income=Decimal("60"),
+        actual_pretax_income=Decimal("40"),
+        actual_income_tax_expense=Decimal("10"),
+        actual_tax_rate=Decimal("25"),
+        actual_depreciation_and_amortization=Decimal("8"),
+        actual_capital_expenditures=Decimal("12"),
+        actual_operating_working_capital=Decimal("40"),
+        latest_annual_revenue=Decimal("1000"),
+        revenue_growth=Decimal("5"),
+        operating_margin=Decimal("15"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("2"),
+        capex_to_revenue=Decimal("3"),
+        operating_working_capital_to_revenue=Decimal("10"),
+    )
+    stub = FcffForecastDcfStub(
+        fiscal_year=2026,
+        period_start=datetime.date(2026, 6, 30),
+        period_end=datetime.date(2026, 12, 31),
+        unit="USD",
+        annual_nopat=Decimal("113.4"),
+        actual_ytd_nopat=Decimal("45"),
+        annual_depreciation_and_amortization=Decimal("18.9"),
+        actual_ytd_depreciation_and_amortization=Decimal("8"),
+        annual_capital_expenditures=Decimal("28.35"),
+        actual_ytd_capital_expenditures=Decimal("12"),
+        fiscal_year_end_operating_working_capital=Decimal("94.5"),
+        actual_ytd_operating_working_capital=Decimal("40"),
+        fcff=Decimal("8.45"),
+    )
+    return forecast.model_copy(
+        update={
+            "seed_type": ForecastSeedType.YTD_PLUS_FORECAST,
+            "seed_period_end": datetime.date(2026, 6, 30),
+            "base_period_end": datetime.date(2026, 6, 30),
+            "current_fiscal_year": 2026,
+            "actual_quarters": 2,
+            "ytd_anchor": anchor,
+            "dcf_stub": stub,
+        }
+    )
+
+
+def _ytd_capital_bridge() -> FcffDcfCapitalBridge:
+    return FcffDcfCapitalBridge(
+        fiscal_year=2026,
+        period_end=datetime.date(2026, 6, 30),
+        unit="USD",
+        net_debt=Decimal("100"),
+        diluted_shares=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
 
 
 def _forecast_observation(

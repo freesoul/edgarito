@@ -368,6 +368,109 @@ class FcffForecastYtdAnchor(BaseModel):
     operating_working_capital_to_revenue: Decimal
 
 
+class FcffForecastDcfStub(BaseModel):
+    """The post-YTD FCFF flow used by a DCF for a YTD-plus-forecast seed.
+
+    ``FcffForecastObservation`` deliberately remains a full-fiscal-year
+    observation for reporting.  This object is the separate cash flow that is
+    still available after the actual YTD balance-sheet date and is therefore
+    the only amount a DCF should use for that first explicit period.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    forecast_year: int = Field(default=1, ge=1)
+    fiscal_year: int
+    period_start: datetime.date
+    period_end: datetime.date
+    unit: str
+
+    annual_nopat: Decimal
+    actual_ytd_nopat: Decimal
+    annual_depreciation_and_amortization: Decimal
+    actual_ytd_depreciation_and_amortization: Decimal
+    annual_capital_expenditures: Decimal
+    actual_ytd_capital_expenditures: Decimal
+    fiscal_year_end_operating_working_capital: Decimal
+    actual_ytd_operating_working_capital: Decimal
+    fcff: Decimal
+    formula: str = (
+        "(annual NOPAT - actual YTD NOPAT) + "
+        "(annual D&A - actual YTD D&A) - "
+        "(annual CAPEX - actual YTD CAPEX) - "
+        "(FY-end OWC - actual YTD OWC)"
+    )
+
+    @field_validator(
+        "annual_nopat",
+        "actual_ytd_nopat",
+        "annual_depreciation_and_amortization",
+        "actual_ytd_depreciation_and_amortization",
+        "annual_capital_expenditures",
+        "actual_ytd_capital_expenditures",
+        "fiscal_year_end_operating_working_capital",
+        "actual_ytd_operating_working_capital",
+        "fcff",
+    )
+    @classmethod
+    def require_finite_value(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("FCFF DCF stub values must be finite")
+        return value
+
+    @field_validator("unit", "formula")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("FCFF DCF stub text fields cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_period_and_formula(self) -> "FcffForecastDcfStub":
+        if self.period_start >= self.period_end:
+            raise ValueError("FCFF DCF stub period must end after its start date")
+        expected_fcff = (
+            self.annual_nopat
+            - self.actual_ytd_nopat
+            + self.annual_depreciation_and_amortization
+            - self.actual_ytd_depreciation_and_amortization
+            - self.annual_capital_expenditures
+            + self.actual_ytd_capital_expenditures
+            - self.fiscal_year_end_operating_working_capital
+            + self.actual_ytd_operating_working_capital
+        )
+        if self.fcff != expected_fcff:
+            raise ValueError(
+                "FCFF DCF stub FCFF does not match the remaining-period formula"
+            )
+        return self
+
+    @property
+    def remaining_fcff(self) -> Decimal:
+        """Return the remaining-period FCFF under an explicit name."""
+
+        return self.fcff
+
+    @property
+    def ytd_period_end(self) -> datetime.date:
+        """Compatibility alias for the actual balance-sheet date."""
+
+        return self.period_start
+
+    @property
+    def fiscal_year_end(self) -> datetime.date:
+        """Compatibility alias for the full-year observation end date."""
+
+        return self.period_end
+
+    @property
+    def annual_operating_working_capital(self) -> Decimal:
+        """Compatibility alias for the full-year OWC balance."""
+
+        return self.fiscal_year_end_operating_working_capital
+
+
 class FcffForecast(BaseModel):
     provider: str
     company_id: str
@@ -405,7 +508,27 @@ class FcffForecast(BaseModel):
     observations: list[FcffForecastObservation] = Field(default_factory=list)
     warnings: tuple[str, ...] = ()
     ytd_anchor: Optional[FcffForecastYtdAnchor] = None
+    dcf_stub: Optional[FcffForecastDcfStub] = None
     capex_constraints_applied: tuple[int, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_dcf_stub_alias(cls, values):
+        if (
+            isinstance(values, dict)
+            and "dcf_stub" not in values
+            and "dcf_remaining_stub" in values
+        ):
+            normalized = dict(values)
+            normalized["dcf_stub"] = normalized.pop("dcf_remaining_stub")
+            return normalized
+        return values
+
+    @property
+    def dcf_remaining_stub(self) -> Optional[FcffForecastDcfStub]:
+        """Return the optional DCF-only remaining-period representation."""
+
+        return self.dcf_stub
 
 
 class AdaptiveMultistagePlan(BaseModel):

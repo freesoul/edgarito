@@ -471,6 +471,14 @@ def test_ytd_absolute_capex_constraint_targets_annual_total_and_recalculates_rem
     assert forecast.ytd_anchor.capex_to_revenue == Decimal(
         "43.33333333333333333333333333"
     )
+    assert forecast.dcf_stub is not None
+    assert forecast.dcf_stub.annual_capital_expenditures == Decimal("30")
+    assert forecast.dcf_stub.actual_ytd_capital_expenditures == Decimal("4")
+    assert (
+        forecast.dcf_stub.annual_capital_expenditures
+        - forecast.dcf_stub.actual_ytd_capital_expenditures
+        == Decimal("26")
+    )
     assert (
         "management_guidance" in observation.cell_audits["capital_expenditures"].source
     )
