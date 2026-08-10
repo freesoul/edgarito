@@ -17,6 +17,7 @@ from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
+    FcffForecast,
     FcffForecastParameters,
     FcffForecastService,
     ForecastSeedType,
@@ -439,6 +440,43 @@ def test_current_ytd_and_ttm_context_seed_the_current_fiscal_year_without_overla
     assert fallback.seed_type == ForecastSeedType.FISCAL_YEAR
     assert fallback.ytd_anchor is None
     assert fallback.observations[0].fiscal_year == 2026
+
+
+def test_ytd_forecast_keeps_full_year_reporting_and_builds_remaining_dcf_stub():
+    forecast = FcffForecastService().forecast(
+        _forecast_financials(), _explicit_forecast_parameters()
+    )
+
+    first = forecast.observations[0]
+    stub = forecast.dcf_stub
+    assert stub is not None
+    assert first.fiscal_year == 2026
+    assert first.period_end == datetime.date(2026, 12, 31)
+    assert first.fcff == Decimal("9.6")
+    assert stub.period_start == datetime.date(2026, 6, 30)
+    assert stub.period_end == datetime.date(2026, 12, 31)
+    assert stub.annual_nopat == first.nopat == Decimal("16.50")
+    assert stub.actual_ytd_nopat == Decimal("7.5")
+    assert stub.annual_depreciation_and_amortization == Decimal("4.4")
+    assert stub.actual_ytd_depreciation_and_amortization == Decimal("2")
+    assert stub.annual_capital_expenditures == Decimal("8.8")
+    assert stub.actual_ytd_capital_expenditures == Decimal("4")
+    assert stub.fiscal_year_end_operating_working_capital == Decimal("5.5")
+    assert stub.actual_ytd_operating_working_capital == Decimal("3")
+    assert stub.fcff == Decimal("4.1")
+    assert stub.fcff == (
+        (stub.annual_nopat - stub.actual_ytd_nopat)
+        + (
+            stub.annual_depreciation_and_amortization
+            - stub.actual_ytd_depreciation_and_amortization
+        )
+        - (stub.annual_capital_expenditures - stub.actual_ytd_capital_expenditures)
+        - (
+            stub.fiscal_year_end_operating_working_capital
+            - stub.actual_ytd_operating_working_capital
+        )
+    )
+    assert FcffForecast.model_validate_json(forecast.model_dump_json()) == forecast
 
 
 def test_ytd_revenue_anchor_forecasts_only_the_guided_remaining_amount():

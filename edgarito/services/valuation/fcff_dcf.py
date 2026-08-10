@@ -19,7 +19,9 @@ from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
     FcffForecast,
+    FcffForecastDcfStub,
     FcffForecastObservation,
+    ForecastSeedType,
 )
 from edgarito.services.valuation.discounting import (
     PresentValueService,
@@ -454,6 +456,11 @@ class FcffDcfService:
         selected_valuation_date = valuation_date or forecast.base_period_end
         if selected_valuation_date < forecast.base_period_end:
             raise ValueError("Valuation date cannot precede the forecast base date")
+        dcf_stub = self._validate_dcf_stub(
+            forecast,
+            capital_bridge,
+            selected_valuation_date,
+        )
         first_period_end = forecast.observations[0].period_end
         if selected_valuation_date >= first_period_end:
             raise ValueError(
@@ -467,20 +474,39 @@ class FcffDcfService:
             if parameters.cash_flow_timing == CashFlowTiming.MID_YEAR
             else Decimal(0)
         )
-        use_calendar_periods = valuation_date is not None
-        explicit_cash_flows = tuple(
-            CashFlow(
-                amount=item.fcff,
-                period=self._discount_period(
+        # A YTD forecast is based at the latest reported balance-sheet date,
+        # so its stub and all following periods must use calendar fractions
+        # even when the caller leaves valuation_date at its default base date.
+        use_calendar_periods = valuation_date is not None or dcf_stub is not None
+        explicit_cash_flows = []
+        for index, item in enumerate(forecast.observations):
+            is_stub = index == 0 and dcf_stub is not None
+            period = (
+                self._stub_discount_period(
+                    dcf_stub,
+                    selected_valuation_date,
+                    timing_offset,
+                )
+                if is_stub
+                else self._discount_period(
                     item,
                     selected_valuation_date,
                     timing_offset,
                     use_calendar_periods=use_calendar_periods,
-                ),
-                label=f"FY{item.fiscal_year}E FCFF",
+                )
             )
-            for item in forecast.observations
-        )
+            explicit_cash_flows.append(
+                CashFlow(
+                    amount=dcf_stub.fcff if is_stub else item.fcff,
+                    period=period,
+                    label=(
+                        f"FY{item.fiscal_year}E FCFF remaining stub"
+                        if is_stub
+                        else f"FY{item.fiscal_year}E FCFF"
+                    ),
+                )
+            )
+        explicit_cash_flows = tuple(explicit_cash_flows)
         explicit_present_value = PresentValueService.discount(
             explicit_cash_flows,
             parameters.wacc,
@@ -708,6 +734,166 @@ class FcffDcfService:
                 "the financial base period or use end-of-period timing"
             )
         return period
+
+    @classmethod
+    def _stub_discount_period(
+        cls,
+        stub: FcffForecastDcfStub,
+        valuation_date: datetime.date,
+        timing_offset: Decimal,
+    ) -> Decimal:
+        """Discount a remaining stub at its end or midpoint.
+
+        The ordinary mid-year convention subtracts half a full fiscal year.
+        Applying that convention to a short post-YTD stub could place the cash
+        flow before the valuation date, so the stub midpoint is calculated from
+        its own remaining period instead.
+        """
+
+        period = cls._year_fraction(valuation_date, stub.period_end)
+        if timing_offset:
+            period /= Decimal(2)
+        if period < 0:
+            raise ValueError(
+                "Mid-year cash-flow timing falls before the valuation date; update "
+                "the financial base period or use end-of-period timing"
+            )
+        return period
+
+    @classmethod
+    def _validate_dcf_stub(
+        cls,
+        forecast: FcffForecast,
+        capital_bridge: FcffDcfCapitalBridge,
+        valuation_date: datetime.date,
+    ) -> FcffForecastDcfStub | None:
+        """Validate the optional post-YTD flow before it enters the DCF.
+
+        The full-year observation remains the reporting representation.  A
+        missing or stale stub on a YTD seed must not silently fall back to that
+        full-year amount, because doing so double-counts the reported YTD
+        activity against the capital bridge.
+        """
+
+        is_ytd = forecast.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+        stub = forecast.dcf_stub
+        if not is_ytd:
+            if stub is not None:
+                raise ValueError(
+                    "FCFF DCF remaining stub metadata is only valid for "
+                    "ForecastSeedType.YTD_PLUS_FORECAST"
+                )
+            return None
+
+        if forecast.ytd_anchor is None:
+            raise ValueError(
+                "YTD FCFF DCF requires YTD anchor metadata for its remaining stub"
+            )
+        if not isinstance(stub, FcffForecastDcfStub):
+            raise ValueError(
+                "YTD FCFF DCF requires complete remaining stub metadata; "
+                "the DCF stub is missing"
+            )
+
+        anchor = forecast.ytd_anchor
+        first = forecast.observations[0]
+        if stub.forecast_year != first.forecast_year:
+            raise ValueError("FCFF DCF stub forecast year must match first observation")
+        if stub.forecast_year != 1:
+            raise ValueError("FCFF DCF stub must be the first forecast flow")
+        if (
+            stub.fiscal_year != first.fiscal_year
+            or stub.fiscal_year != anchor.fiscal_year
+        ):
+            raise ValueError("FCFF DCF stub fiscal year must match the YTD anchor")
+        if forecast.current_fiscal_year != stub.fiscal_year:
+            raise ValueError(
+                "FCFF DCF stub fiscal year must match the current forecast year"
+            )
+        if forecast.actual_quarters != anchor.actual_quarters:
+            raise ValueError("FCFF DCF stub quarter count must match the YTD anchor")
+        if stub.period_start != forecast.base_period_end:
+            raise ValueError(
+                "FCFF DCF stub start must match the forecast base period end"
+            )
+        if stub.period_start != anchor.ytd_period_end:
+            raise ValueError("FCFF DCF stub start must match the YTD period end")
+        if forecast.seed_period_end is None:
+            raise ValueError("YTD FCFF DCF requires a forecast seed period end")
+        if stub.period_start != forecast.seed_period_end:
+            raise ValueError("FCFF DCF stub start must match the forecast seed period")
+        if (
+            stub.period_end != first.period_end
+            or stub.period_end != anchor.fiscal_year_end
+        ):
+            raise ValueError(
+                "FCFF DCF stub end must match the first forecast fiscal-year end"
+            )
+        if stub.period_start >= stub.period_end:
+            raise ValueError("FCFF DCF stub period must end after its start")
+        if stub.unit != forecast.unit or first.unit != forecast.unit:
+            raise ValueError("FCFF DCF stub and forecast must use one currency")
+        if capital_bridge.period_end != stub.period_start:
+            raise ValueError(
+                "FCFF DCF capital bridge period must match the remaining stub start"
+            )
+        if capital_bridge.period_end > valuation_date:
+            raise ValueError(
+                "FCFF DCF capital bridge period cannot follow the valuation date"
+            )
+        if valuation_date < stub.period_start:
+            raise ValueError("Valuation date cannot precede the remaining stub start")
+        if valuation_date >= stub.period_end:
+            raise ValueError(
+                "Valuation date must precede the remaining stub period end"
+            )
+
+        actual_tax_rate = (
+            anchor.actual_tax_rate
+            if anchor.actual_tax_rate is not None
+            else anchor.tax_rate
+        )
+        actual_ytd_nopat = anchor.actual_operating_income * (
+            Decimal(1) - actual_tax_rate / Decimal(100)
+        )
+        expected_components = {
+            "annual_nopat": first.nopat,
+            "actual_ytd_nopat": actual_ytd_nopat,
+            "annual_depreciation_and_amortization": (
+                first.depreciation_and_amortization
+            ),
+            "actual_ytd_depreciation_and_amortization": (
+                anchor.actual_depreciation_and_amortization
+            ),
+            "annual_capital_expenditures": first.capital_expenditures,
+            "actual_ytd_capital_expenditures": anchor.actual_capital_expenditures,
+            "fiscal_year_end_operating_working_capital": (
+                first.operating_working_capital
+            ),
+            "actual_ytd_operating_working_capital": (
+                anchor.actual_operating_working_capital
+            ),
+        }
+        for field, expected in expected_components.items():
+            if getattr(stub, field) != expected:
+                raise ValueError(
+                    f"FCFF DCF stub {field} does not match the forecast and YTD anchor"
+                )
+        expected_fcff = (
+            first.nopat
+            - actual_ytd_nopat
+            + first.depreciation_and_amortization
+            - anchor.actual_depreciation_and_amortization
+            - first.capital_expenditures
+            + anchor.actual_capital_expenditures
+            - first.operating_working_capital
+            + anchor.actual_operating_working_capital
+        )
+        if stub.fcff != expected_fcff:
+            raise ValueError(
+                "FCFF DCF stub FCFF does not match the remaining-period formula"
+            )
+        return stub
 
     @classmethod
     def _year_fraction(cls, start: datetime.date, end: datetime.date) -> Decimal:
