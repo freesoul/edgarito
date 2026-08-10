@@ -10,6 +10,7 @@ from edgarito.services.valuation import (
     DecisionValuationResult,
     RelativeScenarioTimeBasis,
     ReverseDcfStatus,
+    ValuationAssessmentBand,
 )
 
 
@@ -125,6 +126,9 @@ class DecisionValuationConsolePresenter:
                 "margin-of-safety and combined assessment."
             )
         assessment = result.assessment
+        displayed_overall = self._displayed_overall_assessment(
+            assessment, target_date_cases
+        )
         lines.extend(
             [
                 "",
@@ -141,7 +145,7 @@ class DecisionValuationConsolePresenter:
                         else []
                     )
                 ),
-                f"Overall assessment: {assessment.overall}",
+                f"Overall assessment: {displayed_overall}",
             ]
         )
         market_growth = next(
@@ -179,6 +183,24 @@ class DecisionValuationConsolePresenter:
                 ]
             )
         return lines
+
+    @staticmethod
+    def _displayed_overall_assessment(assessment, target_date_cases) -> str:
+        intrinsic_expensive = assessment.intrinsic in {
+            ValuationAssessmentBand.EXPENSIVE,
+            ValuationAssessmentBand.STRONGLY_EXPENSIVE,
+        }
+        relative_supports_upside = any(
+            case.horizon_upside_downside is not None
+            and case.horizon_upside_downside > 0
+            for case in target_date_cases
+        )
+        if intrinsic_expensive and relative_supports_upside:
+            return (
+                "mixed — above intrinsic base value, but supported by relative "
+                "valuation"
+            )
+        return assessment.overall
 
     @staticmethod
     def _scenario_details(

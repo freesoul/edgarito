@@ -765,6 +765,28 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert "Pure peer horizon upside/(downside)" in rendered
     assert "Historical-multiple horizon upside/(downside)" in rendered
     assert "COMPOSITE / DCF DIAGNOSTIC" in rendered
+    assert (
+        rendered.index("INDEPENDENT PEER VALUATION")
+        < rendered.index("HISTORICAL MULTIPLE VALUATION")
+        < rendered.index("COMPOSITE / DCF DIAGNOSTIC")
+    )
+    assert rendered.index("MULTIPLE RESOLUTION") > rendered.index(
+        "COMPOSITE / DCF DIAGNOSTIC"
+    )
+    assert "DCF-blended relative value (target date)" in rendered
+    assert "DCF-blended relative value (present-day DCF PV diagnostic)" in rendered
+    assert "Historical multiple valuation confidence: lower confidence" in rendered
+    assert (
+        "Historical persistence: disabled due to insufficient observations" in rendered
+    )
+    assert "Forward peer adjustment weight" in audit
+    assert "Historical persistence evidence weight" in audit
+    assert "Historical persistence horizon retention" in audit
+    assert "Composite DCF/relative persistence factor" in audit
+    assert "Forward evidence weight" not in audit
+    assert "Premium-history weight" not in audit
+    assert "Horizon retention" not in audit
+    assert "Effective premium weight" not in audit
     assert "Raw AR(1) phi" not in rendered
     assert "Raw AR(1) phi" in audit
 

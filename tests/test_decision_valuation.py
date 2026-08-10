@@ -445,6 +445,71 @@ def test_decision_presenter_separates_target_date_relative_evidence_from_dcf():
     assert "Peer relative" not in rendered
 
 
+def test_decision_presenter_displays_mixed_summary_for_target_date_relative_upside():
+    intrinsic = tuple(
+        IntrinsicScenarioCase(
+            scenario=scenario,
+            value_per_share=value,
+            assumptions=(),
+            methodology="controlled intrinsic DCF",
+        )
+        for scenario, value in zip(
+            (DecisionScenario.BEAR, DecisionScenario.BASE, DecisionScenario.BULL),
+            (Decimal("8"), Decimal("10"), Decimal("12")),
+            strict=True,
+        )
+    )
+    relative = tuple(
+        RelativeScenarioCase(
+            scenario=scenario,
+            value_per_share=value,
+            multiple=Decimal("10"),
+            methodology="controlled pure peer target-date evidence",
+            time_basis=RelativeScenarioTimeBasis.TARGET_DATE,
+            target_date=datetime.date(2025, 12, 31),
+            horizon_years=Decimal(1),
+            horizon_upside_downside=(value / Decimal("10") - 1) * 100,
+        )
+        for scenario, value in zip(
+            (DecisionScenario.BEAR, DecisionScenario.BASE, DecisionScenario.BULL),
+            (Decimal("9"), Decimal("11"), Decimal("13")),
+            strict=True,
+        )
+    )
+    comparisons = tuple(
+        PriceComparison(
+            label=scenario.scenario.value.title(),
+            model="intrinsic",
+            value_per_share=scenario.value_per_share,
+            upside_downside=(scenario.value_per_share / Decimal("10") - 1) * 100,
+            margin_of_safety=(1 - Decimal("10") / scenario.value_per_share) * 100,
+        )
+        for scenario in intrinsic
+    )
+    result = DecisionValuationResult(
+        company_name="Controlled Company",
+        currency="USD",
+        current_price=Decimal("10"),
+        intrinsic_scenarios=intrinsic,
+        relative_scenarios=relative,
+        price_comparisons=comparisons,
+        assessment=ValuationAssessment(
+            intrinsic=ValuationAssessmentBand.EXPENSIVE,
+            overall=ValuationAssessmentBand.EXPENSIVE.value,
+        ),
+        methodology="controlled",
+    )
+
+    rendered = "\n".join(DecisionValuationConsolePresenter().render_summary(result))
+
+    assert "Present-day intrinsic DCF comparison" in rendered
+    assert (
+        "Overall assessment: mixed — above intrinsic base value, but supported by relative valuation"
+        in rendered
+    )
+    assert "Intrinsic assessment: expensive" in rendered
+
+
 def test_consolidated_warning_output_deduplicates_shortens_and_adds_severity():
     message = (
         "Projected net debt and diluted shares are held flat because no "

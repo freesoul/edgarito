@@ -284,25 +284,6 @@ class ComparableImpliedValuationConsolePresenter:
             f"{result.target_date.isoformat()} ({result.horizon_years:,.1f} years)",
             f"Basis: {ValuationSelectionConsolePresenter._label(result.basis.value)} | "
             f"Forecast metric: {result.forecast_metric_label}",
-            "",
-            *subsection("MULTIPLE RESOLUTION"),
-            f"{peer_label + ':':<40}{format_multiple(multiple.market_anchor)}",
-            f"{'DCF-implied forward multiple (diagnostic):':<40}"
-            f"{format_multiple(multiple.fundamental_anchor)}",
-            f"{target_label:<40}{format_multiple(multiple.current_target_anchor)}",
-            f"{'Premium evidence source:':<40}{multiple.premium_evidence_source}",
-            f"{'Primary premium evidence:':<40}"
-            f"{format_ratio_percent(primary_premium, signed=True)}",
-            f"{'Historical premium:':<40}"
-            f"{format_ratio_percent(multiple.historical_peer_premium, signed=True)}",
-            f"{'Composite resolved premium:':<40}"
-            f"{format_ratio_percent(multiple.resolved_premium, signed=True)}",
-            f"{'Composite resolved multiple:':<40}"
-            f"{format_multiple(multiple.point_estimate)}",
-            f"{'Composite Evidence range:':<40}"
-            f"{format_multiple(multiple.lower_bound)}–"
-            f"{format_multiple(multiple.upper_bound)}",
-            f"{'Confidence:':<40}{multiple.confidence.value}",
         ]
         if result.pure_peer_point_case is not None:
             lines.extend(
@@ -349,19 +330,51 @@ class ComparableImpliedValuationConsolePresenter:
                     "Historical multiple range: "
                     + f"{format_multiple(result.historical_lower_case.multiple)}–"
                     + f"{format_multiple(result.historical_upper_case.multiple)}",
+                    "Historical multiple valuation confidence: "
+                    + self._historical_confidence(multiple),
                 ]
             )
         lines.extend(
             [
                 "",
                 *subsection("COMPOSITE / DCF DIAGNOSTIC"),
-                "DCF-blended relative value: "
+                "DCF-blended relative value (target date): "
+                + format_currency(
+                    result.point_case.implied_value_per_share,
+                    result.currency,
+                ),
+                "DCF-blended relative value (present-day DCF PV diagnostic): "
                 + format_currency(
                     result.point_case.present_value_per_share,
                     result.currency,
                 ),
+                "",
+                *subsection("MULTIPLE RESOLUTION"),
+                f"{peer_label + ':':<40}{format_multiple(multiple.market_anchor)}",
+                f"{'DCF-implied forward multiple (diagnostic):':<40}"
+                f"{format_multiple(multiple.fundamental_anchor)}",
+                f"{target_label:<40}{format_multiple(multiple.current_target_anchor)}",
+                f"{'Premium evidence source:':<40}{multiple.premium_evidence_source}",
+                f"{'Primary premium evidence:':<40}"
+                f"{format_ratio_percent(primary_premium, signed=True)}",
+                f"{'Historical premium:':<40}"
+                f"{format_ratio_percent(multiple.historical_peer_premium, signed=True)}",
+                f"{'Composite resolved premium:':<40}"
+                f"{format_ratio_percent(multiple.resolved_premium, signed=True)}",
+                f"{'Composite resolved multiple:':<40}"
+                f"{format_multiple(multiple.point_estimate)}",
+                f"{'Composite Evidence range:':<40}"
+                f"{format_multiple(multiple.lower_bound)}–"
+                f"{format_multiple(multiple.upper_bound)}",
+                f"{'Confidence:':<40}{multiple.confidence.value}",
             ]
         )
+        if multiple.premium_history_sample_size < 8:
+            lines.append(
+                "Historical persistence: disabled due to insufficient observations "
+                f"({multiple.premium_history_sample_size} synchronized premium "
+                "observations; minimum 8 required)"
+            )
         if verbose:
             lines.extend(["", *self._multiple_audit(result)])
         lines.extend(
@@ -417,6 +430,18 @@ class ComparableImpliedValuationConsolePresenter:
         return (value / current_price - Decimal(1)) * Decimal(100)
 
     @staticmethod
+    def _historical_confidence(multiple) -> str:
+        observations = multiple.historical_sample_size
+        if observations < 8:
+            return (
+                f"lower confidence — {observations} observations "
+                "(fewer than 8 required for high confidence)"
+            )
+        return (
+            f"{multiple.target_history_confidence.value} — {observations} observations"
+        )
+
+    @staticmethod
     def _multiple_audit(result: ComparableImpliedValuation) -> list[str]:
         multiple = result.resolved_multiple
         lines = [
@@ -436,7 +461,7 @@ class ComparableImpliedValuationConsolePresenter:
             f"{format_ratio_percent(multiple.observed_premium, signed=True)}",
             f"Forward synchronized target/peer premium: "
             f"{format_ratio_percent(multiple.forward_synchronized_premium, signed=True)}",
-            f"Forward evidence weight: {multiple.forward_evidence_weight:,.1%}",
+            f"Forward peer adjustment weight: {multiple.forward_evidence_weight:,.1%}",
             f"Synchronized premium observations: "
             f"{multiple.premium_history_sample_size}",
             "Median premium observation interval: "
@@ -454,10 +479,13 @@ class ComparableImpliedValuationConsolePresenter:
             f"Shrunk AR(1) phi: {multiple.shrunk_premium_persistence:,.2f}",
             f"Historical statistical premium at horizon: "
             f"{format_ratio_percent(multiple.statistical_premium, signed=True)}",
-            f"Premium-history weight: {multiple.premium_history_weight:,.1%}",
+            f"Historical persistence evidence weight: "
+            f"{multiple.premium_history_weight:,.1%}",
             f"Quality-support score: {multiple.fundamental_support:,.1%}",
-            f"Horizon retention: {multiple.horizon_retention:,.1%}",
-            f"Effective premium weight: {multiple.persistence_factor:,.1%}",
+            f"Historical persistence horizon retention: "
+            f"{multiple.horizon_retention:,.1%}",
+            f"Composite DCF/relative persistence factor: "
+            f"{multiple.persistence_factor:,.1%}",
             "Confidence detail: "
             f"peer={multiple.peer_confidence.value}, "
             f"history={multiple.target_history_confidence.value}, "
