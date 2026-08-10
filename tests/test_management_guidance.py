@@ -1,14 +1,17 @@
 import asyncio
 import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
-
+import edgarito.cli.__main__ as cli_module
+from edgarito.cli.presentation.valuation_report import ValuationReportConsolePresenter
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
     GuidanceBasis,
     GuidanceMetric,
+    GuidanceOverlayResult,
     GuidancePeriodType,
     GuidanceQualifier,
     GuidanceScope,
@@ -30,7 +33,10 @@ from edgarito.services.forecasting.models import (
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.guidance.resolver import ManagementGuidanceResolver
-from edgarito.services.guidance.service import ManagementGuidanceService
+from edgarito.services.guidance.service import (
+    GuidanceDiscoveryResult,
+    ManagementGuidanceService,
+)
 
 
 def _observation(year, revenue, growth="10", margin="20", tax="20", capex="5"):
@@ -488,6 +494,10 @@ def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_pat
     assert first.cache_misses == 1
     assert second.cache_hits == 1
     assert edgar.refresh_values == [True, False]
+    assert first.filings_inspected == second.filings_inspected == 1
+    assert first.documents_inspected == second.documents_inspected == 1
+    assert first.extracted_guidance_records == second.extracted_guidance_records == 1
+    assert first.rejected_records == second.rejected_records == 0
 
 
 def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
@@ -540,3 +550,189 @@ def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
     assert len(ai.contents[0]) < len(document.content)
     assert phrase in ai.contents[0]
     assert [item.metric for item in result.records] == [GuidanceMetric.CAPEX]
+    assert result.filings_inspected == 1
+    assert result.documents_inspected == 1
+    assert result.extracted_guidance_records == 1
+    assert result.rejected_records == 0
+
+
+def test_service_counts_rejected_extraction_records(tmp_path):
+    accepted_text = "We expect FY2026 revenue of $10-$11 billion."
+    response = ExtractedGuidanceResponse(
+        guidance=[
+            ExtractedGuidanceItem(
+                metric=GuidanceMetric.REVENUE,
+                fiscal_year=2026,
+                period_type=GuidancePeriodType.FISCAL_YEAR,
+                low=10,
+                high=11,
+                value_kind=GuidanceValueKind.MONETARY,
+                currency="USD",
+                unit=GuidanceUnit.BILLIONS,
+                scope=GuidanceScope.CONSOLIDATED,
+                supporting_text=accepted_text,
+            ),
+            ExtractedGuidanceItem(
+                metric=GuidanceMetric.CAPEX,
+                fiscal_year=2026,
+                period_type=GuidancePeriodType.FISCAL_YEAR,
+                point=25,
+                value_kind=GuidanceValueKind.MONETARY,
+                currency="USD",
+                unit=GuidanceUnit.BILLIONS,
+                scope=GuidanceScope.CONSOLIDATED,
+                supporting_text="This evidence is not in the filing.",
+            ),
+        ]
+    )
+    document = SecFilingDocument(
+        filename="primary.htm",
+        document_type="10-Q",
+        description="Quarterly report",
+        content=accepted_text,
+    )
+    filing = SecFiling(
+        cik=1,
+        accession_number="0000000001-26-000003",
+        form="10-Q",
+        filing_date=datetime.date(2026, 7, 15),
+        primary_document="primary.htm",
+        documents=(document,),
+    )
+    result = asyncio.run(
+        ManagementGuidanceService(
+            _Edgar(filing),
+            ManagementGuidanceExtractor(_Ai(response), FileSystemCache(tmp_path)),
+            max_filings=1,
+            max_documents=1,
+        ).retrieve(ticker="TEST", cik=1, as_of=datetime.date(2026, 8, 1))
+    )
+
+    assert len(result.records) == 1
+    assert len(result.rejected) == 1
+    assert result.extracted_guidance_records == 1
+    assert result.rejected_records == 1
+
+
+def test_guidance_counters_transfer_from_discovery_to_overlay(monkeypatch, tmp_path):
+    discovery = GuidanceDiscoveryResult(
+        filings_inspected=3,
+        documents_inspected=4,
+        extracted_guidance_records=5,
+        rejected_records=2,
+    )
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+        async def close(self):
+            pass
+
+    class _Edgar:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class _Service:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def retrieve(self, **kwargs):
+            return discovery
+
+    monkeypatch.setattr(cli_module, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli_module, "OpenAIClient", _OpenAI)
+    monkeypatch.setattr(cli_module, "EdgarClient", _Edgar)
+    monkeypatch.setattr(cli_module, "ManagementGuidanceService", _Service)
+
+    parameters, overlay = asyncio.run(
+        cli_module._management_guidance_overlay(
+            SimpleNamespace(
+                user_agent="test@example.com",
+                cache_dir=tmp_path,
+                ticker="TEST",
+                cik=1,
+                refresh=False,
+            ),
+            SimpleNamespace(ticker="TEST"),
+            FcffForecastParameters(forecast_years=2),
+            _baseline(),
+            datetime.date(2026, 8, 1),
+        )
+    )
+
+    assert parameters.forecast_years == 2
+    assert overlay.filings_inspected == 3
+    assert overlay.documents_inspected == 4
+    assert overlay.extracted_guidance_records == 5
+    assert overlay.rejected_records == 2
+
+
+def test_valuation_report_renders_audit_counters_without_source_records():
+    result = GuidanceOverlayResult(
+        rejected_reasons=("Extraction rejected: malformed guidance",),
+        filings_inspected=2,
+        documents_inspected=3,
+        extracted_guidance_records=1,
+        rejected_records=4,
+        cache_hits=1,
+        cache_misses=2,
+    )
+
+    rendered = ValuationReportConsolePresenter().render(
+        intrinsic=None,
+        peer_report=None,
+        relative=None,
+        provider_relative=None,
+        decision=None,
+        profile_name=None,
+        show_scenarios=False,
+        show_sensitivity=False,
+        show_reverse_dcf=False,
+        verbose=True,
+        management_guidance=result,
+    )
+
+    assert "MANAGEMENT GUIDANCE" in rendered
+    assert "Filings inspected: 2" in rendered
+    assert "Documents inspected: 3" in rendered
+    assert "Extracted guidance records: 1" in rendered
+    assert "Applied: 0" in rendered
+    assert "Evidence only: 0" in rendered
+    assert "Rejected: 4" in rendered
+    assert "Extraction rejected: malformed guidance" in rendered
+    assert "Source:" not in rendered
+    assert "Extraction: OpenAI /" not in rendered
+
+
+def test_valuation_report_renders_evidence_only_guidance_without_applications():
+    record = _guidance(GuidanceMetric.REVENUE, low="120", high="130")
+    result = GuidanceOverlayResult(
+        evidence_only=(record,),
+        documents_inspected=1,
+        extracted_guidance_records=1,
+    )
+
+    rendered = ValuationReportConsolePresenter().render(
+        intrinsic=None,
+        peer_report=None,
+        relative=None,
+        provider_relative=None,
+        decision=None,
+        profile_name=None,
+        show_scenarios=False,
+        show_sensitivity=False,
+        show_reverse_dcf=False,
+        verbose=False,
+        management_guidance=result,
+    )
+
+    assert "MANAGEMENT GUIDANCE" in rendered
+    assert "Evidence only: 1" in rendered
+    assert "FY2025 revenue" in rendered

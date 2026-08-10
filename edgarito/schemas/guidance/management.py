@@ -291,3 +291,7 @@ class GuidanceOverlayResult(BaseModel):
     warnings: tuple[str, ...] = ()
     cache_hits: int = 0
     cache_misses: int = 0
+    filings_inspected: int = 0
+    documents_inspected: int = 0
+    extracted_guidance_records: int = 0
+    rejected_records: int = 0
