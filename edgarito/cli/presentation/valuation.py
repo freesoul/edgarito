@@ -5,6 +5,7 @@ from decimal import Decimal
 from edgarito.cli.presentation._valuation_format import (
     format_currency,
     format_multiple,
+    format_percent,
     format_ratio_percent,
     section,
     subsection,
@@ -286,7 +287,7 @@ class ComparableImpliedValuationConsolePresenter:
             "",
             *subsection("MULTIPLE RESOLUTION"),
             f"{peer_label + ':':<40}{format_multiple(multiple.market_anchor)}",
-            f"{'DCF-implied forward multiple:':<40}"
+            f"{'DCF-implied forward multiple (diagnostic):':<40}"
             f"{format_multiple(multiple.fundamental_anchor)}",
             f"{target_label:<40}{format_multiple(multiple.current_target_anchor)}",
             f"{'Premium evidence source:':<40}{multiple.premium_evidence_source}",
@@ -294,10 +295,11 @@ class ComparableImpliedValuationConsolePresenter:
             f"{format_ratio_percent(primary_premium, signed=True)}",
             f"{'Historical premium:':<40}"
             f"{format_ratio_percent(multiple.historical_peer_premium, signed=True)}",
-            f"{'Resolved premium:':<40}"
+            f"{'Composite resolved premium:':<40}"
             f"{format_ratio_percent(multiple.resolved_premium, signed=True)}",
-            f"{'Resolved multiple:':<40}{format_multiple(multiple.point_estimate)}",
-            f"{'Evidence range:':<40}"
+            f"{'Composite resolved multiple:':<40}"
+            f"{format_multiple(multiple.point_estimate)}",
+            f"{'Composite Evidence range:':<40}"
             f"{format_multiple(multiple.lower_bound)}–"
             f"{format_multiple(multiple.upper_bound)}",
             f"{'Confidence:':<40}{multiple.confidence.value}",
@@ -306,32 +308,73 @@ class ComparableImpliedValuationConsolePresenter:
             lines.extend(
                 [
                     "",
-                    *subsection("INDEPENDENT PEER CROSS-CHECK"),
-                    "Pure peer-implied value (no DCF premium): "
+                    *subsection("INDEPENDENT PEER VALUATION"),
+                    "Pure peer-implied target-date value (no DCF multiple, premium, "
+                    "or WACC discounting): "
                     + format_currency(
-                        result.pure_peer_point_case.present_value_per_share,
+                        result.pure_peer_point_case.target_date_value_per_share,
                         result.currency,
                     ),
-                    "DCF-blended relative value: "
-                    + format_currency(
-                        result.point_case.present_value_per_share,
-                        result.currency,
+                    "Pure peer horizon upside/(downside) vs current price: "
+                    + format_percent(
+                        self._horizon_upside(
+                            result.pure_peer_point_case.target_date_value_per_share,
+                            result.current_price,
+                        ),
+                        signed=True,
                     ),
+                    "Pure peer multiple range: "
+                    + f"{format_multiple(result.pure_peer_lower_case.multiple)}–"
+                    + f"{format_multiple(result.pure_peer_upper_case.multiple)}",
                 ]
             )
+        if result.historical_point_case is not None:
+            lines.extend(
+                [
+                    "",
+                    *subsection("HISTORICAL MULTIPLE VALUATION"),
+                    "Historical-multiple target-date value: "
+                    + format_currency(
+                        result.historical_point_case.target_date_value_per_share,
+                        result.currency,
+                    ),
+                    "Historical-multiple horizon upside/(downside) vs current price: "
+                    + format_percent(
+                        self._horizon_upside(
+                            result.historical_point_case.target_date_value_per_share,
+                            result.current_price,
+                        ),
+                        signed=True,
+                    ),
+                    "Historical multiple range: "
+                    + f"{format_multiple(result.historical_lower_case.multiple)}–"
+                    + f"{format_multiple(result.historical_upper_case.multiple)}",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                *subsection("COMPOSITE / DCF DIAGNOSTIC"),
+                "DCF-blended relative value: "
+                + format_currency(
+                    result.point_case.present_value_per_share,
+                    result.currency,
+                ),
+            ]
+        )
         if verbose:
             lines.extend(["", *self._multiple_audit(result)])
         lines.extend(
             [
                 "",
-                f"{'Case':<12}{'Multiple':>12}{'Target-date value':>24}"
-                f"{'Present-value equivalent today':>34}",
-                "-" * 82,
+                f"{'Composite case':<18}{'Multiple':>12}{'Target-date value':>24}"
+                f"{'DCF PV diagnostic today':>34}",
+                "-" * 88,
             ]
         )
         for case in (result.lower_case, result.point_case, result.upper_case):
             lines.append(
-                f"{case.label:<12}{case.multiple:>11,.2f}x"
+                f"{case.label:<18}{case.multiple:>11,.2f}x"
                 f"{format_currency(case.implied_value_per_share, result.currency):>24}"
                 f"{format_currency(case.present_value_per_share, result.currency):>34}"
             )
@@ -368,11 +411,17 @@ class ComparableImpliedValuationConsolePresenter:
         return "\n".join(lines)
 
     @staticmethod
+    def _horizon_upside(value, current_price):
+        if current_price is None or current_price <= 0:
+            return None
+        return (value / current_price - Decimal(1)) * Decimal(100)
+
+    @staticmethod
     def _multiple_audit(result: ComparableImpliedValuation) -> list[str]:
         multiple = result.resolved_multiple
         lines = [
             *subsection("MULTIPLE-RESOLUTION AUDIT"),
-            f"DCF-implied premium vs peers: "
+            f"DCF-implied premium vs peers (diagnostic): "
             f"{format_ratio_percent(multiple.fundamental_premium, signed=True)}",
             f"Target historical median: {format_multiple(multiple.historical_anchor)}",
             "Target historical IQR: "
@@ -421,7 +470,7 @@ class ComparableImpliedValuationConsolePresenter:
                 [
                     f"Intrinsic value: "
                     f"{format_currency(result.intrinsic_value_per_share, result.currency)}",
-                    f"Relative value (present value): "
+                    f"Composite relative value (present value): "
                     f"{format_currency(result.point_case.present_value_per_share, result.currency)}",
                 ]
             )

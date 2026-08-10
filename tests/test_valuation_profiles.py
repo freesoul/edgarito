@@ -53,6 +53,10 @@ def test_default_profile_fixture_is_valid_and_complete():
     assert profile.comparables.max_peers == 8
     assert profile.relative_valuation.enabled
     assert profile.relative_valuation.multiple_resolution.use_fundamental_anchor
+    assert (
+        profile.relative_valuation.multiple_resolution.minimum_premium_history_observations
+        == 8
+    )
     assert profile.specialized_inputs.history == 5
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
         profile
@@ -232,6 +236,25 @@ def test_profile_validation_rejects_unknown_or_invalid_parameters(tmp_path):
                         "minimum_transition_years": 8,
                         "maximum_transition_years": 4,
                     }
+                }
+            }
+        )
+    configured = ForecastValuationProfile.model_validate(
+        {
+            "relative_valuation": {
+                "multiple_resolution": {"minimum_premium_history_observations": 10}
+            }
+        }
+    )
+    assert (
+        configured.relative_valuation.multiple_resolution.minimum_premium_history_observations
+        == 10
+    )
+    with pytest.raises(ValueError, match="greater than or equal to 4"):
+        ForecastValuationProfile.model_validate(
+            {
+                "relative_valuation": {
+                    "multiple_resolution": {"minimum_premium_history_observations": 3}
                 }
             }
         )

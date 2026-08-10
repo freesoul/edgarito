@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal
 from enum import Enum
 
@@ -10,6 +11,11 @@ class DecisionScenario(str, Enum):
     BEAR = "bear"
     BASE = "base"
     BULL = "bull"
+
+
+class RelativeScenarioTimeBasis(str, Enum):
+    PRESENT_DAY = "present_day"
+    TARGET_DATE = "target_date"
 
 
 class ValuationAssessmentBand(str, Enum):
@@ -59,6 +65,10 @@ class RelativeScenarioCase(_DecisionModel):
     value_per_share: Decimal
     multiple: Decimal = Field(gt=0)
     methodology: str
+    time_basis: RelativeScenarioTimeBasis = RelativeScenarioTimeBasis.PRESENT_DAY
+    target_date: datetime.date | None = None
+    horizon_years: Decimal | None = Field(default=None, gt=0)
+    horizon_upside_downside: Decimal | None = None
 
 
 class SensitivityCell(_DecisionModel):
@@ -157,6 +167,7 @@ __all__ = [
     "IntrinsicScenarioCase",
     "PriceComparison",
     "RelativeScenarioCase",
+    "RelativeScenarioTimeBasis",
     "ReverseDcfSolution",
     "ReverseDcfStatus",
     "ReverseDcfVariable",

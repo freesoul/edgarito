@@ -22,18 +22,23 @@ from edgarito.services.forecasting import (
 )
 from edgarito.services.valuation import (
     DecisionScenario,
+    DecisionValuationResult,
     DecisionValuationService,
     FcffDcfCapitalBridge,
     FcffDcfParameters,
     FcffDcfService,
     IntrinsicDecisionContext,
     IntrinsicDecisionEngine,
+    IntrinsicScenarioCase,
+    PriceComparison,
     RelativeScenarioCase,
+    RelativeScenarioTimeBasis,
     ReverseDcfService,
     ReverseDcfStatus,
     ReverseDcfVariable,
     ScenarioValuationService,
     SensitivityAnalysisService,
+    ValuationAssessment,
     ValuationAssessmentBand,
 )
 
@@ -371,6 +376,73 @@ def test_console_keeps_the_default_summary_concise_and_exposes_optional_details(
 
     audit = presenter.render(result, verbose=True)
     assert "Margin-of-safety convention" in audit
+
+
+def test_decision_presenter_separates_target_date_relative_evidence_from_dcf():
+    intrinsic = tuple(
+        IntrinsicScenarioCase(
+            scenario=scenario,
+            value_per_share=value,
+            assumptions=(),
+            methodology="controlled intrinsic DCF",
+        )
+        for scenario, value in zip(
+            (DecisionScenario.BEAR, DecisionScenario.BASE, DecisionScenario.BULL),
+            (Decimal("8"), Decimal("10"), Decimal("12")),
+            strict=True,
+        )
+    )
+    relative = tuple(
+        RelativeScenarioCase(
+            scenario=scenario,
+            value_per_share=value,
+            multiple=Decimal("10"),
+            methodology="controlled pure peer target-date evidence",
+            time_basis=RelativeScenarioTimeBasis.TARGET_DATE,
+            target_date=datetime.date(2025, 12, 31),
+            horizon_years=Decimal(1),
+            horizon_upside_downside=(value / Decimal("10") - Decimal(1)) * 100,
+        )
+        for scenario, value in zip(
+            (DecisionScenario.BEAR, DecisionScenario.BASE, DecisionScenario.BULL),
+            (Decimal("8"), Decimal("10"), Decimal("12")),
+            strict=True,
+        )
+    )
+    comparisons = tuple(
+        PriceComparison(
+            label=scenario.scenario.value.title(),
+            model="intrinsic",
+            value_per_share=scenario.value_per_share,
+            upside_downside=(scenario.value_per_share / Decimal("10") - 1) * 100,
+            margin_of_safety=(1 - Decimal("10") / scenario.value_per_share) * 100,
+        )
+        for scenario in intrinsic
+    )
+    result = DecisionValuationResult(
+        company_name="Controlled Company",
+        currency="USD",
+        current_price=Decimal("10"),
+        intrinsic_scenarios=intrinsic,
+        relative_scenarios=relative,
+        price_comparisons=comparisons,
+        assessment=ValuationAssessment(
+            intrinsic=ValuationAssessmentBand.FAIR,
+            overall=ValuationAssessmentBand.FAIR.value,
+            rationale=("Only present-day intrinsic DCF scenario evidence was used",),
+        ),
+        methodology="controlled",
+    )
+
+    rendered = "\n".join(DecisionValuationConsolePresenter().render_summary(result))
+
+    assert "Present-day intrinsic DCF comparison" in rendered
+    assert "TARGET-DATE RELATIVE EVIDENCE" in rendered
+    assert "Target-date value/share" in rendered
+    assert "Horizon upside/(downside)" in rendered
+    assert "excluded from present-day margin-of-safety" in rendered
+    assert "Relative assessment: target-date evidence excluded" in rendered
+    assert "Peer relative" not in rendered
 
 
 def test_consolidated_warning_output_deduplicates_shortens_and_adds_severity():

@@ -1008,8 +1008,8 @@ def _equity_relative_valuation(
         )
     fundamental = intrinsic.equity_value / metric
     point = summary.median
-    lower = min(summary.percentile_25 or summary.minimum, fundamental, point)
-    upper = max(summary.percentile_75 or summary.maximum, fundamental, point)
+    lower = summary.percentile_25 or summary.minimum
+    upper = summary.percentile_75 or summary.maximum
     confidence = (
         MultipleConfidence.HIGH
         if summary.sample_size >= 8
@@ -1045,8 +1045,8 @@ def _equity_relative_valuation(
         peer_confidence=confidence,
         confidence=confidence,
         methodology=(
-            "Independent peer median with DCF-implied equity multiple retained "
-            "inside the evidence range"
+            "Independent peer median with peer percentile bounds; the DCF-implied "
+            "equity multiple is retained as a diagnostic only"
         ),
         warnings=(
             ("Target denominator uses current/LTM fallback rather than a forecast",)

@@ -22,6 +22,7 @@ from edgarito.services.valuation.decision_models import (
     IntrinsicScenarioCase,
     PriceComparison,
     RelativeScenarioCase,
+    RelativeScenarioTimeBasis,
     ReverseDcfSolution,
     ReverseDcfStatus,
     ReverseDcfVariable,
@@ -34,6 +35,7 @@ from edgarito.services.valuation.decision_models import (
 from edgarito.services.valuation.fcff_dcf import FcffDcfService
 from edgarito.services.valuation.models import (
     ComparableImpliedValuation,
+    ComparableImpliedValuationCase,
     FcffDcfCapitalBridge,
     FcffDcfResult,
     ShareRepurchaseParameters,
@@ -721,7 +723,7 @@ class DecisionValuationService:
             raise ValueError("Decision analysis requires a positive current price")
         engine = IntrinsicDecisionEngine(context)
         intrinsic = ScenarioValuationService(self.policy).build(engine)
-        relative_scenarios = self._relative_scenarios(relative)
+        relative_scenarios = self._relative_scenarios(relative, current_price)
         sensitivities = (
             (
                 SensitivityAnalysisService().wacc_terminal_growth(
@@ -732,7 +734,13 @@ class DecisionValuationService:
             else ()
         )
         comparisons = self._comparisons(current_price, intrinsic, relative)
-        assessment = self._assessment(current_price, intrinsic, relative_scenarios)
+        target_date_relative = self._uses_target_date_relative(relative)
+        assessment = self._assessment(
+            current_price,
+            intrinsic,
+            relative_scenarios if not target_date_relative else (),
+            target_date_relative=target_date_relative,
+        )
         reverse = (
             ReverseDcfService().solve_all(engine, current_price)
             if include_reverse_dcf
@@ -764,32 +772,92 @@ class DecisionValuationService:
             reverse_dcf=reverse,
             methodology=(
                 "Scenario values are independent FCFF revaluations; relative ranges "
-                "remain separate; no scenario or reverse-DCF assumption is calibrated "
-                "to force agreement between models"
+                "remain separate; target-date peer/historical values are not used as "
+                "present-day comparisons or combined assessment inputs; no scenario or "
+                "reverse-DCF assumption is calibrated to force agreement between models"
             ),
             warnings=scenario_warnings,
         )
 
     @staticmethod
-    def _relative_scenarios(relative):
+    def _relative_scenarios(relative, current_price=None):
         if relative is None:
             return ()
+        cases = DecisionValuationService._relative_case_group(relative)
+        independent_peer = DecisionValuationService._uses_target_date_relative(relative)
+        time_basis = (
+            RelativeScenarioTimeBasis.TARGET_DATE
+            if independent_peer
+            else RelativeScenarioTimeBasis.PRESENT_DAY
+        )
+        target_date = relative.target_date if independent_peer else None
+        horizon_years = relative.horizon_years if independent_peer else None
         return tuple(
             RelativeScenarioCase(
                 scenario=scenario,
-                value_per_share=case.present_value_per_share,
+                value_per_share=DecisionValuationService._relative_case_value(
+                    case, independent_peer
+                ),
                 multiple=case.multiple,
                 methodology=(
-                    "Existing evidence-constrained relative multiple range, discounted "
-                    "to a present-value equivalent"
+                    "Independent pure peer target-date multiple range; no intrinsic "
+                    "WACC discounting is applied"
+                    if independent_peer
+                    else "Existing evidence-constrained relative multiple range, "
+                    "discounted to a present-value equivalent"
+                ),
+                time_basis=time_basis,
+                target_date=target_date,
+                horizon_years=horizon_years,
+                horizon_upside_downside=(
+                    (
+                        DecisionValuationService._relative_case_value(
+                            case, independent_peer
+                        )
+                        / current_price
+                        - Decimal(1)
+                    )
+                    * PERCENT
+                    if independent_peer and current_price is not None
+                    else None
                 ),
             )
             for scenario, case in (
-                (DecisionScenario.BEAR, relative.lower_case),
-                (DecisionScenario.BASE, relative.point_case),
-                (DecisionScenario.BULL, relative.upper_case),
+                (DecisionScenario.BEAR, cases[0]),
+                (DecisionScenario.BASE, cases[1]),
+                (DecisionScenario.BULL, cases[2]),
             )
         )
+
+    @staticmethod
+    def _relative_case_group(relative):
+        if (
+            isinstance(relative, ComparableImpliedValuation)
+            and relative.pure_peer_lower_case is not None
+            and relative.pure_peer_point_case is not None
+            and relative.pure_peer_upper_case is not None
+        ):
+            return (
+                relative.pure_peer_lower_case,
+                relative.pure_peer_point_case,
+                relative.pure_peer_upper_case,
+            )
+        return relative.lower_case, relative.point_case, relative.upper_case
+
+    @staticmethod
+    def _uses_target_date_relative(relative):
+        return (
+            isinstance(relative, ComparableImpliedValuation)
+            and relative.pure_peer_lower_case is not None
+            and relative.pure_peer_point_case is not None
+            and relative.pure_peer_upper_case is not None
+        )
+
+    @staticmethod
+    def _relative_case_value(case, independent_peer):
+        if independent_peer and isinstance(case, ComparableImpliedValuationCase):
+            return case.target_date_value_per_share
+        return case.present_value_per_share
 
     @staticmethod
     def _comparisons(current_price, intrinsic, relative):
@@ -798,9 +866,20 @@ class DecisionValuationService:
             for case in intrinsic
         ]
         if relative is not None:
-            cases.append(
-                ("Relative", "relative", relative.point_case.present_value_per_share)
+            relative_cases = DecisionValuationService._relative_case_group(relative)
+            independent_peer = DecisionValuationService._uses_target_date_relative(
+                relative
             )
+            if not independent_peer:
+                cases.append(
+                    (
+                        "Relative",
+                        "relative",
+                        DecisionValuationService._relative_case_value(
+                            relative_cases[1], independent_peer
+                        ),
+                    )
+                )
         return tuple(
             PriceComparison(
                 label=label,
@@ -816,7 +895,7 @@ class DecisionValuationService:
             for label, model, value in cases
         )
 
-    def _assessment(self, price, intrinsic, relative):
+    def _assessment(self, price, intrinsic, relative, *, target_date_relative=False):
         intrinsic_band = self._band(
             price,
             intrinsic[0].value_per_share,
@@ -827,7 +906,16 @@ class DecisionValuationService:
             return ValuationAssessment(
                 intrinsic=intrinsic_band,
                 overall=intrinsic_band.value,
-                rationale=("Only intrinsic scenario evidence was available",),
+                rationale=(
+                    (
+                        "Only present-day intrinsic DCF scenario evidence was used; "
+                        "target-date peer/historical values are reported separately "
+                        "with horizon upside and excluded from margin-of-safety and "
+                        "combined assessment"
+                        if target_date_relative
+                        else "Only intrinsic scenario evidence was available"
+                    ),
+                ),
             )
         relative_band = self._band(
             price,

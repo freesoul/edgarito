@@ -470,6 +470,15 @@ class MultipleResolutionConfiguration(_ProfileModel):
     use_fundamental_anchor: bool = True
     forecast_premium_mean_reversion: bool = True
     minimum_peer_sample: int = Field(default=4, ge=1, le=50)
+    minimum_premium_history_observations: int = Field(
+        default=8,
+        ge=4,
+        le=100,
+        description=(
+            "Minimum synchronized target/peer premium observations required before "
+            "AR(1) and premium-persistence blending is enabled"
+        ),
+    )
     annual_premium_decay: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
     premium_persistence_prior: Decimal = Field(default=Decimal("0.50"), ge=0, le=1)
     full_premium_history_observations: int = Field(default=12, ge=4, le=100)

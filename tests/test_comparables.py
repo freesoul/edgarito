@@ -30,12 +30,15 @@ from edgarito.services.valuation import (
     ComparableImpliedValuationService,
     ComparableMultiplesService,
     Cyclicality,
+    DecisionScenario,
+    DecisionValuationService,
     FcffDcfCapitalBridge,
     FcffDcfParameters,
     FcffDcfService,
     HistoricalMultipleObservation,
     HistoricalMultiplesService,
     HistoricalMultipleSummary,
+    IntrinsicScenarioCase,
     LtmMultiplesService,
     MultipleConfidence,
     MultipleResolver,
@@ -734,7 +737,10 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     assert resolved.lower_bound <= resolved.fundamental_anchor <= resolved.upper_bound
     assert resolved.persistence_factor < Decimal(1)
     assert resolved.premium_history_sample_size == 4
-    assert resolved.premium_mean_reversion_beta is not None
+    assert resolved.premium_mean_reversion_beta is None
+    assert any(
+        "premium-persistence blending" in warning for warning in resolved.warnings
+    )
     assert implied.point_case.implied_enterprise_value == (
         implied.forecast_metric * resolved.point_estimate
     )
@@ -743,11 +749,22 @@ def test_multiple_resolver_keeps_fundamental_anchor_and_premium_separate():
     )
     assert implied.analyst_target_implied_multiple == Decimal("1.76")
     assert implied.current_price_implied_multiple == Decimal("1.6")
+    assert implied.pure_peer_lower_case.multiple == Decimal("9")
+    assert implied.pure_peer_point_case.multiple == Decimal("10")
+    assert implied.pure_peer_upper_case.multiple == Decimal("11")
+    assert implied.historical_point_case.multiple == Decimal("12.5")
+    assert implied.historical_implied_value_per_share == (
+        implied.historical_point_case.implied_value_per_share
+    )
     rendered = ComparableImpliedValuationConsolePresenter().render(implied)
     audit = ComparableImpliedValuationConsolePresenter().render(implied, verbose=True)
     assert "Analyst target-date value" in rendered
-    assert "Present-value equivalent today" in rendered
+    assert "DCF PV diagnostic today" in rendered
     assert "Evidence range" in rendered
+    assert "Historical-multiple target-date value" in rendered
+    assert "Pure peer horizon upside/(downside)" in rendered
+    assert "Historical-multiple horizon upside/(downside)" in rendered
+    assert "COMPOSITE / DCF DIAGNOSTIC" in rendered
     assert "Raw AR(1) phi" not in rendered
     assert "Raw AR(1) phi" in audit
 
@@ -942,7 +959,7 @@ def test_weak_economics_keep_historical_premium_at_dcf_anchor(monkeypatch):
     assert resolved.point_estimate == Decimal("15")
 
 
-def test_sparse_ar_estimate_is_shrunk_and_remains_low_confidence(monkeypatch):
+def test_sparse_ar_estimate_is_disabled_and_remains_low_confidence(monkeypatch):
     dates = tuple(datetime.date(year, 12, 31) for year in range(2021, 2026))
     premium_series = [(date, Decimal("0.8")) for date in dates]
     monkeypatch.setattr(
@@ -956,18 +973,21 @@ def test_sparse_ar_estimate_is_shrunk_and_remains_low_confidence(monkeypatch):
         staticmethod(lambda values: Decimal(0)),
     )
 
+    warnings = []
     forecast = MultipleResolver._statistical_premium_forecast(
         HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),
         (HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),),
         Decimal(1),
         Decimal(1),
         MultipleResolutionConfiguration(),
-        [],
+        warnings,
     )
 
-    assert forecast.history_weight == Decimal(5) / Decimal(12)
-    assert abs(forecast.shrunk_phi - Decimal(7) / Decimal(24)) < Decimal("1e-26")
-    assert forecast.statistical_premium > Decimal("0.8")
+    assert forecast.history_weight == Decimal(0)
+    assert forecast.shrunk_phi == Decimal(0)
+    assert forecast.statistical_premium == Decimal("0.8")
+    assert forecast.raw_phi is None
+    assert any("premium-persistence blending" in warning for warning in warnings)
     assert (
         MultipleResolver._persistence_confidence(forecast.sample_size, forecast.raw_phi)
         == MultipleConfidence.LOW
@@ -1075,7 +1095,7 @@ def test_forward_premium_remains_active_with_sparse_ltm_history():
     )
 
     target_forward_multiple = target.enterprise_value / Decimal("125")
-    assert resolved.premium_history_weight == Decimal(2) / Decimal(12)
+    assert resolved.premium_history_weight == Decimal(0)
     assert resolved.forward_evidence_weight == Decimal(4) / Decimal(8)
     assert resolved.persistence_factor > Decimal(0)
     assert (
@@ -1530,7 +1550,7 @@ def test_fundamental_anchor_values_remaining_fcff_at_matching_horizon(basis, met
     assert anchor != intrinsic.terminal_value.terminal_value / metric
 
 
-def test_implied_valuation_exposes_peer_value_independently_of_dcf_anchor():
+def test_implied_valuation_keeps_pure_peer_value_independent_of_dcf_wacc():
     target, report, forecast, intrinsic = _basic_resolver_inputs()
     bridge = FcffDcfCapitalBridge(
         fiscal_year=2025,
@@ -1569,6 +1589,126 @@ def test_implied_valuation_exposes_peer_value_independently_of_dcf_anchor():
         result.pure_peer_point_case.present_value_per_share
         != result.point_case.present_value_per_share
     )
+
+    dcf_shifted = resolved.model_copy(
+        update={
+            "fundamental_anchor": Decimal("40"),
+            "fundamental_premium": Decimal("3"),
+            "point_estimate": Decimal("40"),
+            "lower_bound": Decimal("35"),
+            "upper_bound": Decimal("45"),
+        }
+    )
+    shifted = ComparableImpliedValuationService().value(
+        target_forecast=forecast,
+        capital_bridge=bridge,
+        projected_shares=bridge.diluted_shares,
+        resolved_multiple=dcf_shifted,
+        valuation_date=datetime.date(2025, 12, 31),
+        horizon_years=Decimal(1),
+        discount_rate=Decimal("10"),
+        intrinsic_value_per_share=Decimal("1"),
+    )
+
+    assert shifted.pure_peer_point_case.present_value_per_share == (
+        result.pure_peer_point_case.present_value_per_share
+    )
+    assert shifted.pure_peer_lower_case.multiple == (
+        result.pure_peer_lower_case.multiple
+    )
+    assert shifted.pure_peer_upper_case.multiple == (
+        result.pure_peer_upper_case.multiple
+    )
+
+    dcf_wacc_changed = ComparableImpliedValuationService().value(
+        target_forecast=forecast,
+        capital_bridge=bridge,
+        projected_shares=bridge.diluted_shares,
+        resolved_multiple=resolved,
+        valuation_date=datetime.date(2025, 12, 31),
+        horizon_years=Decimal(1),
+        discount_rate=Decimal("20"),
+        intrinsic_value_per_share=Decimal("1"),
+    )
+    assert dcf_wacc_changed.pure_peer_implied_value_per_share == (
+        result.pure_peer_implied_value_per_share
+    )
+    assert dcf_wacc_changed.pure_peer_point_case.present_value_per_share == (
+        result.pure_peer_point_case.present_value_per_share
+    )
+    assert dcf_wacc_changed.point_case.present_value_per_share != (
+        result.point_case.present_value_per_share
+    )
+    relative_scenarios = DecisionValuationService._relative_scenarios(
+        dcf_wacc_changed, Decimal("18")
+    )
+    assert all(case.time_basis.value == "target_date" for case in relative_scenarios)
+    assert all(
+        case.target_date == dcf_wacc_changed.target_date for case in relative_scenarios
+    )
+    assert relative_scenarios[1].horizon_upside_downside == (
+        result.pure_peer_implied_value_per_share / Decimal("18") - Decimal(1)
+    ) * Decimal(100)
+    intrinsic_cases = tuple(
+        IntrinsicScenarioCase(
+            scenario=scenario,
+            value_per_share=Decimal(value),
+            assumptions=(),
+            methodology="controlled intrinsic DCF",
+        )
+        for scenario, value in zip(
+            (DecisionScenario.BEAR, DecisionScenario.BASE, DecisionScenario.BULL),
+            ("8", "10", "12"),
+            strict=True,
+        )
+    )
+    baseline_comparison = DecisionValuationService._comparisons(
+        Decimal("18"), intrinsic_cases, result
+    )[1]
+    changed_comparison = DecisionValuationService._comparisons(
+        Decimal("18"), intrinsic_cases, dcf_wacc_changed
+    )[1]
+    assert baseline_comparison.model == changed_comparison.model == "intrinsic"
+    assert changed_comparison.value_per_share == Decimal("10")
+    assert baseline_comparison.value_per_share == Decimal("10")
+    assessment = DecisionValuationService()._assessment(
+        Decimal("18"), intrinsic_cases, (), target_date_relative=True
+    )
+    assert assessment.relative is None
+    assert "target-date peer/historical values" in assessment.rationale[0]
+
+
+def test_sparse_premium_history_is_excluded_from_evidence_range_but_reported(
+    monkeypatch,
+):
+    dates = tuple(datetime.date(year, 12, 31) for year in range(2021, 2026))
+    premium_series = [(date, Decimal("0.8")) for date in dates]
+    monkeypatch.setattr(
+        MultipleResolver,
+        "_aligned_peer_premiums",
+        staticmethod(lambda *args: premium_series),
+    )
+    forecast = MultipleResolver._statistical_premium_forecast(
+        HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),
+        (HistoricalMultipleSummary(basis=RelativeValuationBasis.EV_TO_EBITDA),),
+        Decimal(1),
+        Decimal(1),
+        MultipleResolutionConfiguration(),
+        [],
+    )
+    # The private forecast still exposes sparse observations for auditability;
+    # those values must not widen the resolved evidence range until persistence
+    # is enabled.
+    assert forecast.sample_size == len(premium_series)
+    assert forecast.statistical_premium == Decimal("0.8")
+
+    assert MultipleResolver._evidence_range(
+        fundamental_anchor=Decimal("1"),
+        point=Decimal("1"),
+        base_anchor=Decimal("1"),
+        peer_summary=None,
+        premium_forecast=forecast,
+    ) == (Decimal("1"), Decimal("1"))
 
 
 def test_longer_horizon_causes_more_premium_mean_reversion(monkeypatch):

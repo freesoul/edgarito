@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from edgarito.cli.presentation._valuation_format import (
     format_currency,
+    format_percent,
     section,
 )
 from edgarito.services.valuation import (
     DecisionScenario,
     DecisionValuationResult,
+    RelativeScenarioTimeBasis,
     ReverseDcfStatus,
 )
 
@@ -66,11 +68,17 @@ class DecisionValuationConsolePresenter:
     def render_summary(
         self, result: DecisionValuationResult, *, verbose: bool = False
     ) -> list[str]:
+        comparison_heading = (
+            "Present-day intrinsic DCF comparison"
+            if all(item.model == "intrinsic" for item in result.price_comparisons)
+            else "Present-day value comparison"
+        )
         lines = [
             *section("DECISION SUMMARY"),
             f"Current price: {format_currency(result.current_price, result.currency)}",
             "",
-            f"{'Evidence':<18}{f'Value/share ({result.currency})':>20}"
+            comparison_heading,
+            f"{'Evidence':<18}{f'Present-day value/share ({result.currency})':>20}"
             f"{'Upside/(downside)':>20}{'Margin of safety':>18}",
             "-" * 76,
         ]
@@ -84,6 +92,38 @@ class DecisionValuationConsolePresenter:
                 f"{comparison.label:<18}{comparison.value_per_share:>20,.2f}"
                 f"{comparison.upside_downside:>+19,.1f}%{margin:>18}"
             )
+        target_date_cases = tuple(
+            case
+            for case in result.relative_scenarios
+            if case.time_basis == RelativeScenarioTimeBasis.TARGET_DATE
+        )
+        if target_date_cases:
+            target_date = target_date_cases[0].target_date
+            horizon = target_date_cases[0].horizon_years
+            lines.extend(
+                [
+                    "",
+                    *section("TARGET-DATE RELATIVE EVIDENCE"),
+                    f"Target date: {target_date.isoformat() if target_date else 'unavailable'}"
+                    + (
+                        f" | Horizon: {horizon:,.1f} years"
+                        if horizon is not None
+                        else ""
+                    ),
+                    f"{'Scenario':<18}{'Target-date value/share':>26}"
+                    f"{'Horizon upside/(downside)':>30}",
+                    "-" * 74,
+                ]
+            )
+            lines.extend(
+                f"{case.scenario.value.title():<18}{case.value_per_share:>26,.2f}"
+                f"{format_percent(case.horizon_upside_downside, signed=True):>30}"
+                for case in target_date_cases
+            )
+            lines.append(
+                "Target-date peer/historical values are excluded from present-day "
+                "margin-of-safety and combined assessment."
+            )
         assessment = result.assessment
         lines.extend(
             [
@@ -92,7 +132,14 @@ class DecisionValuationConsolePresenter:
                 *(
                     [f"Relative assessment: {assessment.relative.value}"]
                     if assessment.relative is not None
-                    else []
+                    else (
+                        [
+                            "Relative assessment: target-date evidence excluded from "
+                            "present-day assessment"
+                        ]
+                        if target_date_cases
+                        else []
+                    )
                 ),
                 f"Overall assessment: {assessment.overall}",
             ]
@@ -127,7 +174,7 @@ class DecisionValuationConsolePresenter:
             lines.extend(
                 [
                     "Margin-of-safety convention: 1 - current price / estimated "
-                    "value; negative means price exceeds estimated value.",
+                    "present-day value; negative means price exceeds estimated value.",
                     f"Decision methodology: {result.methodology}",
                 ]
             )
@@ -164,14 +211,33 @@ class DecisionValuationConsolePresenter:
         if result.relative_scenarios:
             multiples = tuple(case.multiple for case in result.relative_scenarios)
             values = tuple(case.value_per_share for case in result.relative_scenarios)
-            lines.extend(
-                [
-                    f"{'Relative multiple':<30}{multiples[0]:>11,.2f}x"
-                    f"{multiples[1]:>11,.2f}x{multiples[2]:>11,.2f}x",
-                    f"{'Relative value/share':<30}{values[0]:>12,.2f}"
-                    f"{values[1]:>12,.2f}{values[2]:>12,.2f}",
-                ]
-            )
+            if result.relative_scenarios[0].time_basis == (
+                RelativeScenarioTimeBasis.TARGET_DATE
+            ):
+                horizon_upside = tuple(
+                    case.horizon_upside_downside for case in result.relative_scenarios
+                )
+                lines.extend(
+                    [
+                        f"{'Peer multiple':<30}{multiples[0]:>11,.2f}x"
+                        f"{multiples[1]:>11,.2f}x{multiples[2]:>11,.2f}x",
+                        f"{'Peer target-date value/share':<30}{values[0]:>12,.2f}"
+                        f"{values[1]:>12,.2f}{values[2]:>12,.2f}",
+                        f"{'Peer horizon upside/(downside)':<30}"
+                        f"{format_percent(horizon_upside[0], signed=True):>12}"
+                        f"{format_percent(horizon_upside[1], signed=True):>12}"
+                        f"{format_percent(horizon_upside[2], signed=True):>12}",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        f"{'Relative multiple':<30}{multiples[0]:>11,.2f}x"
+                        f"{multiples[1]:>11,.2f}x{multiples[2]:>11,.2f}x",
+                        f"{'Relative present-day value/share':<30}{values[0]:>12,.2f}"
+                        f"{values[1]:>12,.2f}{values[2]:>12,.2f}",
+                    ]
+                )
         if verbose:
             changed = {
                 assumption.name

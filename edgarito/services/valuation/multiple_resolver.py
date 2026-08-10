@@ -110,8 +110,8 @@ class MultipleResolver:
             else None
         )
         peer_anchor = peer_summary.median if peer_summary is not None else None
-        historical_anchor = (
-            effective_history.median if effective_history is not None else None
+        historical_anchor, historical_percentile_25, historical_percentile_75 = (
+            self._historical_multiple_statistics(effective_history)
         )
 
         warnings = list(
@@ -262,6 +262,9 @@ class MultipleResolver:
             peer_summary=peer_summary,
             premium_forecast=premium_forecast,
             primary_premium=synchronized_forward_premium,
+            minimum_premium_history_observations=(
+                policy.minimum_premium_history_observations
+            ),
         )
 
         sample_size = peer_summary.sample_size if peer_summary is not None else 0
@@ -316,16 +319,8 @@ class MultipleResolver:
                 peer_summary.percentile_75 if peer_summary is not None else None
             ),
             historical_anchor=historical_anchor,
-            historical_percentile_25=(
-                effective_history.percentile_25
-                if effective_history is not None
-                else None
-            ),
-            historical_percentile_75=(
-                effective_history.percentile_75
-                if effective_history is not None
-                else None
-            ),
+            historical_percentile_25=historical_percentile_25,
+            historical_percentile_75=historical_percentile_75,
             historical_volatility=(
                 effective_history.volatility if effective_history is not None else None
             ),
@@ -366,14 +361,14 @@ class MultipleResolver:
             confidence=confidence,
             methodology=(
                 (
-                    "peer forward multiple × (1 + DCF-implied premium + forward "
+                    "Composite diagnostic: peer forward multiple × (1 + DCF-implied premium + forward "
                     "evidence weight × (synchronized forward target/peer premium - "
                     "DCF-implied premium)); forward evidence weight is based on the "
                     "forward peer sample and independent of LTM history, which is "
                     "supporting evidence only"
                 )
                 if synchronized_forward_premium is not None
-                else "peer/base multiple × (1 + DCF-implied premium + evidence weight × "
+                else "Composite diagnostic: peer/base multiple × (1 + DCF-implied premium + evidence weight × "
                 "(statistically forecast premium - DCF-implied premium))"
             ),
             warnings=tuple(dict.fromkeys(warnings)),
@@ -492,6 +487,30 @@ class MultipleResolver:
         return multiple.value if multiple is not None else None
 
     @staticmethod
+    def _historical_multiple_statistics(history):
+        """Return historical median and percentile bounds, including raw summaries.
+
+        ``HistoricalMultiplesService`` populates these summary fields, but callers
+        can also provide a lightweight ``HistoricalMultipleSummary`` containing
+        only observations.  Supporting both forms keeps the implied-value layer
+        independent from the DCF while preserving the existing resolver API.
+        """
+
+        if history is None:
+            return None, None, None
+        values = sorted(item.value for item in history.observations if item.value > 0)
+        if not values:
+            return history.median, history.percentile_25, history.percentile_75
+        anchor = history.median or median(values)
+        percentile_25 = history.percentile_25 or HistoricalMultiplesService._percentile(
+            values, Decimal("0.25")
+        )
+        percentile_75 = history.percentile_75 or HistoricalMultiplesService._percentile(
+            values, Decimal("0.75")
+        )
+        return anchor, percentile_25, percentile_75
+
+    @staticmethod
     def _statistical_premium_forecast(
         history,
         peer_histories,
@@ -506,12 +525,18 @@ class MultipleResolver:
         )
         premiums = [value for _, value in premium_series]
         sample_size = len(premiums)
+        minimum_history = policy.minimum_premium_history_observations
         prior_phi = (
             policy.insufficient_history_persistence
             if policy.insufficient_history_persistence is not None
             else policy.premium_persistence_prior
         )
         if not premiums:
+            warnings.append(
+                "Insufficient synchronized premium history for AR(1) or "
+                "premium-persistence blending: 0 observations are available and "
+                f"the configured minimum is {minimum_history}; blending is disabled"
+            )
             if forward_evidence_active:
                 warnings.append(
                     "No synchronized LTM peer history is available; the forward "
@@ -529,7 +554,7 @@ class MultipleResolver:
                 percentile_25=None,
                 percentile_75=None,
                 raw_phi=None,
-                shrunk_phi=prior_phi,
+                shrunk_phi=Decimal(0),
                 statistical_premium=current_premium,
                 sample_size=0,
                 history_weight=Decimal(0),
@@ -546,6 +571,27 @@ class MultipleResolver:
         )
         full_sample = Decimal(policy.full_premium_history_observations)
         history_weight = min(Decimal(1), Decimal(sample_size) / full_sample)
+        if sample_size < minimum_history:
+            warnings.append(
+                "Insufficient synchronized premium history for AR(1) or "
+                "premium-persistence blending: "
+                f"{sample_size} observations are available and the configured "
+                f"minimum is {minimum_history}; blending is disabled"
+            )
+            return _PremiumForecast(
+                long_run_premium=long_run_premium,
+                percentile_25=percentile_25,
+                percentile_75=percentile_75,
+                raw_phi=None,
+                shrunk_phi=Decimal(0),
+                statistical_premium=long_run_premium,
+                sample_size=sample_size,
+                history_weight=Decimal(0),
+                observation_interval_years=MultipleResolver._median_observation_interval(
+                    premium_series
+                ),
+            )
+
         raw_phi = None
         if len(premium_series) >= 4:
             lower_percentile, upper_percentile = policy.winsorize_percentiles
@@ -629,18 +675,22 @@ class MultipleResolver:
         peer_summary,
         premium_forecast,
         primary_premium=None,
+        minimum_premium_history_observations=8,
     ):
+        historical_evidence_active = (
+            premium_forecast.sample_size >= minimum_premium_history_observations
+        )
         fundamental_premium = fundamental_anchor / base_anchor - Decimal(1)
         resolved_premium = point / base_anchor - Decimal(1)
         premium_candidates = [fundamental_premium, resolved_premium]
         if primary_premium is None:
-            if premium_forecast.sample_size >= 4:
+            if historical_evidence_active:
                 premium_candidates.append(premium_forecast.statistical_premium)
                 if premium_forecast.percentile_25 is not None:
                     premium_candidates.append(premium_forecast.percentile_25)
                 if premium_forecast.percentile_75 is not None:
                     premium_candidates.append(premium_forecast.percentile_75)
-        elif premium_forecast.sample_size >= 4:
+        elif historical_evidence_active:
             for supporting_premium in (
                 premium_forecast.statistical_premium,
                 premium_forecast.percentile_25,

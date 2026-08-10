@@ -111,6 +111,7 @@
       "use_fundamental_anchor": true,
       "forecast_premium_mean_reversion": true,
       "minimum_peer_sample": 4,
+      "minimum_premium_history_observations": 8,
       "annual_premium_decay": "0.10",
       "premium_persistence_prior": "0.50",
       "full_premium_history_observations": 12,

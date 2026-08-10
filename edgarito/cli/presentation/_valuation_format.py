@@ -118,6 +118,10 @@ def short_warning(message: str) -> str:
             "AR(1) persistence falls back to the configured prior.",
         ),
         (
+            "insufficient synchronized premium history for ar(1) or premium-persistence",
+            "Premium persistence is disabled because premium history is insufficient.",
+        ),
+        (
             "projected net debt and diluted shares are held flat",
             "Projected net debt and diluted shares are held flat.",
         ),

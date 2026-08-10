@@ -485,8 +485,21 @@ class ComparableImpliedValuationCase(BaseModel):
     implied_value_per_share: Decimal
     present_value_per_share: Decimal
 
+    @property
+    def target_date_value_per_share(self) -> Decimal:
+        """Return the multiple-implied value at the relative target date."""
+
+        return self.implied_value_per_share
+
 
 class ComparableImpliedValuation(BaseModel):
+    """Target-date relative valuation with independent evidence streams.
+
+    ``lower_case``/``point_case``/``upper_case`` are retained as compatibility
+    aliases for the historical DCF-blended result.  New consumers should use the
+    explicitly named composite, peer, and historical case groups instead.
+    """
+
     provider: str
     company_id: str
     company_name: str
@@ -508,12 +521,82 @@ class ComparableImpliedValuation(BaseModel):
     pure_peer_lower_case: ComparableImpliedValuationCase | None = None
     pure_peer_point_case: ComparableImpliedValuationCase | None = None
     pure_peer_upper_case: ComparableImpliedValuationCase | None = None
+    historical_lower_case: ComparableImpliedValuationCase | None = None
+    historical_point_case: ComparableImpliedValuationCase | None = None
+    historical_upper_case: ComparableImpliedValuationCase | None = None
+    composite_lower_case: ComparableImpliedValuationCase | None = None
+    composite_point_case: ComparableImpliedValuationCase | None = None
+    composite_upper_case: ComparableImpliedValuationCase | None = None
     current_price: Optional[Decimal] = None
     current_price_implied_multiple: Optional[Decimal] = None
     analyst_target_price: Optional[Decimal] = None
     analyst_target_implied_multiple: Optional[Decimal] = None
     intrinsic_value_per_share: Optional[Decimal] = None
     warnings: tuple[str, ...] = ()
+
+    @property
+    def peer_lower_case(self) -> ComparableImpliedValuationCase | None:
+        """Return the independent peer lower case under its shorter name."""
+
+        return self.pure_peer_lower_case
+
+    @property
+    def peer_point_case(self) -> ComparableImpliedValuationCase | None:
+        """Return the independent peer point case under its shorter name."""
+
+        return self.pure_peer_point_case
+
+    @property
+    def peer_upper_case(self) -> ComparableImpliedValuationCase | None:
+        """Return the independent peer upper case under its shorter name."""
+
+        return self.pure_peer_upper_case
+
+    @property
+    def pure_peer_implied_value_per_share(self) -> Decimal | None:
+        """Return the independent peer median target-date value when available."""
+
+        return (
+            self.pure_peer_point_case.target_date_value_per_share
+            if self.pure_peer_point_case is not None
+            else None
+        )
+
+    @property
+    def historical_multiple_point_case(
+        self,
+    ) -> ComparableImpliedValuationCase | None:
+        """Return the independent historical-multiple point case."""
+
+        return self.historical_point_case
+
+    @property
+    def historical_multiple_lower_case(
+        self,
+    ) -> ComparableImpliedValuationCase | None:
+        return self.historical_lower_case
+
+    @property
+    def historical_multiple_upper_case(
+        self,
+    ) -> ComparableImpliedValuationCase | None:
+        return self.historical_upper_case
+
+    @property
+    def historical_implied_value_per_share(self) -> Decimal | None:
+        """Return the independent historical-multiple target-date value."""
+
+        return (
+            self.historical_point_case.target_date_value_per_share
+            if self.historical_point_case is not None
+            else None
+        )
+
+    @property
+    def composite_implied_value_per_share(self) -> Decimal:
+        """Return the compatibility composite point present value."""
+
+        return (self.composite_point_case or self.point_case).present_value_per_share
 
 
 class CostOfEquityMethod(str, Enum):

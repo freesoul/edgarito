@@ -2326,7 +2326,7 @@ class ValuationExcelRenderer:
 
         if relative is not None:
             row += 1
-            section_row("Resolved Relative Valuation")
+            section_row("Resolved Relative Valuation (Composite / DCF Diagnostic)")
             table_header(("Input", "Value", "Units / description"))
             if isinstance(relative, ComparableImpliedValuation):
                 basis_label = relative.basis.label
@@ -2357,6 +2357,21 @@ class ValuationExcelRenderer:
                         relative.projected_net_debt,
                         relative.currency,
                     ),
+                    (
+                        "DCF-implied Multiple (diagnostic)",
+                        relative.resolved_multiple.fundamental_anchor,
+                        "multiple",
+                    ),
+                    (
+                        "Peer Median Multiple",
+                        relative.resolved_multiple.peer_anchor,
+                        "multiple",
+                    ),
+                    (
+                        "Historical Median Multiple",
+                        relative.resolved_multiple.historical_anchor,
+                        "multiple",
+                    ),
                 )
             else:
                 input_rows = (
@@ -2382,7 +2397,11 @@ class ValuationExcelRenderer:
                     "Target-date Numerator / EV",
                     "Target-date Equity Value",
                     "Target-date Value / Share",
-                    "Present Value / Share",
+                    (
+                        "DCF PV Diagnostic / Share"
+                        if isinstance(relative, ComparableImpliedValuation)
+                        else "Present Value / Share"
+                    ),
                 )
             )
             cases = (
@@ -2391,19 +2410,61 @@ class ValuationExcelRenderer:
                 ("Upper", relative.upper_case),
             )
             for label, case in cases:
-                cell(0, label)
+                cell(0, case.label or label)
                 cell(1, case.multiple)
                 if isinstance(relative, ComparableImpliedValuation):
                     cell(2, case.implied_enterprise_value)
                     cell(3, case.implied_equity_value)
                     cell(4, case.implied_value_per_share)
-                    cell(5, case.present_value_per_share)
                 else:
                     cell(2, case.target_date_numerator_value)
                     cell(3, case.target_date_equity_value)
                     cell(4, case.target_date_value_per_share)
-                    cell(5, case.present_value_per_share)
+                cell(5, case.present_value_per_share)
                 row += 1
+
+            if isinstance(relative, ComparableImpliedValuation):
+                independent_case_groups = (
+                    (
+                        "Independent Peer Valuation",
+                        (
+                            relative.pure_peer_lower_case,
+                            relative.pure_peer_point_case,
+                            relative.pure_peer_upper_case,
+                        ),
+                    ),
+                    (
+                        "Historical Multiple Valuation",
+                        (
+                            relative.historical_lower_case,
+                            relative.historical_point_case,
+                            relative.historical_upper_case,
+                        ),
+                    ),
+                )
+
+                for title, case_group in independent_case_groups:
+                    if any(case is None for case in case_group):
+                        continue
+                    row += 2
+                    section_row(title)
+                    table_header(
+                        (
+                            "Case",
+                            "Multiple",
+                            "Target-date Enterprise Value",
+                            "Target-date Equity Value",
+                            "Target-date Value / Share",
+                        )
+                    )
+                    for case in case_group:
+                        assert case is not None
+                        cell(0, case.label)
+                        cell(1, case.multiple)
+                        cell(2, case.implied_enterprise_value)
+                        cell(3, case.implied_equity_value)
+                        cell(4, case.target_date_value_per_share)
+                        row += 1
 
             if relative.current_price is not None:
                 row += 1
