@@ -307,11 +307,16 @@ class TerminalRoicResolver:
     def _invested_capital(values, currency):
         equity = values.get(FinancialConcept.STOCKHOLDERS_EQUITY)
         cash = values.get(FinancialConcept.CASH_AND_EQUIVALENTS)
+        investments = [
+            values.get(FinancialConcept.SHORT_TERM_INVESTMENTS),
+            values.get(FinancialConcept.NONCURRENT_INVESTMENTS),
+        ]
         if (
             equity is None
             or cash is None
             or equity.unit != currency
             or cash.unit != currency
+            or any(item is not None and item.unit != currency for item in investments)
         ):
             return None
         current = values.get(FinancialConcept.SHORT_TERM_DEBT) or values.get(
@@ -322,7 +327,10 @@ class TerminalRoicResolver:
             (item.value for item in (current, noncurrent) if item is not None),
             Decimal(0),
         )
-        return equity.value + debt - cash.value
+        non_operating_assets = sum(
+            (item.value for item in investments if item is not None), Decimal(0)
+        )
+        return equity.value + debt - cash.value - non_operating_assets
 
     @staticmethod
     def _assumption(
