@@ -77,7 +77,7 @@ class ManagementGuidanceService:
             make_cache=True,
         )
         filings = self._selector.select_filings(filings, limit=self.max_filings)
-        filings_inspected = len(filings)
+        filings_inspected = 0
         records: list[ManagementGuidance] = []
         rejected: list[GuidanceRejection] = []
         warnings: list[str] = []
@@ -85,15 +85,26 @@ class ManagementGuidanceService:
         misses = 0
         documents_inspected = 0
         extracted_guidance_records = 0
-        for filing in filings:
+        for filing_index, filing in enumerate(filings):
             if documents_inspected >= self.max_documents:
                 break
+            filings_inspected += 1
             populated = await self._edgar.get_filing_documents(
                 filing, use_cache=not refresh_sec, make_cache=True
             )
-            documents = self._selector.select_documents(
-                populated, limit=self.max_documents_per_filing
+            remaining_capacity = self.max_documents - documents_inspected
+            remaining_filings = len(filings) - filing_index - 1
+            # Preserve one document slot for each filing still in the selected
+            # order, so later periodic filings cannot be crowded out.
+            reserved_for_later = min(remaining_filings, max(0, remaining_capacity - 1))
+            document_limit = max(
+                0,
+                min(
+                    self.max_documents_per_filing,
+                    remaining_capacity - reserved_for_later,
+                ),
             )
+            documents = self._selector.select_documents(populated, limit=document_limit)
             if not documents and any(
                 document.is_pdf for document in populated.documents
             ):
