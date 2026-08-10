@@ -538,12 +538,17 @@ class AdaptiveMultistageFcffForecastService:
             explicit_prefix = [configured[0]] * prefix_years
             initial_growth = configured[0]
 
-        remaining = effective_years - prefix_years
+        current_growth_years = min(plan.current_growth_years, effective_years)
+        remaining = effective_years - current_growth_years - prefix_years
         high_growth_years = min(plan.high_growth_years, remaining)
         remaining -= high_growth_years
         transition_years = min(plan.transition_years, remaining)
         stable_years = remaining - transition_years
-        path = [*explicit_prefix, *([initial_growth] * high_growth_years)]
+        path = [
+            *([configured[0]] * current_growth_years),
+            *explicit_prefix,
+            *([initial_growth] * high_growth_years),
+        ]
         path.extend(
             cls._linear_transition(
                 initial_growth,

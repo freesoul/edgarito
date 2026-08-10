@@ -101,6 +101,8 @@ def _guidance(
     point=None,
     kind=GuidanceValueKind.MONETARY,
     currency="USD",
+    period_type=GuidancePeriodType.FISCAL_YEAR,
+    fiscal_quarter=None,
     qualifier=GuidanceQualifier.UNKNOWN,
     basis=GuidanceBasis.GAAP,
     status=GuidanceStatus.ISSUED,
@@ -110,7 +112,8 @@ def _guidance(
         metric=metric,
         metric_name=metric_name,
         fiscal_year=year,
-        period_type=GuidancePeriodType.FISCAL_YEAR,
+        fiscal_quarter=fiscal_quarter,
+        period_type=period_type,
         point=Decimal(point) if point is not None else None,
         low=Decimal(low) if low is not None else None,
         high=Decimal(high) if high is not None else None,
@@ -175,11 +178,87 @@ def test_applied_revenue_growth_guidance_remains_quantitative_forward_evidence()
         parameters=FcffForecastParameters(forecast_years=2),
     )
 
-    evidence = cli_module._forward_growth_evidence("growth", set(), result)
+    evidence = cli_module._forward_growth_evidence(
+        "growth", set(), result, (2025, 2026)
+    )
 
     assert evidence.growth_path == (Decimal("12"),)
     assert evidence.growth_anchor == Decimal("12")
     assert evidence.confidence == "high"
+
+
+def test_later_year_growth_guidance_does_not_shift_into_first_forecast_year():
+    growth = _guidance(
+        GuidanceMetric.REVENUE_GROWTH,
+        year=2026,
+        point="12",
+        kind=GuidanceValueKind.PERCENTAGE,
+        currency=None,
+    )
+
+    _parameters, result = GuidanceForecastOverlay().apply(
+        [growth],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+    evidence = cli_module._forward_growth_evidence(
+        "growth", set(), result, (2025, 2026)
+    )
+
+    assert [application.guidance for application in result.applications] == [growth]
+    assert evidence.growth_path == ()
+    assert evidence.guidance
+
+
+@pytest.mark.parametrize(
+    "guidance",
+    [
+        _guidance(
+            GuidanceMetric.REVENUE_GROWTH,
+            period_type=GuidancePeriodType.QUARTER,
+            fiscal_quarter=2,
+            point="12",
+            kind=GuidanceValueKind.PERCENTAGE,
+            currency=None,
+        ),
+        _guidance(
+            GuidanceMetric.REVENUE_GROWTH,
+            year=2027,
+            point="13",
+            kind=GuidanceValueKind.PERCENTAGE,
+            currency=None,
+        ),
+        _guidance(
+            GuidanceMetric.REVENUE_GROWTH,
+            year=None,
+            point="14",
+            kind=GuidanceValueKind.PERCENTAGE,
+            currency=None,
+        ),
+        _guidance(
+            GuidanceMetric.REVENUE_GROWTH,
+            year=2030,
+            period_type=GuidancePeriodType.LONG_TERM_TARGET,
+            point="15",
+            kind=GuidanceValueKind.PERCENTAGE,
+            currency=None,
+        ),
+    ],
+)
+def test_ineligible_growth_guidance_remains_qualitative_not_quantitative(guidance):
+    _parameters, result = GuidanceForecastOverlay().apply(
+        [guidance],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+    evidence = cli_module._forward_growth_evidence(
+        "growth", set(), result, (2025, 2026)
+    )
+
+    assert result.applications == ()
+    assert guidance in result.evidence_only
+    assert evidence.growth_path == ()
+    assert evidence.guidance
 
 
 def test_named_revenue_component_cannot_replace_total_company_anchor():

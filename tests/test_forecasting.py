@@ -702,6 +702,105 @@ def test_ytd_slowdown_does_not_replace_normalized_forward_growth_anchor():
     assert plan.current_growth_years == 1
 
 
+def test_fixed_ytd_scenario_preserves_current_stage_boundaries():
+    observations = list(_fcff_financials().observations)
+    quarterly_values = {
+        FinancialConcept.REVENUE: "25",
+        FinancialConcept.OPERATING_INCOME: "5",
+        FinancialConcept.PRETAX_INCOME: "4",
+        FinancialConcept.INCOME_TAX_EXPENSE: "1",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "1",
+        FinancialConcept.CAPITAL_EXPENDITURES: "2",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "5",
+        FinancialConcept.INVENTORY: "2",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "1",
+        FinancialConcept.ACCOUNTS_PAYABLE: "2",
+        FinancialConcept.ACCRUED_LIABILITIES: "1",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "1",
+    }
+    for period, period_end in (
+        (FiscalPeriod.Q1, datetime.date(2025, 3, 31)),
+        (FiscalPeriod.Q2, datetime.date(2025, 6, 30)),
+    ):
+        observations.extend(
+            _observation(
+                concept,
+                value,
+                2025,
+                granularity=Granularity.QUARTERLY,
+                fiscal_period=period,
+                period_end=period_end,
+            )
+            for concept, value in quarterly_values.items()
+        )
+    financials = _fcff_financials().model_copy(update={"observations": observations})
+    service = FcffForecastService()
+    adaptive = AdaptiveMultistageFcffForecastService(service)
+    parameters = FcffForecastParameters(forecast_years=5)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15")
+    )
+    seed = service.forecast(financials, parameters)
+    base_forecast, base_plan = adaptive.forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        configuration,
+    )
+    scenario_forecast, scenario_plan = adaptive.forecast(
+        financials,
+        base_forecast,
+        parameters.model_copy(
+            update={"revenue_growth": (Decimal("4.4"),) * parameters.forecast_years}
+        ),
+        Decimal("3"),
+        configuration,
+        fixed_plan=base_plan,
+    )
+
+    assert base_plan.current_growth_years == 1
+    assert scenario_plan.current_growth_years == base_plan.current_growth_years
+    assert (
+        scenario_plan.explicit_growth_prefix_years,
+        scenario_plan.high_growth_years,
+        scenario_plan.transition_years,
+        scenario_plan.stable_years,
+    ) == (
+        base_plan.explicit_growth_prefix_years,
+        base_plan.high_growth_years,
+        base_plan.transition_years,
+        base_plan.stable_years,
+    )
+    expected_stages = (
+        ("current",) * base_plan.current_growth_years
+        + ("explicit",) * base_plan.explicit_growth_prefix_years
+        + ("near_term",) * base_plan.high_growth_years
+        + ("transition",) * base_plan.transition_years
+        + ("stable",) * base_plan.stable_years
+    )
+    assert scenario_forecast.adaptive_stages == expected_stages
+    assert len(scenario_forecast.observations) == len(expected_stages)
+    assert scenario_forecast.observations[0].revenue_growth == Decimal("4.4")
+
+    transition_start = (
+        base_plan.current_growth_years
+        + base_plan.explicit_growth_prefix_years
+        + base_plan.high_growth_years
+    )
+    assert base_plan.transition_years > 0
+    assert scenario_forecast.observations[transition_start].revenue_growth == (
+        scenario_plan.initial_growth_rate
+        + (Decimal("3") - scenario_plan.initial_growth_rate)
+        / Decimal(base_plan.transition_years)
+    )
+    stable_start = transition_start + base_plan.transition_years
+    assert all(
+        observation.revenue_growth == Decimal("3")
+        for observation in scenario_forecast.observations[stable_start:]
+    )
+
+
 def test_mature_low_growth_history_can_support_stable_state_without_current_proximity():
     financials = _fcff_financials().model_copy(
         update={

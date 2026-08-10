@@ -1442,6 +1442,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 profile_context.lifecycle,
                 profile_context.economic_traits,
                 guidance_overlay,
+                tuple(item.fiscal_year for item in forecast.observations),
             ),
             as_of=valuation_date,
             availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
@@ -1704,6 +1705,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 profile_context.lifecycle,
                 profile_context.economic_traits,
                 guidance_overlay,
+                tuple(item.fiscal_year for item in forecast.observations),
             ),
             flexible_revenue_growth=(
                 args.revenue_growth is None
@@ -2092,8 +2094,18 @@ async def _management_guidance_overlay(
         await openai_client.close()
 
 
-def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
-    """Turn verified forward indicators into a bounded stage-duration signal."""
+def _forward_growth_evidence(
+    lifecycle,
+    economic_traits,
+    guidance_overlay,
+    forecast_years: tuple[int, ...] = (),
+):
+    """Turn verified forward indicators into a bounded stage-duration signal.
+
+    Only guidance applications can supply quantitative growth rates. The
+    remaining guidance records are still useful for qualitative evidence, but
+    their period may be quarterly, long-term, outside the forecast, or unset.
+    """
     records = ()
     if guidance_overlay is not None:
         records = (*guidance_overlay.applications, *guidance_overlay.evidence_only)
@@ -2124,16 +2136,37 @@ def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
         in {"multi_year_target", "long_term_target"}
     }
     growth_visibility = min(Decimal("1"), Decimal(len(visible_years)) / Decimal("3"))
-    forward_growth_records = sorted(
-        (
-            item.fiscal_year,
-            item.midpoint,
+    growth_applications = {
+        application.fiscal_year: application.value
+        for application in (
+            guidance_overlay.applications if guidance_overlay is not None else ()
         )
-        for item in evidence_records
-        if getattr(getattr(item, "metric", None), "value", "")
+        if application.driver == "revenue_growth"
+        and getattr(getattr(application.guidance, "metric", None), "value", "")
         == "revenue_growth"
-        and item.midpoint is not None
-    )
+        and getattr(
+            getattr(application.guidance, "period_type", None), "value", ""
+        )
+        == "fiscal_year"
+        and application.guidance.fiscal_year == application.fiscal_year
+        and application.value is not None
+    }
+    forward_growth_records = []
+    for index, fiscal_year in enumerate(forecast_years):
+        value = growth_applications.get(fiscal_year)
+        if value is None:
+            # A later guided year cannot be represented in the compact path
+            # without shifting it into an earlier forecast year. Keep only
+            # an aligned prefix. If there is a later application after the
+            # gap, leave the path empty so the overlaid forecast path retains
+            # that record's original fiscal-year position.
+            if any(
+                year in growth_applications
+                for year in forecast_years[index + 1 :]
+            ):
+                forward_growth_records = []
+            break
+        forward_growth_records.append((fiscal_year, value))
     return ForwardGrowthEvidence(
         backlog=backlog,
         guidance=guidance,
