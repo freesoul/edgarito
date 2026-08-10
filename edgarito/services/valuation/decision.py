@@ -249,79 +249,97 @@ class IntrinsicDecisionEngine:
 class ScenarioValuationService:
     def __init__(self, policy: DecisionScenarioPolicy | None = None):
         self.policy = policy or DecisionScenarioPolicy()
+        self._warnings: tuple[str, ...] = ()
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        """Warnings produced by the most recent scenario bundle."""
+
+        return self._warnings
 
     def build(
         self, engine: IntrinsicDecisionEngine
     ) -> tuple[IntrinsicScenarioCase, ...]:
         context = engine.context
+        self._warnings = ()
         base = self._base_case(context)
-        cases = (
-            self._variant(engine, DecisionScenario.BEAR),
+        bear = self._variant(engine, DecisionScenario.BEAR)
+        bull = self._variant(engine, DecisionScenario.BULL)
+
+        bear, bull = self._enforce_strict_ordering(
+            bear,
             base,
-            self._variant(engine, DecisionScenario.BULL),
+            bull,
         )
-        if not (
-            cases[0].value_per_share
-            <= cases[1].value_per_share
-            <= cases[2].value_per_share
-        ):
-            cases = (
-                self._directional_envelope(engine, DecisionScenario.BEAR, base),
-                base,
-                self._directional_envelope(engine, DecisionScenario.BULL, base),
-            )
+        cases = (bear, base, bull)
+        self._warnings = tuple(
+            dict.fromkeys(warning for case in cases for warning in case.warnings)
+        )
         return cases
 
-    def _directional_envelope(self, engine, scenario, base):
-        """Keep scenario labels directional when FCFF drivers interact nonlinearly."""
-        context = engine.context
-        requested = self._scenario_values(context, scenario)
-        base_values = self._base_values(context)
-        candidates = [self._variant(engine, scenario)]
-        for driver, value in requested.items():
-            if value == base_values[driver]:
-                continue
-            isolated = dict(base_values)
-            isolated[driver] = value
-            try:
-                candidates.append(
-                    self._case(
-                        engine,
-                        scenario,
-                        isolated,
-                        methodology=(
-                            "Directional scenario envelope: isolated "
-                            f"{driver.replace('_', ' ')} stress retained because "
-                            "the combined FCFF driver case was non-monotonic"
-                        ),
-                    )
+    def _enforce_strict_ordering(self, bear, base, bull):
+        """Reject, rather than repair, a non-monotonic stress bundle.
+
+        Scenario values are not envelopes.  Selecting Base as a neutral bound
+        would make a failed Bull stress look like a valid valuation and would
+        also hide interactions between the economic drivers.  Each offending
+        independently revalued case is therefore made explicitly unavailable.
+        """
+
+        base_value = base.value_per_share
+        assert base_value is not None
+
+        if bear.available:
+            if not any(item.changed for item in bear.assumptions):
+                bear = self._unavailable(
+                    bear,
+                    "explicit assumptions left the Bear stress unchanged from the "
+                    "independently calculated Base; no genuine Bear revaluation "
+                    "was available",
                 )
-            except ValueError:
-                continue
-        candidates.append(
-            IntrinsicScenarioCase(
-                scenario=scenario,
-                value_per_share=base.value_per_share,
-                assumptions=self._assumptions(context, base_values, scenario),
-                methodology=(
-                    "Directional scenario envelope includes the unchanged base as "
-                    "the neutral bound"
+            elif (
+                bear.value_per_share is not None and bear.value_per_share >= base_value
+            ):
+                bear = self._unavailable(
+                    bear,
+                    "non-monotonic Bear stress: its independent revaluation is "
+                    f"{bear.value_per_share:,.6f} per share, not strictly below "
+                    f"Base at {base_value:,.6f}",
+                )
+
+        if bull.available:
+            if not any(item.changed for item in bull.assumptions):
+                bull = self._unavailable(
+                    bull,
+                    "explicit assumptions left the Bull stress unchanged from the "
+                    "independently calculated Base; no genuine Bull revaluation "
+                    "was available",
+                )
+            elif (
+                bull.value_per_share is not None and bull.value_per_share <= base_value
+            ):
+                bull = self._unavailable(
+                    bull,
+                    "non-monotonic Bull stress: its independent revaluation is "
+                    f"{bull.value_per_share:,.6f} per share, not strictly above "
+                    f"Base at {base_value:,.6f}",
+                )
+        return bear, bull
+
+    @staticmethod
+    def _unavailable(case, reason):
+        warning = f"{case.scenario.value.title()} scenario unavailable: {reason}."
+        return case.model_copy(
+            update={
+                "value_per_share": None,
+                "available": False,
+                "invalid_reason": reason,
+                "methodology": (
+                    f"{case.methodology}; explicit invalid/unavailable output: {reason}"
                 ),
-            )
+                "warnings": tuple(dict.fromkeys([*case.warnings, warning])),
+            }
         )
-        selector = min if scenario == DecisionScenario.BEAR else max
-        selected = selector(candidates, key=lambda item: item.value_per_share)
-        if "Directional scenario envelope" not in selected.methodology:
-            selected = selected.model_copy(
-                update={
-                    "methodology": (
-                        "Directional scenario envelope retained the combined stress; "
-                        "FCFF driver interactions made the opposite scenario "
-                        "non-monotonic"
-                    )
-                }
-            )
-        return selected
 
     def _base_case(self, context):
         values = self._base_values(context)
@@ -338,16 +356,39 @@ class ScenarioValuationService:
 
     def _variant(self, engine, scenario):
         context = engine.context
-        values = self._scenario_values(context, scenario)
-        return self._case(
-            engine,
-            scenario,
-            values,
+        values = self._base_values(context)
+        try:
+            values = self._scenario_values(context, scenario)
+            return self._case(
+                engine,
+                scenario,
+                values,
+                methodology=(
+                    "Independent FCFF scenario revaluation using one coherent "
+                    f"{scenario.value} driver bundle; the independently selected "
+                    "Base multistage stage topology is reused where available"
+                ),
+            )
+        except ValueError as exc:
+            return self._invalid_from_values(
+                context,
+                scenario,
+                values,
+                f"The stressed assumptions could not be revalued coherently: {exc}",
+            )
+
+    def _invalid_from_values(self, context, scenario, values, reason):
+        return IntrinsicScenarioCase(
+            scenario=scenario,
+            value_per_share=None,
+            assumptions=self._assumptions(context, values, scenario),
             methodology=(
-                "Deterministic uncertainty policy changes only non-explicit growth, "
-                "margin, terminal economics, and discount-rate assumptions; FCFF is "
-                "fully reforecast and rediscounted"
+                "Independent FCFF scenario revaluation was unavailable; the stressed "
+                "bundle was not replaced with Base"
             ),
+            available=False,
+            invalid_reason=reason,
+            warnings=(f"{scenario.value.title()} scenario unavailable: {reason}.",),
         )
 
     def _case(self, engine, scenario, values, *, methodology):
@@ -364,6 +405,10 @@ class ScenarioValuationService:
             terminal_roic=values["terminal_roic"],
             terminal_growth=values["terminal_growth"],
             wacc=values["wacc"],
+            preserve_projection_structure=(
+                context.use_multistage
+                and context.base_result.multistage_plan is not None
+            ),
         )
         return IntrinsicScenarioCase(
             scenario=scenario,
@@ -392,7 +437,7 @@ class ScenarioValuationService:
             )
         if context.flexible_terminal_growth:
             terminal_growth += direction * self.policy.terminal_growth_delta
-        if context.flexible_terminal_roic:
+        if self._terminal_roic_is_economic(context) and context.flexible_terminal_roic:
             spread = max(terminal_roic - base["wacc"], Decimal("2"))
             terminal_roic += (
                 direction * spread * self.policy.terminal_roic_spread_change
@@ -409,7 +454,7 @@ class ScenarioValuationService:
                 wacc = terminal_growth + Decimal("0.01")
             else:
                 raise ValueError("Explicit WACC must exceed explicit terminal growth")
-        if context.flexible_terminal_roic:
+        if self._terminal_roic_is_economic(context) and context.flexible_terminal_roic:
             terminal_roic = max(terminal_roic, terminal_growth + Decimal("0.5"))
         elif terminal_roic <= terminal_growth:
             if context.flexible_terminal_growth:
@@ -427,6 +472,13 @@ class ScenarioValuationService:
         }
 
     @staticmethod
+    def _terminal_roic_is_economic(context):
+        return (
+            context.use_multistage
+            and context.multistage_configuration.fade_reinvestment_to_terminal
+        )
+
+    @staticmethod
     def _base_values(context):
         return {
             "revenue_growth": context.base_revenue_growth,
@@ -442,7 +494,10 @@ class ScenarioValuationService:
         flexible = {
             "revenue_growth": context.flexible_revenue_growth,
             "operating_margin": context.flexible_operating_margin,
-            "terminal_roic": context.flexible_terminal_roic,
+            "terminal_roic": (
+                context.flexible_terminal_roic
+                and ScenarioValuationService._terminal_roic_is_economic(context)
+            ),
             "wacc": context.flexible_wacc,
             "terminal_growth": context.flexible_terminal_growth,
         }
@@ -722,7 +777,8 @@ class DecisionValuationService:
         if current_price <= 0:
             raise ValueError("Decision analysis requires a positive current price")
         engine = IntrinsicDecisionEngine(context)
-        intrinsic = ScenarioValuationService(self.policy).build(engine)
+        scenario_service = ScenarioValuationService(self.policy)
+        intrinsic = scenario_service.build(engine)
         relative_scenarios = self._relative_scenarios(relative, current_price)
         sensitivities = (
             (
@@ -746,19 +802,7 @@ class DecisionValuationService:
             if include_reverse_dcf
             else ()
         )
-        scenario_warnings = (
-            (
-                (
-                    "Combined FCFF scenario drivers were non-monotonic; bear and bull "
-                    "values use directional envelopes of the same disclosed stresses"
-                ),
-            )
-            if any(
-                "Directional scenario envelope" in case.methodology
-                for case in intrinsic
-            )
-            else ()
-        )
+        scenario_warnings = scenario_service.warnings
         return DecisionValuationResult(
             ticker=context.base_result.ticker,
             company_name=context.base_result.company_name,
@@ -864,6 +908,7 @@ class DecisionValuationService:
         cases = [
             (case.scenario.value.title(), "intrinsic", case.value_per_share)
             for case in intrinsic
+            if case.available and case.value_per_share is not None
         ]
         if relative is not None:
             relative_cases = DecisionValuationService._relative_case_group(relative)
@@ -896,17 +941,40 @@ class DecisionValuationService:
         )
 
     def _assessment(self, price, intrinsic, relative, *, target_date_relative=False):
-        intrinsic_band = self._band(
-            price,
-            intrinsic[0].value_per_share,
-            intrinsic[1].value_per_share,
-            intrinsic[2].value_per_share,
+        available_intrinsic = tuple(
+            case
+            for case in intrinsic
+            if case.available and case.value_per_share is not None
         )
+        base_case = intrinsic[1]
+        assert base_case.value_per_share is not None
+        if len(available_intrinsic) == 3:
+            intrinsic_band = self._band(
+                price,
+                intrinsic[0].value_per_share,
+                intrinsic[1].value_per_share,
+                intrinsic[2].value_per_share,
+            )
+            intrinsic_rationale = None
+        else:
+            intrinsic_band = self._single_value_band(price, base_case.value_per_share)
+            unavailable = ", ".join(
+                case.scenario.value.title() for case in intrinsic if not case.available
+            )
+            intrinsic_rationale = (
+                "Only the independently calculated Base intrinsic value was used "
+                f"because {unavailable} scenario evidence was unavailable"
+            )
         if not relative:
             return ValuationAssessment(
                 intrinsic=intrinsic_band,
                 overall=intrinsic_band.value,
                 rationale=(
+                    *(  # Keep unavailable scenario evidence explicit in the audit.
+                        (intrinsic_rationale,)
+                        if intrinsic_rationale is not None
+                        else ()
+                    ),
                     (
                         "Only present-day intrinsic DCF scenario evidence was used; "
                         "target-date peer/historical values are reported separately "
@@ -956,8 +1024,19 @@ class DecisionValuationService:
             relative=relative_band,
             overall=overall,
             model_dispersion=dispersion,
-            rationale=(rationale,),
+            rationale=(
+                *((intrinsic_rationale,) if intrinsic_rationale is not None else ()),
+                rationale,
+            ),
         )
+
+    def _single_value_band(self, price, value):
+        fair_fraction = self.policy.fair_value_band / PERCENT
+        if price < value * (Decimal(1) - fair_fraction):
+            return ValuationAssessmentBand.CHEAP
+        if price <= value * (Decimal(1) + fair_fraction):
+            return ValuationAssessmentBand.FAIR
+        return ValuationAssessmentBand.EXPENSIVE
 
     def _band(self, price, bear, base, bull):
         fair_fraction = self.policy.fair_value_band / PERCENT
