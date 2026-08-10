@@ -21,8 +21,10 @@ from edgarito.services.forecasting import (
     FcffForecastParameters,
     FcffForecastService,
     ForecastAssumptionSource,
+    ForecastSeedType,
     ForecastValue,
     ForwardGrowthEvidence,
+    ForwardGrowthOutlook,
     FreeCashFlowForecastService,
     MonetaryForecastConstraint,
     SimplifiedFcfForecastParameters,
@@ -638,6 +640,204 @@ def test_forward_evidence_delays_growth_fade_without_exceeding_stage_caps():
     assert evidence_plan.effective_years <= 30
     assert evidence_plan.forward_evidence_score > 0
     assert evidence_plan.forward_evidence_summary
+
+
+def test_ytd_slowdown_does_not_replace_normalized_forward_growth_anchor():
+    observations = list(_fcff_financials().observations)
+    quarterly_values = {
+        FinancialConcept.REVENUE: "25",
+        FinancialConcept.OPERATING_INCOME: "5",
+        FinancialConcept.PRETAX_INCOME: "4",
+        FinancialConcept.INCOME_TAX_EXPENSE: "1",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "1",
+        FinancialConcept.CAPITAL_EXPENDITURES: "2",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "5",
+        FinancialConcept.INVENTORY: "2",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "1",
+        FinancialConcept.ACCOUNTS_PAYABLE: "2",
+        FinancialConcept.ACCRUED_LIABILITIES: "1",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "1",
+    }
+    for period, period_end in (
+        (FiscalPeriod.Q1, datetime.date(2025, 3, 31)),
+        (FiscalPeriod.Q2, datetime.date(2025, 6, 30)),
+    ):
+        observations.extend(
+            _observation(
+                concept,
+                value,
+                2025,
+                granularity=Granularity.QUARTERLY,
+                fiscal_period=period,
+                period_end=period_end,
+            )
+            for concept, value in quarterly_values.items()
+        )
+    financials = _fcff_financials().model_copy(update={"observations": observations})
+    service = FcffForecastService()
+    seed_parameters = FcffForecastParameters(
+        forecast_years=5,
+        revenue_growth=Decimal("2.4"),
+    )
+    seed = service.forecast(financials, seed_parameters)
+    requested = seed_parameters.model_copy(update={"revenue_growth": None})
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        requested,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+    )
+
+    assert seed.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+    assert seed.observations[0].revenue_growth == Decimal("2.4")
+    assert forecast.observations[0].revenue_growth == Decimal("2.4")
+    assert plan.current_growth_rate == Decimal("2.4")
+    assert plan.forward_growth_rate == Decimal("20")
+    assert plan.forward_growth_rate > plan.terminal_growth_rate
+    assert not plan.stable_state_supported
+    assert forecast.observations[1].revenue_growth == Decimal("20")
+    assert plan.current_growth_years == 1
+
+
+def test_mature_low_growth_history_can_support_stable_state_without_current_proximity():
+    financials = _fcff_financials().model_copy(
+        update={
+            "observations": [
+                item.model_copy(update={"value": Decimal("102.5")})
+                if item.concept == FinancialConcept.REVENUE
+                and item.fiscal_year == 2024
+                else item
+                for item in _fcff_financials().observations
+            ]
+        }
+    )
+    service = FcffForecastService()
+    parameters = FcffForecastParameters(forecast_years=5)
+    seed = service.forecast(financials, parameters)
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+        forward_evidence=ForwardGrowthEvidence(lifecycle="mature"),
+    )
+
+    assert plan.forward_growth_rate == Decimal("2.5")
+    assert plan.stable_state_supported
+    assert plan.high_growth_years == 0
+    assert plan.transition_years == 0
+    assert plan.stable_years == 5
+    assert all(item.revenue_growth == Decimal("3") for item in forecast.observations)
+    assert "near_term" not in forecast.adaptive_stages
+
+
+def test_explicit_forward_growth_path_is_preserved_before_terminal_fade():
+    financials = _fcff_financials()
+    service = FcffForecastService()
+    parameters = FcffForecastParameters(forecast_years=5)
+    seed = service.forecast(financials, parameters)
+    forward_growth = ForwardGrowthOutlook(
+        growth_path=(Decimal("12"), Decimal("10"), Decimal("8")),
+        source=ForecastAssumptionSource.EXPLICIT.value,
+        confidence="high",
+    )
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+        forward_growth=forward_growth,
+    )
+
+    assert plan.forward_growth_source == ForecastAssumptionSource.EXPLICIT.value
+    assert plan.forward_growth_confidence == "high"
+    assert plan.forward_growth_path == (Decimal("12"), Decimal("10"), Decimal("8"))
+    assert [
+        item.revenue_growth for item in forecast.observations[:3]
+    ] == [Decimal("12"), Decimal("10"), Decimal("8")]
+    assert forecast.observations[3].revenue_growth > Decimal("3")
+
+
+def test_management_revenue_anchor_resolves_as_forward_growth_evidence():
+    financials = _fcff_financials()
+    service = FcffForecastService()
+    seed_parameters = FcffForecastParameters(forecast_years=5)
+    seed = service.forecast(financials, seed_parameters)
+    requested = seed_parameters.model_copy(
+        update={
+            "revenue_anchors": {2025: Decimal("132")},
+            "revenue_anchor_sources": {
+                2025: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            },
+        }
+    )
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        requested,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+    )
+
+    assert plan.forward_growth_source == ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value
+    assert plan.forward_growth_rate == Decimal("10")
+    assert plan.forward_growth_confidence == "high"
+    assert forecast.observations[0].revenue == Decimal("132")
+    assert forecast.observations[0].cell_audits["revenue"].source.startswith(
+        "derived["
+    )
+
+
+def test_run_rate_only_growth_is_low_confidence_and_does_not_claim_stability():
+    financials = _fcff_financials().model_copy(
+        update={
+            "observations": [
+                item
+                for item in _fcff_financials().observations
+                if item.fiscal_year == 2024
+            ]
+        }
+    )
+    parameters = FcffForecastParameters(
+        forecast_years=5,
+        revenue_growth=Decimal("2"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        capex_to_revenue=Decimal("6"),
+        operating_working_capital_to_revenue=Decimal("15"),
+    )
+    service = FcffForecastService()
+    seed = service.forecast(financials, parameters)
+    requested = parameters.model_copy(update={"revenue_growth": None})
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        requested,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+    )
+
+    assert plan.forward_growth_source == ForecastAssumptionSource.CURRENT_RUN_RATE.value
+    assert plan.forward_growth_confidence == "low"
+    assert not plan.stable_state_supported
+    assert any(
+        warning.startswith("LOW confidence") and "run-rate" in warning
+        for warning in forecast.warnings
+    )
 
 
 def test_adaptive_multistage_preserves_guidance_prefix_sources_by_year():

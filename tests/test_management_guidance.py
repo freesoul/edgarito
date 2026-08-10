@@ -4,6 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli.presentation.valuation_report import ValuationReportConsolePresenter
 from edgarito.schemas.guidance.management import (
@@ -157,6 +158,27 @@ def test_revenue_guidance_midpoint_becomes_absolute_anchor():
         "management guidance midpoint revenue anchor"
     )
     assert gross_margin in result.evidence_only
+
+
+def test_applied_revenue_growth_guidance_remains_quantitative_forward_evidence():
+    growth = _guidance(
+        GuidanceMetric.REVENUE_GROWTH,
+        point="12",
+        kind=GuidanceValueKind.PERCENTAGE,
+        currency=None,
+    )
+
+    _parameters, result = GuidanceForecastOverlay().apply(
+        [growth],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    evidence = cli_module._forward_growth_evidence("growth", set(), result)
+
+    assert evidence.growth_path == (Decimal("12"),)
+    assert evidence.growth_anchor == Decimal("12")
+    assert evidence.confidence == "high"
 
 
 def test_named_revenue_component_cannot_replace_total_company_anchor():

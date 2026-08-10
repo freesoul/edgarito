@@ -11,7 +11,9 @@ from edgarito.services.forecasting.models import (
     FcffForecastDriver,
     FcffForecastParameters,
     ForecastAssumptionSource,
+    ForecastSeedType,
     ForwardGrowthEvidence,
+    ForwardGrowthOutlook,
 )
 
 
@@ -36,16 +38,35 @@ class AdaptiveMultistageFcffForecastService:
             ObservationAvailabilityMode.POINT_IN_TIME
         ),
         forward_evidence: ForwardGrowthEvidence | None = None,
+        forward_growth: ForwardGrowthOutlook | None = None,
+        forward_growth_outlook: ForwardGrowthOutlook | None = None,
     ) -> tuple[FcffForecast, AdaptiveMultistagePlan]:
         if not seed_forecast.observations:
             raise ValueError("Adaptive multistage forecasting requires a seed forecast")
+        if forward_growth is not None and forward_growth_outlook is not None:
+            raise ValueError(
+                "Provide only one of forward_growth and forward_growth_outlook"
+            )
+        resolved_forward_growth = forward_growth or forward_growth_outlook
         if fixed_plan is None:
+            if resolved_forward_growth is None:
+                resolved_forward_growth = self.resolve_forward_growth(
+                    financials,
+                    seed_forecast,
+                    requested_parameters,
+                    terminal_growth_rate,
+                    forward_evidence=forward_evidence,
+                    convergence_tolerance=configuration.convergence_tolerance,
+                    as_of=as_of,
+                    availability_mode=availability_mode,
+                )
             growth_path, plan = self._growth_path(
                 seed_forecast,
                 requested_parameters,
                 terminal_growth_rate,
                 configuration,
                 forward_evidence,
+                resolved_forward_growth,
             )
         else:
             if len(seed_forecast.observations) != fixed_plan.effective_years:
@@ -132,6 +153,7 @@ class AdaptiveMultistageFcffForecastService:
             seed_forecast=seed_forecast,
             requested_parameters=requested_parameters,
             plan=plan,
+            forward_growth=resolved_forward_growth,
             tax_is_adaptive=tax_is_adaptive,
             reinvestment_is_adaptive=configuration.fade_reinvestment_to_terminal,
             depreciation_is_adaptive=(
@@ -165,7 +187,316 @@ class AdaptiveMultistageFcffForecastService:
                 ForecastAssumptionSource.MANAGEMENT_GUIDANCE
             )
         forecast.adaptive_stages = self._stage_path(plan)
+        if resolved_forward_growth is not None:
+            forecast.current_growth_rate = resolved_forward_growth.current_growth
+            forecast.warnings = tuple(
+                dict.fromkeys((*forecast.warnings, *resolved_forward_growth.warnings))
+            )
         return self._base_service.regenerate_cell_audits(forecast), plan
+
+    def resolve_forward_growth(
+        self,
+        financials: NormalizedCompanyFinancials,
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        terminal_growth_rate: Decimal,
+        *,
+        forward_evidence: ForwardGrowthEvidence | None = None,
+        convergence_tolerance: Decimal = Decimal("1"),
+        as_of=None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
+    ) -> ForwardGrowthOutlook:
+        """Resolve the forward growth regime without conflating it with YTD growth.
+
+        The order is intentionally explicit: configured paths, quantitative
+        management guidance, quantitative forward evidence, normalized annual
+        history, and finally the current run-rate.  The last case is retained
+        for continuity but is marked low confidence and cannot independently
+        establish a stable state.
+        """
+
+        current_growth = seed_forecast.current_growth_rate
+        if current_growth is None and seed_forecast.observations:
+            current_growth = seed_forecast.observations[0].revenue_growth
+
+        history_path = tuple(seed_forecast.normalized_historical_growth_path)
+        normalized_historical = seed_forecast.normalized_historical_growth
+        if not history_path:
+            history_path = self._annual_growth_path(
+                financials,
+                requested_parameters.historical_window,
+                as_of=as_of,
+                availability_mode=availability_mode,
+            )
+        if normalized_historical is None and history_path:
+            normalized_historical = sum(history_path, Decimal(0)) / Decimal(
+                len(history_path)
+            )
+
+        growth_override = requested_parameters.assumption_source_overrides.get(
+            FcffForecastDriver.REVENUE_GROWTH
+        )
+        configured_path = requested_parameters.revenue_growth
+        if configured_path is not None:
+            source = (
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value
+                if growth_override == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                else ForecastAssumptionSource.EXPLICIT.value
+            )
+            resolved_path = tuple(configured_path)
+            if (
+                growth_override == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                and forward_evidence is not None
+                and forward_evidence.growth_path
+            ):
+                # The overlay may carry a full baseline-length path after
+                # replacing only one guided year.  Prefer the quantitative
+                # guidance records themselves so uninformed years do not get
+                # mislabeled as a management-guidance prefix.
+                resolved_path = forward_evidence.growth_path
+            return self._make_outlook(
+                path=resolved_path,
+                source=source,
+                confidence="high",
+                current_growth=current_growth,
+                history_path=history_path,
+                terminal_growth_rate=terminal_growth_rate,
+                convergence_tolerance=convergence_tolerance,
+                forward_evidence=forward_evidence,
+            )
+
+        anchor_path, anchor_source, anchor_start = self._revenue_anchor_growth_path(
+            seed_forecast, requested_parameters
+        )
+        if anchor_path:
+            return self._make_outlook(
+                path=anchor_path if anchor_start == 0 else (),
+                anchor=anchor_path[-1],
+                source=anchor_source.value,
+                confidence="high",
+                current_growth=current_growth,
+                history_path=history_path,
+                terminal_growth_rate=terminal_growth_rate,
+                convergence_tolerance=convergence_tolerance,
+                forward_evidence=forward_evidence,
+            )
+
+        if forward_evidence is not None and (
+            forward_evidence.growth_path or forward_evidence.growth_anchor is not None
+        ):
+            return self._make_outlook(
+                path=forward_evidence.growth_path,
+                anchor=forward_evidence.growth_anchor,
+                source=ForecastAssumptionSource.FORWARD_EVIDENCE.value,
+                confidence=forward_evidence.confidence or "medium",
+                current_growth=current_growth,
+                history_path=history_path,
+                terminal_growth_rate=terminal_growth_rate,
+                convergence_tolerance=convergence_tolerance,
+                forward_evidence=forward_evidence,
+            )
+
+        if normalized_historical is not None:
+            return self._make_outlook(
+                anchor=normalized_historical,
+                source=ForecastAssumptionSource.NORMALIZED_HISTORICAL.value,
+                confidence="medium" if len(history_path) >= 2 else "low",
+                current_growth=current_growth,
+                history_path=history_path,
+                terminal_growth_rate=terminal_growth_rate,
+                convergence_tolerance=convergence_tolerance,
+                forward_evidence=forward_evidence,
+            )
+
+        if current_growth is None:
+            raise ValueError(
+                "Adaptive multistage forecasting requires current or normalized "
+                "revenue growth evidence"
+            )
+        return self._make_outlook(
+            anchor=current_growth,
+            source=ForecastAssumptionSource.CURRENT_RUN_RATE.value,
+            confidence="low",
+            current_growth=current_growth,
+            history_path=history_path,
+            terminal_growth_rate=terminal_growth_rate,
+            convergence_tolerance=convergence_tolerance,
+            forward_evidence=forward_evidence,
+        )
+
+    @classmethod
+    def _make_outlook(
+        cls,
+        *,
+        path: tuple[Decimal, ...] = (),
+        anchor: Decimal | None = None,
+        source: str,
+        confidence: str,
+        current_growth: Decimal | None,
+        history_path: tuple[Decimal, ...],
+        terminal_growth_rate: Decimal,
+        convergence_tolerance: Decimal,
+        forward_evidence: ForwardGrowthEvidence | None,
+    ) -> ForwardGrowthOutlook:
+        if anchor is None and path:
+            anchor = path[-1]
+        if anchor is None:
+            raise ValueError("Forward growth resolution produced no anchor")
+        current_near_terminal = (
+            current_growth is not None
+            and abs(current_growth - terminal_growth_rate) <= convergence_tolerance
+        )
+        stable_state_supported = cls._stable_state_supported(
+            anchor=anchor,
+            path=path,
+            history_path=history_path,
+            terminal_growth_rate=terminal_growth_rate,
+            convergence_tolerance=convergence_tolerance,
+            source=source,
+            forward_evidence=forward_evidence,
+        )
+        warnings: tuple[str, ...] = ()
+        if (
+            source == ForecastAssumptionSource.CURRENT_RUN_RATE.value
+            and not stable_state_supported
+        ):
+            warnings = (
+                "LOW confidence: current run-rate is the only forward-growth "
+                "evidence; stable-state eligibility is uncertain",
+            )
+        return ForwardGrowthOutlook(
+            growth_path=path,
+            normalized_growth=anchor,
+            source=source,
+            confidence=confidence,
+            current_growth=current_growth,
+            stable_state_supported=stable_state_supported,
+            current_growth_near_terminal=current_near_terminal,
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _stable_state_supported(
+        *,
+        anchor: Decimal,
+        path: tuple[Decimal, ...],
+        history_path: tuple[Decimal, ...],
+        terminal_growth_rate: Decimal,
+        convergence_tolerance: Decimal,
+        source: str,
+        forward_evidence: ForwardGrowthEvidence | None,
+    ) -> bool:
+        """Require history/forward support rather than current-rate proximity."""
+
+        if source == ForecastAssumptionSource.CURRENT_RUN_RATE.value:
+            return False
+        lifecycle = (
+            forward_evidence.lifecycle.casefold()
+            if forward_evidence is not None
+            else "unknown"
+        )
+        if lifecycle in {
+            "growth",
+            "unprofitable_growth",
+            "pre_revenue",
+            "distressed",
+        }:
+            return False
+        positive_forward_signal = forward_evidence is not None and (
+            forward_evidence.backlog
+            or forward_evidence.guidance
+            or forward_evidence.capacity
+            or forward_evidence.growth_visibility > Decimal("0")
+        )
+        if positive_forward_signal:
+            return False
+        if abs(anchor - terminal_growth_rate) > convergence_tolerance:
+            return False
+
+        def stable_values(values: tuple[Decimal, ...]) -> bool:
+            return bool(values) and (
+                max(values) - min(values) <= convergence_tolerance
+            )
+
+        # Two or more consecutive annual growth observations provide the
+        # minimum historical evidence.  A mature lifecycle classification can
+        # supplement a single normalized growth estimate, but never a growth
+        # lifecycle or a current run-rate-only fallback.
+        historical_support = len(history_path) >= 2 and stable_values(history_path)
+        forward_support = len(path) >= 2 and stable_values(path)
+        mature_lifecycle_support = lifecycle in {"mature", "declining"} and bool(
+            history_path
+        )
+        return historical_support or forward_support or mature_lifecycle_support
+
+    def _annual_growth_path(
+        self,
+        financials: NormalizedCompanyFinancials,
+        historical_window: int,
+        *,
+        as_of,
+        availability_mode: ObservationAvailabilityMode,
+    ) -> tuple[Decimal, ...]:
+        if as_of is not None:
+            financials = financials.model_copy(
+                update={
+                    "observations": [
+                        item
+                        for item in financials.observations
+                        if self._base_service._availability_service.is_available(
+                            item,
+                            as_of=as_of,
+                            mode=availability_mode,
+                            snapshot_retrieved_at=financials.retrieved_at,
+                        )
+                    ]
+                }
+            )
+        periods = self._base_service._complete_annual_periods(financials)
+        return tuple(
+            self._base_service._historical_values(
+                FcffForecastDriver.REVENUE_GROWTH,
+                periods[-historical_window:],
+            )
+        )
+
+    @staticmethod
+    def _revenue_anchor_growth_path(
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+    ) -> tuple[tuple[Decimal, ...], ForecastAssumptionSource, int | None]:
+        if not requested_parameters.revenue_anchors:
+            return (), ForecastAssumptionSource.EXPLICIT, None
+        source_values = requested_parameters.revenue_anchor_sources
+        source = (
+            ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            if any(
+                value == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                for value in source_values.values()
+            )
+            and not any(
+                value == ForecastAssumptionSource.EXPLICIT
+                for value in source_values.values()
+            )
+            else ForecastAssumptionSource.EXPLICIT
+        )
+        previous_revenue = seed_forecast.base_revenue
+        has_anchor = False
+        first_anchor_index = None
+        path = []
+        for index, observation in enumerate(seed_forecast.observations):
+            target = requested_parameters.revenue_anchors.get(observation.fiscal_year)
+            if target is not None and previous_revenue > 0:
+                path.append((target / previous_revenue - Decimal(1)) * Decimal(100))
+                previous_revenue = target
+                has_anchor = True
+                if first_anchor_index is None:
+                    first_anchor_index = index
+            elif not has_anchor:
+                previous_revenue = observation.revenue
+        return tuple(path), source, first_anchor_index
 
     @classmethod
     def _source_paths(
@@ -174,6 +505,7 @@ class AdaptiveMultistageFcffForecastService:
         seed_forecast: FcffForecast,
         requested_parameters: FcffForecastParameters,
         plan: AdaptiveMultistagePlan,
+        forward_growth: ForwardGrowthOutlook | None,
         tax_is_adaptive: bool,
         reinvestment_is_adaptive: bool,
         depreciation_is_adaptive: bool,
@@ -187,20 +519,23 @@ class AdaptiveMultistageFcffForecastService:
             for driver in FcffForecastDriver
         }
 
-        growth_base = cls._base_source(
-            seed_forecast, requested_parameters, FcffForecastDriver.REVENUE_GROWTH
+        growth_base = cls._growth_source(
+            seed_forecast,
+            requested_parameters,
+            plan,
+            forward_growth,
         )
-        growth_prefix = 0
-        if requested_parameters.revenue_growth is not None:
-            if len(requested_parameters.revenue_growth) > 1:
-                growth_prefix = plan.explicit_growth_prefix_years
-            elif growth_base in {
-                ForecastAssumptionSource.EXPLICIT,
-                ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
-            }:
-                growth_prefix = 1
-        paths[FcffForecastDriver.REVENUE_GROWTH] = cls._prefix_adaptive_path(
-            growth_base, growth_prefix, years
+        growth_prefix = plan.explicit_growth_prefix_years
+        growth_current = (
+            (ForecastAssumptionSource.CURRENT_RUN_RATE,)
+            if plan.current_growth_years
+            else ()
+        )
+        paths[FcffForecastDriver.REVENUE_GROWTH] = (
+            growth_current
+            + (growth_base,) * min(growth_prefix, years - len(growth_current))
+            + (ForecastAssumptionSource.ADAPTIVE_MULTISTAGE,)
+            * max(0, years - len(growth_current) - growth_prefix)
         )
 
         if tax_is_adaptive:
@@ -237,6 +572,35 @@ class AdaptiveMultistageFcffForecastService:
         return paths
 
     @staticmethod
+    def _growth_source(
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        plan: AdaptiveMultistagePlan,
+        forward_growth: ForwardGrowthOutlook | None,
+    ) -> ForecastAssumptionSource:
+        if forward_growth is not None:
+            source_alias = {
+                "consensus": ForecastAssumptionSource.FORWARD_EVIDENCE,
+                "forward_consensus": ForecastAssumptionSource.FORWARD_EVIDENCE,
+                "profile": ForecastAssumptionSource.EXPLICIT,
+                "cli": ForecastAssumptionSource.EXPLICIT,
+                "management": ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
+                "normalized_history": ForecastAssumptionSource.NORMALIZED_HISTORICAL,
+                "run_rate": ForecastAssumptionSource.CURRENT_RUN_RATE,
+            }.get(forward_growth.source)
+            if source_alias is not None:
+                return source_alias
+            try:
+                return ForecastAssumptionSource(forward_growth.source)
+            except ValueError:
+                pass
+        return AdaptiveMultistageFcffForecastService._base_source(
+            seed_forecast,
+            requested_parameters,
+            FcffForecastDriver.REVENUE_GROWTH,
+        )
+
+    @staticmethod
     def _base_source(
         seed_forecast: FcffForecast,
         requested_parameters: FcffForecastParameters,
@@ -267,8 +631,9 @@ class AdaptiveMultistageFcffForecastService:
     @staticmethod
     def _stage_path(plan: AdaptiveMultistagePlan) -> tuple[str, ...]:
         return (
-            ("explicit",) * plan.explicit_growth_prefix_years
-            + ("high_growth",) * plan.high_growth_years
+            ("current",) * plan.current_growth_years
+            + ("explicit",) * plan.explicit_growth_prefix_years
+            + ("near_term",) * plan.high_growth_years
             + ("transition",) * plan.transition_years
             + ("stable",) * plan.stable_years
         )
@@ -358,7 +723,9 @@ class AdaptiveMultistageFcffForecastService:
         else:
             held_years = max(
                 1,
-                plan.explicit_growth_prefix_years + plan.high_growth_years,
+                plan.current_growth_years
+                + plan.explicit_growth_prefix_years
+                + plan.high_growth_years,
             )
             prefix = [explicit[0] if explicit is not None else initial] * held_years
         remaining = convergence_year - len(prefix)
@@ -397,23 +764,54 @@ class AdaptiveMultistageFcffForecastService:
         terminal_growth_rate,
         configuration,
         forward_evidence=None,
+        forward_growth: ForwardGrowthOutlook | None = None,
     ) -> tuple[tuple[Decimal, ...], AdaptiveMultistagePlan]:
-        configured = parameters.revenue_growth
-        explicit_prefix: tuple[Decimal, ...] = ()
+        if forward_growth is None:
+            configured = parameters.revenue_growth
+            fallback_anchor = (
+                configured[-1]
+                if configured is not None
+                else (
+                    seed_forecast.normalized_historical_growth
+                    if seed_forecast.normalized_historical_growth is not None
+                    else seed_forecast.observations[0].revenue_growth
+                )
+            )
+            forward_growth = self._make_outlook(
+                path=tuple(configured or ()),
+                anchor=fallback_anchor,
+                source=(
+                    ForecastAssumptionSource.EXPLICIT.value
+                    if configured is not None
+                    else ForecastAssumptionSource.NORMALIZED_HISTORICAL.value
+                ),
+                confidence="high" if configured is not None else "medium",
+                current_growth=(
+                    seed_forecast.current_growth_rate
+                    or seed_forecast.observations[0].revenue_growth
+                ),
+                history_path=tuple(seed_forecast.normalized_historical_growth_path),
+                terminal_growth_rate=terminal_growth_rate,
+                convergence_tolerance=configuration.convergence_tolerance,
+                forward_evidence=forward_evidence,
+            )
+
+        explicit_prefix = tuple(
+            forward_growth.growth_path[: parameters.forecast_years]
+        )
+        initial_growth = forward_growth.anchor
         evidence_score = (
             forward_evidence.score if forward_evidence is not None else Decimal(0)
         )
-        if configured is not None and len(configured) > 1:
-            explicit_prefix = tuple(configured)
-            initial_growth = explicit_prefix[-1]
+        gap = abs(initial_growth - terminal_growth_rate)
+        stable_ready = forward_growth.stable_state_supported and (
+            gap <= configuration.convergence_tolerance
+        )
+
+        if stable_ready:
             high_growth_years = 0
+            transition_years = 0
         else:
-            initial_growth = (
-                configured[0]
-                if configured is not None
-                else seed_forecast.observations[0].revenue_growth
-            )
-            gap = abs(initial_growth - terminal_growth_rate)
             high_growth_years = (
                 min(
                     configuration.maximum_high_growth_years,
@@ -422,17 +820,20 @@ class AdaptiveMultistageFcffForecastService:
                 if gap >= configuration.convergence_tolerance
                 else 0
             )
-
-            if forward_evidence is not None:
-                evidence_score = forward_evidence.score
+            if explicit_prefix:
+                # A supplied forward path already defines the near-term
+                # regime; do not add another synthetic hold year after it.
+                high_growth_years = 0
+            if forward_evidence is not None and not explicit_prefix:
                 high_growth_years = min(
                     configuration.maximum_high_growth_years,
                     high_growth_years + self._ceiling(evidence_score * Decimal("3")),
                 )
-        gap = abs(initial_growth - terminal_growth_rate)
-        transition_years = 0
-        if gap >= configuration.convergence_tolerance:
-            transition_years = self._ceiling(gap / configuration.max_annual_growth_fade)
+            transition_years = (
+                self._ceiling(gap / configuration.max_annual_growth_fade)
+                if gap >= configuration.convergence_tolerance
+                else configuration.minimum_transition_years
+            )
             if forward_evidence is not None:
                 transition_years += self._ceiling(evidence_score * Decimal("5"))
             transition_years = max(
@@ -440,7 +841,17 @@ class AdaptiveMultistageFcffForecastService:
                 min(configuration.maximum_transition_years, transition_years),
             )
 
-        convergence_year = len(explicit_prefix) + high_growth_years + transition_years
+        current_growth_years = int(
+            seed_forecast.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+            and not explicit_prefix
+            and not parameters.revenue_anchors
+        )
+        convergence_year = (
+            current_growth_years
+            + len(explicit_prefix)
+            + high_growth_years
+            + transition_years
+        )
         effective_years = parameters.forecast_years
         if configuration.extend_to_stable:
             # One full year after the fade is needed for FCFF growth itself to
@@ -452,7 +863,15 @@ class AdaptiveMultistageFcffForecastService:
                 "limit; shorten the explicit growth path or increase the allowed fade"
             )
 
-        full_path = [*explicit_prefix, *([initial_growth] * high_growth_years)]
+        full_path = []
+        if current_growth_years:
+            full_path.append(
+                forward_growth.current_growth
+                if forward_growth.current_growth is not None
+                else initial_growth
+            )
+        full_path.extend(explicit_prefix)
+        full_path.extend([initial_growth] * high_growth_years)
         full_path.extend(
             self._linear_transition(
                 initial_growth, terminal_growth_rate, transition_years
@@ -463,8 +882,10 @@ class AdaptiveMultistageFcffForecastService:
         )
         path = tuple(full_path[:effective_years])
 
-        explicit_used = min(len(explicit_prefix), effective_years)
-        remaining = effective_years - explicit_used
+        current_used = min(current_growth_years, effective_years)
+        remaining = effective_years - current_used
+        explicit_used = min(len(explicit_prefix), remaining)
+        remaining -= explicit_used
         high_used = min(high_growth_years, remaining)
         remaining -= high_used
         transition_used = min(transition_years, remaining)
@@ -486,6 +907,15 @@ class AdaptiveMultistageFcffForecastService:
             forward_evidence_summary=(
                 forward_evidence.summary if forward_evidence is not None else ()
             ),
+            current_growth_years=current_used,
+            current_growth_rate=forward_growth.current_growth,
+            forward_growth_rate=forward_growth.anchor,
+            forward_growth_path=forward_growth.growth_path,
+            forward_growth_source=forward_growth.source,
+            forward_growth_confidence=forward_growth.confidence,
+            stable_state_supported=forward_growth.stable_state_supported,
+            current_growth_near_terminal=forward_growth.current_growth_near_terminal,
+            warnings=forward_growth.warnings,
         )
         return path, plan
 
@@ -495,7 +925,11 @@ class AdaptiveMultistageFcffForecastService:
         target: Decimal,
         plan: AdaptiveMultistagePlan,
     ) -> tuple[Decimal, ...]:
-        prefix_years = plan.explicit_growth_prefix_years + plan.high_growth_years
+        prefix_years = (
+            plan.current_growth_years
+            + plan.explicit_growth_prefix_years
+            + plan.high_growth_years
+        )
         values = [initial] * prefix_years
         values.extend(
             AdaptiveMultistageFcffForecastService._linear_transition(

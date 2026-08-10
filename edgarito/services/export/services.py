@@ -306,6 +306,11 @@ def _fcff_forecast(source: FcffForecast) -> FcffForecastExport:
             if source.ytd_anchor is not None
             else None
         ),
+        current_growth_rate=source.current_growth_rate,
+        normalized_historical_growth=source.normalized_historical_growth,
+        normalized_historical_growth_path=tuple(
+            source.normalized_historical_growth_path
+        ),
     )
 
 

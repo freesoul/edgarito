@@ -343,6 +343,9 @@ class FcffForecastExport(BaseModel):
     warnings: tuple[str, ...] = ()
     ytd_anchor: FcffForecastYtdAnchorExport | None = None
     capex_constraints_applied: tuple[int, ...] = ()
+    current_growth_rate: Decimal | None = None
+    normalized_historical_growth: Decimal | None = None
+    normalized_historical_growth_path: tuple[Decimal, ...] = ()
 
 
 class AdaptiveMultistagePlanExport(BaseModel):
@@ -368,6 +371,15 @@ class AdaptiveMultistagePlanExport(BaseModel):
     depreciable_asset_life_years: int | None = None
     forward_evidence_score: Decimal
     forward_evidence_summary: tuple[str, ...] = ()
+    current_growth_years: int = 0
+    current_growth_rate: Decimal | None = None
+    forward_growth_rate: Decimal | None = None
+    forward_growth_path: tuple[Decimal, ...] = ()
+    forward_growth_source: str | None = None
+    forward_growth_confidence: str | None = None
+    stable_state_supported: bool = False
+    current_growth_near_terminal: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 class ForecastKind(str, Enum):
