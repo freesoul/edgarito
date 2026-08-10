@@ -581,13 +581,19 @@ class _Edgar:
 
 class _MultiFilingEdgar:
     def __init__(self, filings):
-        self.filings = filings
+        self.filings = tuple(filings)
+        self.fetched_accessions = []
 
     async def get_guidance_filings(self, cik, **kwargs):
-        return self.filings
+        return [filing.model_copy(update={"documents": ()}) for filing in self.filings]
 
     async def get_filing_documents(self, filing, **kwargs):
-        return filing
+        self.fetched_accessions.append(filing.accession_number)
+        return next(
+            item
+            for item in self.filings
+            if item.accession_number == filing.accession_number
+        )
 
 
 def test_periodic_primary_is_processed_before_current_documents_consume_budget(
@@ -637,6 +643,34 @@ def test_periodic_primary_is_processed_before_current_documents_consume_budget(
     assert result.document_audits[0].filename == "primary.htm"
     assert result.document_audits[0].is_primary
 
+def _budget_filing(form, accession, filing_date):
+    primary_document = f"{accession}-primary.htm"
+    documents = tuple(
+        SecFilingDocument(
+            filename=(
+                primary_document if index == 0 else f"{accession}-ex99-{index}.htm"
+            ),
+            document_type=form if index == 0 else "EX-99.1",
+            description=(
+                "Quarterly report" if index == 0 else "Financial results press release"
+            ),
+            content="We expect FY2026 revenue of $10-$11 billion.",
+        )
+        for index in range(3)
+    )
+    return SecFiling(
+        cik=1,
+        accession_number=accession,
+        form=form,
+        filing_date=filing_date,
+        items=("2.02",) if form == "8-K" else (),
+        primary_document=primary_document,
+        primary_document_description=(
+            "Current financial results" if form == "8-K" else "Quarterly report"
+        ),
+        documents=documents,
+    )
+
 
 def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_path):
     document = SecFilingDocument(
@@ -680,6 +714,64 @@ def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_pat
     assert first.documents_inspected == second.documents_inspected == 1
     assert first.extracted_guidance_records == second.extracted_guidance_records == 1
     assert first.rejected_records == second.rejected_records == 0
+
+
+def test_service_reserves_document_capacity_for_selected_periodic_filing(tmp_path):
+    current_filings = [
+        _budget_filing(
+            "8-K",
+            f"0000000001-26-00000{index}",
+            datetime.date(2026, 7, 10 + index),
+        )
+        for index in (1, 2)
+    ]
+    periodic = _budget_filing(
+        "10-Q", "0000000001-26-000003", datetime.date(2026, 7, 13)
+    )
+    edgar = _MultiFilingEdgar([*current_filings, periodic])
+    ai = _Ai()
+
+    result = asyncio.run(
+        ManagementGuidanceService(
+            edgar,
+            ManagementGuidanceExtractor(ai, FileSystemCache(tmp_path)),
+            max_filings=3,
+            max_documents_per_filing=3,
+            max_documents=6,
+        ).retrieve(ticker="TEST", cik=1, as_of=datetime.date(2026, 8, 1))
+    )
+
+    assert periodic.accession_number in edgar.fetched_accessions
+    assert len(edgar.fetched_accessions) == 3
+    assert ai.calls == 6
+    assert result.filings_inspected == 3
+    assert result.documents_inspected == 6
+
+
+def test_service_does_not_count_filings_skipped_by_document_budget(tmp_path):
+    filings = [
+        _budget_filing(
+            "8-K",
+            f"0000000001-26-00000{index}",
+            datetime.date(2026, 7, 10 + index),
+        )
+        for index in (1, 2)
+    ]
+    edgar = _MultiFilingEdgar(filings)
+
+    result = asyncio.run(
+        ManagementGuidanceService(
+            edgar,
+            ManagementGuidanceExtractor(_Ai(), FileSystemCache(tmp_path)),
+            max_filings=2,
+            max_documents_per_filing=3,
+            max_documents=1,
+        ).retrieve(ticker="TEST", cik=1, as_of=datetime.date(2026, 8, 1))
+    )
+
+    assert len(edgar.fetched_accessions) == 1
+    assert result.filings_inspected == 1
+    assert result.documents_inspected == 1
 
 
 def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
