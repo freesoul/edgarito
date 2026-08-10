@@ -221,15 +221,29 @@ class DecisionValuationConsolePresenter:
             values = tuple(
                 case.assumptions[index].value for case in result.intrinsic_scenarios
             )
+            rendered_values = tuple(
+                (f"{value:>11,.2f}%" if value is not None else f"{'unavailable':>11}")
+                for value in values
+            )
             lines.append(
-                f"{assumption.name:<30}{values[0]:>11,.2f}%"
-                f"{values[1]:>11,.2f}%{values[2]:>11,.2f}%"
+                f"{assumption.name:<30}{rendered_values[0]}"
+                f"{rendered_values[1]}{rendered_values[2]}"
             )
         values = tuple(case.value_per_share for case in result.intrinsic_scenarios)
-        lines.append(
-            f"{'Intrinsic value/share':<30}{values[0]:>12,.2f}"
-            f"{values[1]:>12,.2f}{values[2]:>12,.2f}"
+        rendered_values = tuple(
+            (f"{value:>12,.2f}" if value is not None else f"{'unavailable':>12}")
+            for value in values
         )
+        lines.append(
+            f"{'Intrinsic value/share':<30}{rendered_values[0]}"
+            f"{rendered_values[1]}{rendered_values[2]}"
+        )
+        for case in result.intrinsic_scenarios:
+            if not case.available:
+                lines.append(
+                    f"{case.scenario.value.title()} scenario unavailable: "
+                    f"{case.invalid_reason}"
+                )
         if result.relative_scenarios:
             multiples = tuple(case.multiple for case in result.relative_scenarios)
             values = tuple(case.value_per_share for case in result.relative_scenarios)

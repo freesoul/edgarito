@@ -53,17 +53,17 @@ class AdaptiveMultistageFcffForecastService:
                     "A fixed multistage plan requires a seed forecast with the "
                     "same effective horizon"
                 )
-            stable_years = fixed_plan.stable_years
-            prefix_years = fixed_plan.effective_years - stable_years
-            growth_path = (
-                *(
-                    observation.revenue_growth
-                    for observation in seed_forecast.observations[:prefix_years]
-                ),
-                *([terminal_growth_rate] * stable_years),
+            growth_path = self._fixed_growth_path(
+                seed_forecast,
+                requested_parameters,
+                terminal_growth_rate,
+                fixed_plan,
             )
             plan = fixed_plan.model_copy(
-                update={"terminal_growth_rate": terminal_growth_rate}
+                update={
+                    "initial_growth_rate": growth_path[0],
+                    "terminal_growth_rate": terminal_growth_rate,
+                }
             )
         values = requested_parameters.model_dump()
         values["forecast_years"] = plan.effective_years
@@ -166,6 +166,62 @@ class AdaptiveMultistageFcffForecastService:
             )
         forecast.adaptive_stages = self._stage_path(plan)
         return self._base_service.regenerate_cell_audits(forecast), plan
+
+    @classmethod
+    def _fixed_growth_path(
+        cls,
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        terminal_growth_rate: Decimal,
+        plan: AdaptiveMultistagePlan,
+    ) -> tuple[Decimal, ...]:
+        """Change growth economics without changing the selected stage topology.
+
+        A fixed plan is used by decision scenarios and sensitivity cells.  The
+        old implementation always copied the seed growth path, which meant a
+        scenario's requested revenue-growth stress silently disappeared.  Use
+        the requested path when one is supplied, while retaining the base path
+        for callers that only vary terminal growth (the sensitivity workflow).
+        Stage counts remain those selected for the independently calculated Base
+        case, so a stress cannot reverse scenario ordering merely by creating a
+        different lifecycle horizon.
+        """
+
+        effective_years = plan.effective_years
+        stable_years = plan.stable_years
+        prefix_years = plan.explicit_growth_prefix_years
+        configured = requested_parameters.revenue_growth
+        if configured is None:
+            prefix = [
+                observation.revenue_growth
+                for observation in seed_forecast.observations[
+                    : effective_years - stable_years
+                ]
+            ]
+            return tuple([*prefix, *([terminal_growth_rate] * stable_years)])
+
+        if len(configured) > 1:
+            explicit_prefix = list(configured[:prefix_years])
+            initial_growth = explicit_prefix[-1] if explicit_prefix else configured[0]
+        else:
+            explicit_prefix = [configured[0]] * prefix_years
+            initial_growth = configured[0]
+
+        remaining = effective_years - prefix_years
+        high_growth_years = min(plan.high_growth_years, remaining)
+        remaining -= high_growth_years
+        transition_years = min(plan.transition_years, remaining)
+        stable_years = remaining - transition_years
+        path = [*explicit_prefix, *([initial_growth] * high_growth_years)]
+        path.extend(
+            cls._linear_transition(
+                initial_growth,
+                terminal_growth_rate,
+                transition_years,
+            )
+        )
+        path.extend([terminal_growth_rate] * stable_years)
+        return tuple(path)
 
     @classmethod
     def _source_paths(

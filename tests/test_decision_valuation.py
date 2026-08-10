@@ -22,6 +22,7 @@ from edgarito.services.forecasting import (
 )
 from edgarito.services.valuation import (
     DecisionScenario,
+    DecisionScenarioPolicy,
     DecisionValuationResult,
     DecisionValuationService,
     FcffDcfCapitalBridge,
@@ -173,7 +174,8 @@ def test_scenarios_are_ordered_reproducible_and_change_real_assumptions():
 
     assert first == second
     bear, base, bull = first
-    assert bear.value_per_share <= base.value_per_share <= bull.value_per_share
+    assert bear.available and base.available and bull.available
+    assert bear.value_per_share < base.value_per_share < bull.value_per_share
     assert bear.assumptions[0].value < base.assumptions[0].value
     assert bull.assumptions[1].value > base.assumptions[1].value
     assert bear.assumptions[3].value > base.assumptions[3].value
@@ -188,10 +190,13 @@ def test_scenarios_preserve_explicit_profile_or_cli_assumptions():
         IntrinsicDecisionEngine(_context(explicit=True))
     )
 
-    assert (
-        cases[0].value_per_share == cases[1].value_per_share == cases[2].value_per_share
-    )
+    assert cases[1].available
+    assert cases[1].value_per_share is not None
     for case in (cases[0], cases[2]):
+        assert not case.available
+        assert case.value_per_share is None
+        assert case.invalid_reason
+        assert "explicit assumptions" in case.invalid_reason
         assert not any(item.changed for item in case.assumptions)
         assert all("preserved explicit" in item.source for item in case.assumptions)
 
@@ -209,13 +214,15 @@ def test_scenarios_preserve_an_explicit_negative_terminal_growth():
         assert not terminal_growth.changed
 
 
-def test_non_monotonic_combined_scenarios_use_directional_value_envelopes():
-    context = _context(capex_ratio=Decimal("60"))
-    service = ScenarioValuationService()
-    raw_bull = service._variant(IntrinsicDecisionEngine(context), DecisionScenario.BULL)
+def test_non_monotonic_combined_scenarios_are_explicitly_unavailable():
+    context = _context()
+    policy = DecisionScenarioPolicy(bull_wacc_delta=Decimal("-20"))
+    service = ScenarioValuationService(policy)
+    engine = IntrinsicDecisionEngine(context)
+    raw_bull = service._variant(engine, DecisionScenario.BULL)
     assert raw_bull.value_per_share < context.base_result.value_per_share
 
-    result = DecisionValuationService().build(
+    result = DecisionValuationService(policy).build(
         context,
         Decimal("10"),
         include_sensitivity=False,
@@ -223,9 +230,63 @@ def test_non_monotonic_combined_scenarios_use_directional_value_envelopes():
     )
 
     bear, base, bull = result.intrinsic_scenarios
-    assert bear.value_per_share <= base.value_per_share <= bull.value_per_share
-    assert "Directional scenario envelope" in bull.methodology
-    assert any("non-monotonic" in warning for warning in result.warnings)
+    assert bear.available and base.available
+    assert not bull.available
+    assert bull.value_per_share is None
+    assert "non-monotonic" in bull.invalid_reason
+    assert "non-monotonic" in " ".join(result.warnings).lower()
+
+
+def test_scenario_revaluation_reuses_base_multistage_topology():
+    context = _context()
+    engine = IntrinsicDecisionEngine(context)
+    service = ScenarioValuationService()
+    values = service._scenario_values(context, DecisionScenario.BULL)
+
+    evaluation = engine.evaluate(
+        revenue_growth=values["revenue_growth"],
+        operating_margin=values["operating_margin"],
+        terminal_roic=values["terminal_roic"],
+        terminal_growth=values["terminal_growth"],
+        wacc=values["wacc"],
+        preserve_projection_structure=True,
+    )
+
+    base_plan = context.base_result.multistage_plan
+    scenario_plan = evaluation.result.multistage_plan
+    assert base_plan is not None and scenario_plan is not None
+    assert (
+        scenario_plan.explicit_growth_prefix_years,
+        scenario_plan.high_growth_years,
+        scenario_plan.transition_years,
+        scenario_plan.stable_years,
+    ) == (
+        base_plan.explicit_growth_prefix_years,
+        base_plan.high_growth_years,
+        base_plan.transition_years,
+        base_plan.stable_years,
+    )
+    assert evaluation.forecast.adaptive_stages == context.base_forecast.adaptive_stages
+
+
+def test_unavailable_scenarios_are_rendered_without_publishing_base_as_bull():
+    context = _context(explicit=True)
+    result = DecisionValuationService().build(
+        context,
+        Decimal("10"),
+        include_sensitivity=False,
+        include_reverse_dcf=False,
+    )
+
+    rendered = DecisionValuationConsolePresenter().render(result, show_scenarios=True)
+
+    assert "Bear scenario unavailable" in rendered
+    assert "Bull scenario unavailable" in rendered
+    assert "Intrinsic value/share" in rendered
+    assert "unavailable" in rendered
+    assert not any(
+        comparison.label == "Bull" for comparison in result.price_comparisons
+    )
 
 
 def test_sensitivity_is_monotonic_and_marks_invalid_wacc_growth_pairs():

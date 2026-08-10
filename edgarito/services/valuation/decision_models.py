@@ -55,9 +55,59 @@ class ScenarioAssumption(_DecisionModel):
 
 class IntrinsicScenarioCase(_DecisionModel):
     scenario: DecisionScenario
-    value_per_share: Decimal
+    value_per_share: Decimal | None = None
     assumptions: tuple[ScenarioAssumption, ...]
     methodology: str
+    available: bool = True
+    invalid_reason: str | None = None
+    warnings: tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_unavailable_state(cls, values):
+        """Allow invalid cases to be represented without a fake valuation.
+
+        A missing value is the important part of the public contract: an
+        unavailable scenario must not carry Base (or any other scenario's)
+        number as a placeholder.  Inferring ``available=False`` when callers
+        provide an invalid reason keeps construction backwards-compatible for
+        integrations that only know about the new reason field.
+        """
+
+        if isinstance(values, dict) and (
+            values.get("value_per_share") is None
+            or values.get("invalid_reason") is not None
+        ):
+            values = dict(values)
+            values.setdefault("available", False)
+        return values
+
+    @model_validator(mode="after")
+    def validate_availability(self):
+        if self.available:
+            if self.value_per_share is None:
+                raise ValueError(
+                    "Available intrinsic scenarios require a value per share"
+                )
+            if self.invalid_reason is not None:
+                raise ValueError(
+                    "Available intrinsic scenarios cannot have an invalid reason"
+                )
+        elif self.value_per_share is not None:
+            raise ValueError(
+                "Unavailable intrinsic scenarios cannot publish a value per share"
+            )
+        elif not self.invalid_reason:
+            raise ValueError(
+                "Unavailable intrinsic scenarios require a clear invalid reason"
+            )
+        return self
+
+    @property
+    def is_available(self) -> bool:
+        """Compatibility alias for consumers using predicate-style naming."""
+
+        return self.available
 
 
 class RelativeScenarioCase(_DecisionModel):
@@ -158,6 +208,18 @@ class DecisionValuationResult(_DecisionModel):
         )
         if intrinsic_names != expected:
             raise ValueError("Intrinsic scenarios must be ordered bear, base, bull")
+        base = self.intrinsic_scenarios[1]
+        if not base.available or base.value_per_share is None:
+            raise ValueError("The independently calculated Base scenario is required")
+        if all(item.available for item in self.intrinsic_scenarios):
+            bear, _, bull = self.intrinsic_scenarios
+            assert bear.value_per_share is not None
+            assert bull.value_per_share is not None
+            if not bear.value_per_share < base.value_per_share < bull.value_per_share:
+                raise ValueError(
+                    "Available intrinsic scenarios must satisfy strict "
+                    "Bear < Base < Bull ordering"
+                )
         return self
 
 
