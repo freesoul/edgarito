@@ -39,10 +39,16 @@ from edgarito.services.reconciliation.providers import (
 class FinancialDataScore:
     """Quality dimensions used to choose one provider result.
 
-    Completeness is the proportion of the observations available from any
-    candidate that this candidate supplies.  It is intentionally calculated
-    over observation keys rather than values: automatic selection must not
-    reconcile, average, or otherwise combine provider data.
+    When concepts are requested, requested concept coverage is ranked before
+    observation-key completeness.  Completeness is the proportion of the
+    observations available from any candidate that this candidate supplies.
+    It is intentionally calculated over observation keys rather than values:
+    automatic selection must not reconcile, average, or otherwise combine
+    provider data.
+
+    A provider that returns many observations for only a subset of requested
+    concepts must therefore lose to a provider that covers every requested
+    concept, even when the latter returns fewer observations overall.
     """
 
     completeness: float
@@ -50,11 +56,13 @@ class FinancialDataScore:
     latest_filed: Optional[datetime.date]
     retrieved_at: Optional[datetime.datetime]
     observation_count: int
+    requested_concept_coverage: float = 0.0
 
     @property
-    def ranking_key(self) -> tuple[float, int, int, float, int]:
-        """Return a deterministic key with completeness ahead of freshness."""
+    def ranking_key(self) -> tuple[float, float, int, int, float, int]:
+        """Return a deterministic key with concept coverage first."""
         return (
+            self.requested_concept_coverage,
             self.completeness,
             self.latest_period_end.toordinal()
             if self.latest_period_end is not None
@@ -145,12 +153,17 @@ class FinancialDataSelector:
             ),
             default=None,
         )
+        covered_concepts = {observation.concept for observation in observations}
+        requested_concept_coverage = (
+            len(covered_concepts) / len(concepts) if concepts else 0.0
+        )
         return FinancialDataScore(
             completeness=completeness,
             latest_period_end=latest_period_end,
             latest_filed=latest_filed,
             retrieved_at=financials.retrieved_at,
             observation_count=len(keys),
+            requested_concept_coverage=requested_concept_coverage,
         )
 
     @staticmethod

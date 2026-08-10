@@ -167,7 +167,17 @@ def test_service_explicit_provider_crosschecks_by_default_and_only_warns(tmp_pat
 
 
 def test_service_without_provider_retrieves_all_and_returns_one_best_dataset(tmp_path):
-    sec = _FakeProvider(ProviderName.SEC, _financials("sec", "100"))
+    sec_financials = _financials("sec", "100")
+    sec_financials.observations.extend(
+        sec_financials.observations[0].model_copy(
+            update={
+                "fiscal_year": fiscal_year,
+                "period_end": datetime.date(fiscal_year, 9, 27),
+            }
+        )
+        for fiscal_year in range(2021, 2025)
+    )
+    sec = _FakeProvider(ProviderName.SEC, sec_financials)
     alpha_financials = _financials("alphavantage", "120")
     alpha_financials.observations.append(
         FinancialObservation(
@@ -245,6 +255,46 @@ def test_selector_prefers_more_complete_dataset_when_freshness_is_equal():
     assert ranked[0][0] is complete
     assert ranked[0][1].completeness == 1
     assert ranked[1][1].completeness == 0.5
+
+
+def test_selector_prioritizes_requested_concept_coverage_over_observation_count():
+    broader = _financials("sec")
+    broader.observations.extend(
+        broader.observations[0].model_copy(
+            update={
+                "fiscal_year": fiscal_year,
+                "period_end": datetime.date(fiscal_year, 9, 27),
+            }
+        )
+        for fiscal_year in range(2021, 2025)
+    )
+
+    focused = _financials("yahoo")
+    focused.observations.append(
+        FinancialObservation(
+            concept=FinancialConcept.OPERATING_INCOME,
+            statement=FinancialConcept.OPERATING_INCOME.statement,
+            value=Decimal("30"),
+            unit="USD",
+            granularity=Granularity.ANNUAL,
+            fiscal_year=2026,
+            fiscal_period=FiscalPeriod.FY,
+            period_end=datetime.date(2026, 7, 31),
+            provider="yahoo",
+            taxonomy="test",
+            source_concept="operatingIncome",
+        )
+    )
+
+    ranked = FinancialDataSelector.rank(
+        [broader, focused],
+        concepts={FinancialConcept.REVENUE, FinancialConcept.OPERATING_INCOME},
+    )
+
+    assert ranked[0][0] is focused
+    assert ranked[0][1].requested_concept_coverage == 1
+    assert ranked[1][1].requested_concept_coverage == 0.5
+    assert ranked[1][1].completeness > ranked[0][1].completeness
 
 
 def test_service_allows_provider_override_and_disabling_crosscheck(tmp_path):
