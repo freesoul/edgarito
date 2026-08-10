@@ -2083,6 +2083,7 @@ async def _management_guidance_overlay(
                 "rejected_records": (
                     discovery.rejected_records + len(overlay.rejected_reasons)
                 ),
+                "document_audits": getattr(discovery, "document_audits", ()),
             }
         )
     finally:

@@ -1,5 +1,6 @@
 from edgarito.schemas.guidance.management import (
     GuidanceBasis,
+    GuidanceDocumentAudit,
     GuidanceMetric,
     GuidancePeriodType,
     GuidanceQualifier,
@@ -13,6 +14,7 @@ from edgarito.schemas.guidance.management import (
 
 __all__ = [
     "GuidanceBasis",
+    "GuidanceDocumentAudit",
     "GuidanceMetric",
     "GuidanceQualifier",
     "GuidancePeriodType",

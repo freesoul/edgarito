@@ -176,6 +176,87 @@ class ExtractedGuidanceResponse(BaseModel):
     guidance: list[ExtractedGuidanceItem] = Field(default_factory=list)
 
 
+class GuidanceDocumentAudit(BaseModel):
+    """Deterministic, content-free diagnostics for one inspected SEC document."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    filing_form: str
+    filing_date: datetime.date
+    accession_number: str
+    filename: str
+    document_type: str
+    is_primary: bool = False
+    cleaned_size: int = Field(default=0, ge=0)
+    bounded_context_size: int = Field(default=0, ge=0)
+    keyword_hits: dict[str, int] = Field(
+        default_factory=lambda: {
+            "expect": 0,
+            "capex": 0,
+            "capital expenditures": 0,
+            "revenue": 0,
+            "margin": 0,
+        }
+    )
+    accepted_records: int = Field(default=0, ge=0)
+    rejected_records: int = Field(default=0, ge=0)
+
+    @field_validator("keyword_hits")
+    @classmethod
+    def validate_keyword_hits(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(count < 0 for count in value.values()):
+            raise ValueError("Guidance keyword hit counts cannot be negative")
+        return dict(value)
+
+    @property
+    def accepted(self) -> int:
+        return self.accepted_records
+
+    @property
+    def rejected(self) -> int:
+        return self.rejected_records
+
+    @property
+    def accepted_count(self) -> int:
+        return self.accepted_records
+
+    @property
+    def rejected_count(self) -> int:
+        return self.rejected_records
+
+    @property
+    def document_filename(self) -> str:
+        return self.filename
+
+    @property
+    def form(self) -> str:
+        return self.filing_form
+
+    @property
+    def expect_hits(self) -> int:
+        return self.keyword_hits.get("expect", 0)
+
+    @property
+    def capex_hits(self) -> int:
+        return self.keyword_hits.get("capex", 0)
+
+    @property
+    def capital_expenditures_hits(self) -> int:
+        return self.keyword_hits.get("capital expenditures", 0)
+
+    @property
+    def revenue_hits(self) -> int:
+        return self.keyword_hits.get("revenue", 0)
+
+    @property
+    def margin_hits(self) -> int:
+        return self.keyword_hits.get("margin", 0)
+
+    @property
+    def keyword_hit_counts(self) -> dict[str, int]:
+        return dict(self.keyword_hits)
+
+
 class ManagementGuidance(BaseModel):
     """Provider-neutral, scaled guidance tied to matched SEC evidence."""
 
@@ -206,6 +287,7 @@ class ManagementGuidance(BaseModel):
     evidence_verified: bool
     extraction_model: str
     extraction_confidence: Decimal | None = Field(default=None, ge=0, le=1)
+    is_primary: bool = False
 
     @field_validator("currency")
     @classmethod
@@ -295,7 +377,4 @@ class GuidanceOverlayResult(BaseModel):
     documents_inspected: int = 0
     extracted_guidance_records: int = 0
     rejected_records: int = 0
-    filings_inspected: int = 0
-    documents_inspected: int = 0
-    extracted_guidance_records: int = 0
-    rejected_records: int = 0
+    document_audits: tuple[GuidanceDocumentAudit, ...] = ()

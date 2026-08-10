@@ -40,6 +40,12 @@ _PERIODIC_REPORT_FORMS = frozenset({"10-Q", "10-Q/A", "10-K", "10-K/A"})
 _CURRENT_REPORT_QUOTA = 3
 _PERIODIC_REPORT_QUOTA = 2
 
+
+def is_periodic_filing(filing: SecFiling) -> bool:
+    """Return whether a filing is a periodic report requiring primary priority."""
+
+    return filing.form.upper() in _PERIODIC_REPORT_FORMS
+
 # Keep the context vocabulary broader than the filing metadata vocabulary.  A
 # primary 10-Q/10-K often has no useful item metadata, so its guidance has to be
 # found in the cleaned filing text.
@@ -65,6 +71,14 @@ _GUIDANCE_CONTEXT_PATTERNS = (
     (r"\bbacklog\b", 2),
     (r"\beps\b", 2),
 )
+
+_GUIDANCE_AUDIT_PATTERNS = {
+    "expect": r"\bexpect(?:s|ed|ing)?\b",
+    "capex": r"\bcapex\b",
+    "capital expenditures": r"\bcapital expenditures\b",
+    "revenue": r"\brevenues?\b",
+    "margin": r"\bmargins?\b",
+}
 
 
 class _TextParser(HTMLParser):
@@ -103,6 +117,21 @@ def clean_document_text(content: str) -> str:
 
 def normalize_evidence(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(text).replace("\xa0", " ")).strip()
+
+
+def guidance_keyword_hits(text: str) -> dict[str, int]:
+    """Count the bounded set of guidance terms shown in audit output."""
+
+    return {
+        keyword: len(re.findall(pattern, text, flags=re.IGNORECASE))
+        for keyword, pattern in _GUIDANCE_AUDIT_PATTERNS.items()
+    }
+
+
+def is_periodic_filing(filing: SecFiling) -> bool:
+    """Return whether a filing is one of the periodic guidance forms."""
+
+    return filing.form.upper() in _PERIODIC_REPORT_FORMS
 
 
 def extract_guidance_context(
@@ -310,7 +339,42 @@ class GuidanceDocumentSelector:
     def select_documents(
         self, filing: SecFiling, *, limit: int = 3
     ) -> list[SecFilingDocument]:
-        ranked = sorted(
+        if limit <= 0:
+            return []
+
+        ranked = self._rank_documents(filing)
+        if filing.form.upper() not in _PERIODIC_REPORT_FORMS:
+            # Keep the existing 8-K/6-K ranking and eligibility behavior intact.
+            return [document for score, document in ranked if score > 0][:limit]
+
+        primary = next(
+            (
+                document
+                for _score, document in ranked
+                if self.is_primary(filing, document)
+            ),
+            None,
+        )
+        if primary is None:
+            return [document for score, document in ranked if score > 0][:limit]
+
+        # A periodic filing's primary report is the authoritative place for
+        # forward-looking language.  It is selected even when its metadata and
+        # text score are lower than an exhibit's score; only the remaining
+        # slots use the normal exhibit ranking.
+        selected = [self._mark_primary(primary)]
+        selected.extend(
+            self._mark_primary(document, value=False)
+            for score, document in ranked
+            if score > 0
+            and not self.is_primary(filing, document)
+        )
+        return selected[:limit]
+
+    def _rank_documents(
+        self, filing: SecFiling
+    ) -> list[tuple[int, SecFilingDocument]]:
+        return sorted(
             (
                 (self._document_score(filing, document), document)
                 for document in filing.documents
@@ -318,7 +382,23 @@ class GuidanceDocumentSelector:
             key=lambda pair: (pair[0], pair[1].sequence or "", pair[1].filename),
             reverse=True,
         )
-        return [document for score, document in ranked if score > 0][:limit]
+
+    @staticmethod
+    def is_primary(filing: SecFiling, document: SecFilingDocument) -> bool:
+        """Return whether ``document`` is the filing metadata's primary file."""
+
+        return document.filename.casefold() == filing.primary_document.casefold()
+
+    @classmethod
+    def _mark_primary(
+        cls, document: SecFilingDocument, *, value: bool = True
+    ) -> SecFilingDocument:
+        # The provider document schema deliberately has no filing reference, so
+        # expose the selection decision on the returned document without
+        # changing the raw SEC document content.
+        if document.is_primary == value:
+            return document
+        return document.model_copy(update={"is_primary": value})
 
     @staticmethod
     def _filing_score(filing: SecFiling) -> int:

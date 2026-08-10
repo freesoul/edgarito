@@ -16,6 +16,9 @@ class SecFilingDocument(BaseModel):
     description: str = ""
     sequence: str | None = None
     content: str
+    # Set by the guidance selector when the document is matched to its filing
+    # metadata.  Raw SEC document blocks do not carry this relationship.
+    is_primary: bool = False
 
     @property
     def content_hash(self) -> str:

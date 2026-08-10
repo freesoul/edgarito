@@ -238,7 +238,11 @@ class EdgarClient:
                     SecFilingDocument.model_validate(item)
                     for item in json.loads(cached)
                 )
-                return filing.model_copy(update={"documents": documents})
+                return filing.model_copy(
+                    update={
+                        "documents": self._mark_primary_documents(filing, documents)
+                    }
+                )
 
         raw_path = f"{base}/full-submission.txt"
         submission_text = self._cache.read(raw_path) if use_cache else None
@@ -248,6 +252,7 @@ class EdgarClient:
                 self._cache.save(raw_path, submission_text)
 
         documents = tuple(self.parse_submission_documents(submission_text))
+        documents = self._mark_primary_documents(filing, documents)
         if make_cache:
             self._cache.save(
                 parsed_path,
@@ -257,6 +262,20 @@ class EdgarClient:
                 ),
             )
         return filing.model_copy(update={"documents": documents})
+
+    @staticmethod
+    def _mark_primary_documents(
+        filing: SecFiling, documents: tuple[SecFilingDocument, ...]
+    ) -> tuple[SecFilingDocument, ...]:
+        primary_filename = filing.primary_document.casefold()
+        return tuple(
+            document.model_copy(
+                update={
+                    "is_primary": document.filename.casefold() == primary_filename
+                }
+            )
+            for document in documents
+        )
 
     @staticmethod
     def parse_submission_documents(text: str) -> list[SecFilingDocument]:

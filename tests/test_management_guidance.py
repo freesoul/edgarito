@@ -4,12 +4,14 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli.presentation.valuation_report import ValuationReportConsolePresenter
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
     GuidanceBasis,
+    GuidanceDocumentAudit,
     GuidanceMetric,
     GuidanceOverlayResult,
     GuidancePeriodType,
@@ -308,6 +310,27 @@ def test_capex_constraint_qualifiers_preserve_points_and_bounds():
     ]
 
 
+def test_capex_more_than_guidance_is_a_lower_bound_not_a_point():
+    capex = _guidance(
+        GuidanceMetric.CAPEX,
+        point="25",
+        qualifier=GuidanceQualifier.MORE_THAN,
+    )
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [capex],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    assert parameters.capex_constraints == {
+        2025: MonetaryForecastConstraint(minimum=Decimal("25"))
+    }
+    assert result.applications[0].methodology == (
+        "management guidance floor capex constraint"
+    )
+
+
 def test_absolute_capex_guidance_does_not_cross_currency_boundary():
     capex = _guidance(GuidanceMetric.CAPEX, point="15", currency="EUR")
 
@@ -456,6 +479,65 @@ class _Edgar:
         return self.filing
 
 
+class _MultiFilingEdgar:
+    def __init__(self, filings):
+        self.filings = filings
+
+    async def get_guidance_filings(self, cik, **kwargs):
+        return self.filings
+
+    async def get_filing_documents(self, filing, **kwargs):
+        return filing
+
+
+def test_periodic_primary_is_processed_before_current_documents_consume_budget(
+    tmp_path,
+):
+    current = SecFiling(
+        cik=1,
+        accession_number="0000000001-26-000010",
+        form="8-K",
+        filing_date=datetime.date(2026, 7, 14),
+        items=("2.02",),
+        primary_document="current.htm",
+        documents=(
+            SecFilingDocument(
+                filename="current.htm",
+                document_type="8-K",
+                content="We expect FY2026 revenue of $10-$11 billion.",
+            ),
+        ),
+    )
+    periodic = SecFiling(
+        cik=1,
+        accession_number="0000000001-26-000011",
+        form="10-Q",
+        filing_date=datetime.date(2026, 7, 15),
+        primary_document="primary.htm",
+        documents=(
+            SecFilingDocument(
+                filename="primary.htm",
+                document_type="10-Q",
+                content="We expect FY2026 revenue of $10-$11 billion.",
+            ),
+        ),
+    )
+    result = asyncio.run(
+        ManagementGuidanceService(
+            _MultiFilingEdgar([current, periodic]),
+            ManagementGuidanceExtractor(_Ai(), FileSystemCache(tmp_path)),
+            max_filings=2,
+            max_documents=1,
+        ).retrieve(ticker="TEST", cik=1, as_of=datetime.date(2026, 8, 1))
+    )
+
+    assert [item.filing_form for item in result.records] == ["10-Q"]
+    assert result.documents_inspected == 1
+    assert result.document_audits[0].filing_form == "10-Q"
+    assert result.document_audits[0].filename == "primary.htm"
+    assert result.document_audits[0].is_primary
+
+
 def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_path):
     document = SecFilingDocument(
         filename="ex991.htm",
@@ -550,10 +632,28 @@ def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
     assert len(ai.contents[0]) < len(document.content)
     assert phrase in ai.contents[0]
     assert [item.metric for item in result.records] == [GuidanceMetric.CAPEX]
+    assert result.records[0].is_primary
     assert result.filings_inspected == 1
     assert result.documents_inspected == 1
     assert result.extracted_guidance_records == 1
     assert result.rejected_records == 0
+    assert len(result.document_audits) == 1
+    audit = result.document_audits[0]
+    assert audit.filing_form == "10-Q"
+    assert audit.accession_number == filing.accession_number
+    assert audit.filename == "primary.htm"
+    assert audit.is_primary
+    assert audit.cleaned_size == len(document.content)
+    assert audit.bounded_context_size == len(ai.contents[0])
+    assert audit.keyword_hits == {
+        "expect": 1,
+        "capex": 0,
+        "capital expenditures": 1,
+        "revenue": 0,
+        "margin": 0,
+    }
+    assert audit.accepted_records == 1
+    assert audit.rejected_records == 0
 
 
 def test_service_counts_rejected_extraction_records(tmp_path):
@@ -615,11 +715,30 @@ def test_service_counts_rejected_extraction_records(tmp_path):
 
 
 def test_guidance_counters_transfer_from_discovery_to_overlay(monkeypatch, tmp_path):
+    audit = GuidanceDocumentAudit(
+        filing_form="10-Q",
+        filing_date=datetime.date(2026, 7, 15),
+        accession_number="accession",
+        filename="primary.htm",
+        document_type="10-Q",
+        is_primary=True,
+        cleaned_size=100,
+        bounded_context_size=80,
+        keyword_hits={
+            "expect": 1,
+            "capex": 1,
+            "capital expenditures": 1,
+            "revenue": 2,
+            "margin": 1,
+        },
+        accepted_records=1,
+    )
     discovery = GuidanceDiscoveryResult(
         filings_inspected=3,
         documents_inspected=4,
         extracted_guidance_records=5,
         rejected_records=2,
+        document_audits=(audit,),
     )
 
     class _OpenAI:
@@ -672,6 +791,7 @@ def test_guidance_counters_transfer_from_discovery_to_overlay(monkeypatch, tmp_p
     assert overlay.documents_inspected == 4
     assert overlay.extracted_guidance_records == 5
     assert overlay.rejected_records == 2
+    assert overlay.document_audits == (audit,)
 
 
 def test_valuation_report_renders_audit_counters_without_source_records():
@@ -709,6 +829,56 @@ def test_valuation_report_renders_audit_counters_without_source_records():
     assert "Extraction rejected: malformed guidance" in rendered
     assert "Source:" not in rendered
     assert "Extraction: OpenAI /" not in rendered
+
+
+def test_valuation_report_renders_document_audit_without_document_contents():
+    result = GuidanceOverlayResult(
+        document_audits=(
+            GuidanceDocumentAudit(
+                filing_form="10-Q",
+                filing_date=datetime.date(2026, 7, 15),
+                accession_number="0000000001-26-000002",
+                filename="primary.htm",
+                document_type="10-Q",
+                is_primary=True,
+                cleaned_size=50_000,
+                bounded_context_size=24_000,
+                keyword_hits={
+                    "expect": 2,
+                    "capex": 1,
+                    "capital expenditures": 1,
+                    "revenue": 3,
+                    "margin": 4,
+                },
+                accepted_records=1,
+                rejected_records=2,
+            ),
+        ),
+    )
+
+    rendered = ValuationReportConsolePresenter().render(
+        intrinsic=None,
+        peer_report=None,
+        relative=None,
+        provider_relative=None,
+        decision=None,
+        profile_name=None,
+        show_scenarios=False,
+        show_sensitivity=False,
+        show_reverse_dcf=False,
+        verbose=True,
+        management_guidance=result,
+    )
+
+    assert "SEC document audit (contents omitted):" in rendered
+    assert "form=10-Q" in rendered
+    assert "accession=0000000001-26-000002" in rendered
+    assert "filename=primary.htm type=10-Q" in rendered
+    assert "primary=yes" in rendered
+    assert "cleaned=50000 chars context=24000 chars" in rendered
+    assert "expect=2 capex=1 capital expenditures=1 revenue=3 margin=4" in rendered
+    assert "accepted=1 rejected=2" in rendered
+    assert "We currently expect" not in rendered
 
 
 def test_valuation_report_renders_evidence_only_guidance_without_applications():

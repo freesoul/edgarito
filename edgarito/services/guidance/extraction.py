@@ -103,20 +103,44 @@ class ManagementGuidanceExtractor:
         self,
         filing: SecFiling,
         document: SecFilingDocument,
-        clean_text: str,
+        clean_text: str | None = None,
         *,
         valuation_date: datetime.date,
         source_text: str | None = None,
+        context_text: str | None = None,
     ) -> tuple[GuidanceExtractionCacheEntry, bool]:
-        # ``clean_text`` is the bounded model context when called by the
-        # service.  ``source_text`` remains the complete cleaned document for
-        # deterministic evidence validation.
-        context_text = extract_guidance_context(clean_text)
-        validation_text = clean_text if source_text is None else source_text
+        # The service owns cleaning and bounded-context construction.  Direct
+        # callers from before the explicit ``context_text`` argument can still
+        # pass a complete cleaned document as the third positional argument;
+        # derive the context only for that compatibility path.
+        if context_text is None:
+            context_source = (
+                clean_text
+                if clean_text is not None
+                else source_text
+                if source_text is not None
+                else document.content
+            )
+            context_text = extract_guidance_context(context_source)
+        validation_text = (
+            source_text
+            if source_text is not None
+            else clean_text
+            if clean_text is not None
+            else document.content
+        )
         path = self._cache_path(filing, document, context_text)
         cached = self._cache.read(path)
         if cached is not None:
-            return GuidanceExtractionCacheEntry.model_validate_json(cached), True
+            entry = GuidanceExtractionCacheEntry.model_validate_json(cached)
+            primary = self._is_primary_document(filing, document)
+            accepted = tuple(
+                record.model_copy(update={"is_primary": primary})
+                for record in entry.accepted
+            )
+            if accepted != entry.accepted:
+                entry = entry.model_copy(update={"accepted": accepted})
+            return entry, True
 
         response = await self._openai.extract_structured(
             instructions=EXTRACTION_INSTRUCTIONS,
@@ -215,6 +239,7 @@ class ManagementGuidanceExtractor:
                     source_document_type=document.document_type,
                     evidence_verified=True,
                     extraction_model=self._openai.model,
+                    is_primary=self._is_primary_document(filing, document),
                 )
             except ValueError as exc:
                 rejected.append(GuidanceRejection(reason=str(exc), item=item))
@@ -249,6 +274,12 @@ class ManagementGuidanceExtractor:
     @staticmethod
     def _decimal(value: float | None) -> Decimal | None:
         return Decimal(str(value)) if value is not None else None
+
+    @staticmethod
+    def _is_primary_document(
+        filing: SecFiling, document: SecFilingDocument
+    ) -> bool:
+        return document.filename.casefold() == filing.primary_document.casefold()
 
     @staticmethod
     def _invalid_reason(
@@ -305,7 +336,7 @@ class ManagementGuidanceExtractor:
             Decimal(token.replace(",", ""))
             for token in re.findall(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?", evidence)
         }
-        if not any(value in evidence_numbers for value in values):
+        if any(value not in evidence_numbers for value in values):
             return "Extracted numerical values are absent from supporting text"
         if item.value_kind == GuidanceValueKind.PERCENTAGE:
             if any(
