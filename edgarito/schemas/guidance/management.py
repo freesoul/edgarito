@@ -295,3 +295,7 @@ class GuidanceOverlayResult(BaseModel):
     documents_inspected: int = 0
     extracted_guidance_records: int = 0
     rejected_records: int = 0
+    filings_inspected: int = 0
+    documents_inspected: int = 0
+    extracted_guidance_records: int = 0
+    rejected_records: int = 0

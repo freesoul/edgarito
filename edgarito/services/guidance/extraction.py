@@ -26,7 +26,7 @@ from edgarito.services.guidance.documents import (
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "management-guidance-v3"
+PROMPT_VERSION = "management-guidance-v4"
 SCHEMA_VERSION = "management-guidance-schema-v1"
 CONTEXT_VERSION = "guidance-context-v1"
 
@@ -44,6 +44,11 @@ consolidated from segment guidance, and GAAP/non-GAAP/constant-currency basis wh
 explicit. Consolidated revenue means total company revenue only. Product, channel,
 geography, or sub-business revenue such as advertising revenue is not consolidated
 revenue; classify it as segment scope and identify it with metric_name and segment_name.
+Set qualifier from the wording: use MORE_THAN for "more than", "exceed", or equivalent
+strict lower-bound language, AT_LEAST for "at least", AT_MOST for "at most", LESS_THAN
+for "less than", RANGE for bounded ranges, and POINT for exact values. Keep the stated
+threshold in point for one-sided guidance; deterministic forecast normalization will
+turn it into a bound rather than an exact forecast point.
 Use null when a field is not explicit. Copy a concise supporting_text excerpt verbatim
 from the SEC document for every item. Monetary point/low/high values must use the stated
 display unit (for example, 43 with unit=billions), not a computed midpoint. Return an

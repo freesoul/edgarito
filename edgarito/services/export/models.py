@@ -25,6 +25,7 @@ from pydantic import (
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialStatement,
@@ -246,6 +247,7 @@ class FcffForecastParametersExport(BaseModel):
     tax_rate: tuple[Decimal, ...] | None = None
     depreciation_to_revenue: tuple[Decimal, ...] | None = None
     capex_to_revenue: tuple[Decimal, ...] | None = None
+    capex_constraints: tuple[tuple[int, MonetaryForecastConstraint], ...] = ()
     operating_working_capital_to_revenue: tuple[Decimal, ...] | None = None
     revenue_anchors: tuple[tuple[int, Decimal], ...] = ()
     revenue_anchor_sources: tuple[tuple[int, ForecastAssumptionSource], ...] = ()
@@ -340,6 +342,7 @@ class FcffForecastExport(BaseModel):
     observations: tuple[FcffForecastObservationExport, ...] = ()
     warnings: tuple[str, ...] = ()
     ytd_anchor: FcffForecastYtdAnchorExport | None = None
+    capex_constraints_applied: tuple[int, ...] = ()
 
 
 class AdaptiveMultistagePlanExport(BaseModel):

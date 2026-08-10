@@ -275,6 +275,7 @@ def test_long_document_uses_bounded_guidance_context_for_llm_and_full_text_for_e
                 currency="USD",
                 unit=GuidanceUnit.BILLIONS,
                 scope=GuidanceScope.CONSOLIDATED,
+                qualifier=GuidanceQualifier.MORE_THAN,
                 supporting_text=phrase,
             )
         ]
@@ -297,6 +298,8 @@ def test_long_document_uses_bounded_guidance_context_for_llm_and_full_text_for_e
     assert phrase in ai.contents[0]
     assert extract_guidance_context(full_text) == ai.contents[0]
     assert len(entry.accepted) == 1
+    assert entry.accepted[0].qualifier == GuidanceQualifier.MORE_THAN
+    assert entry.accepted[0].point == Decimal("25000000000")
     assert entry.accepted[0].supporting_text == phrase
 
 
