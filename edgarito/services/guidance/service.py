@@ -10,6 +10,7 @@ from edgarito.schemas.guidance.management import (
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     clean_document_text,
+    extract_guidance_context,
 )
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.resolver import ManagementGuidanceResolver
@@ -101,12 +102,14 @@ class ManagementGuidanceService:
                 clean_text = clean_document_text(document.content)
                 if not clean_text:
                     continue
+                context_text = extract_guidance_context(clean_text)
                 try:
                     entry, cache_hit = await self._extractor.extract(
                         filing,
                         document,
-                        clean_text,
+                        context_text,
                         valuation_date=as_of,
+                        source_text=clean_text,
                     )
                 except OpenAIAuthenticationError:
                     raise

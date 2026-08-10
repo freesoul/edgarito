@@ -289,12 +289,15 @@ class _Ai:
     model = "gpt-test"
     reasoning_effort = "low"
 
-    def __init__(self):
+    def __init__(self, response=None):
         self.calls = 0
+        self.contents = []
+        self.response = response
 
     async def extract_structured(self, **kwargs):
         self.calls += 1
-        return ExtractedGuidanceResponse(
+        self.contents.append(kwargs["content"])
+        return self.response or ExtractedGuidanceResponse(
             guidance=[
                 ExtractedGuidanceItem(
                     metric=GuidanceMetric.REVENUE,
@@ -366,3 +369,55 @@ def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_pat
     assert first.cache_misses == 1
     assert second.cache_hits == 1
     assert edgar.refresh_values == [True, False]
+
+
+def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
+    tmp_path,
+):
+    phrase = "We currently expect capital expenditures to exceed $25 billion in 2026."
+    response = ExtractedGuidanceResponse(
+        guidance=[
+            ExtractedGuidanceItem(
+                metric=GuidanceMetric.CAPEX,
+                fiscal_year=2026,
+                period_type=GuidancePeriodType.FISCAL_YEAR,
+                point=25,
+                value_kind=GuidanceValueKind.MONETARY,
+                currency="USD",
+                unit=GuidanceUnit.BILLIONS,
+                scope=GuidanceScope.CONSOLIDATED,
+                supporting_text=phrase,
+            )
+        ]
+    )
+    document = SecFilingDocument(
+        filename="primary.htm",
+        document_type="10-Q",
+        description="Quarterly report",
+        content=("Historical discussion without current information. " * 10_000)
+        + phrase,
+    )
+    filing = SecFiling(
+        cik=1,
+        accession_number="0000000001-26-000002",
+        form="10-Q",
+        filing_date=datetime.date(2026, 7, 15),
+        primary_document="primary.htm",
+        documents=(document,),
+    )
+    ai = _Ai(response)
+    service = ManagementGuidanceService(
+        _Edgar(filing),
+        ManagementGuidanceExtractor(ai, FileSystemCache(tmp_path)),
+        max_filings=1,
+        max_documents=1,
+    )
+
+    result = asyncio.run(
+        service.retrieve(ticker="TEST", cik=1, as_of=datetime.date(2026, 8, 1))
+    )
+
+    assert ai.calls == 1
+    assert len(ai.contents[0]) < len(document.content)
+    assert phrase in ai.contents[0]
+    assert [item.metric for item in result.records] == [GuidanceMetric.CAPEX]

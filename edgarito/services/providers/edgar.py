@@ -19,7 +19,19 @@ from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 
 class EdgarClient:
-    GUIDANCE_FORMS = frozenset({"8-K", "8-K/A", "6-K", "6-K/A"})
+    GUIDANCE_FORMS = frozenset(
+        {
+            "8-K",
+            "8-K/A",
+            "6-K",
+            "6-K/A",
+            "10-Q",
+            "10-Q/A",
+            "10-K",
+            "10-K/A",
+        }
+    )
+
     def __init__(
         self,
         cache: FileSystemCache,
@@ -217,10 +229,7 @@ class EdgarClient:
         Raw full-submission text and parsed document JSON use distinct SEC cache
         entries keyed by immutable CIK/accession identity.
         """
-        base = (
-            f"providers/edgar/filings/{filing.cik}/"
-            f"{filing.accession_number}"
-        )
+        base = f"providers/edgar/filings/{filing.cik}/{filing.accession_number}"
         parsed_path = f"{base}/documents.json"
         if use_cache:
             cached = self._cache.read(parsed_path)
@@ -257,10 +266,9 @@ class EdgarClient:
             r"<DOCUMENT>(.*?)(?:</DOCUMENT>|\Z)", text, flags=re.I | re.S
         )
         for block in blocks:
+
             def value(tag: str, source: str = block) -> str:
-                match = re.search(
-                    rf"<{tag}>\s*([^\r\n<]*)", source, flags=re.I
-                )
+                match = re.search(rf"<{tag}>\s*([^\r\n<]*)", source, flags=re.I)
                 return match.group(1).strip() if match else ""
 
             text_match = re.search(r"<TEXT>(.*?)(?:</TEXT>|\Z)", block, re.I | re.S)

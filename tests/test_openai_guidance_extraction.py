@@ -19,6 +19,10 @@ from edgarito.schemas.guidance.management import (
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.guidance.documents import (
+    GUIDANCE_CONTEXT_MAX_CHARS,
+    extract_guidance_context,
+)
 from edgarito.services.guidance.extraction import (
     PROMPT_VERSION,
     SCHEMA_VERSION,
@@ -121,9 +125,11 @@ class _DomainOpenAI:
         self.model = model
         self.reasoning_effort = effort
         self.calls = 0
+        self.contents = []
 
     async def extract_structured(self, **kwargs):
         self.calls += 1
+        self.contents.append(kwargs["content"])
         return self.response
 
 
@@ -249,7 +255,49 @@ def test_unmatched_supporting_evidence_is_rejected_and_cached(tmp_path):
     )
 
     assert entry.accepted == ()
-    assert entry.rejected[0].reason == "Supporting text was not found in the SEC document"
+    assert (
+        entry.rejected[0].reason == "Supporting text was not found in the SEC document"
+    )
+
+
+def test_long_document_uses_bounded_guidance_context_for_llm_and_full_text_for_evidence(
+    tmp_path,
+):
+    phrase = "We currently expect capital expenditures to exceed $25 billion in 2026."
+    response = ExtractedGuidanceResponse(
+        guidance=[
+            ExtractedGuidanceItem(
+                metric=GuidanceMetric.CAPEX,
+                fiscal_year=2026,
+                period_type=GuidancePeriodType.FISCAL_YEAR,
+                point=25,
+                value_kind=GuidanceValueKind.MONETARY,
+                currency="USD",
+                unit=GuidanceUnit.BILLIONS,
+                scope=GuidanceScope.CONSOLIDATED,
+                supporting_text=phrase,
+            )
+        ]
+    )
+    full_text = (
+        "Historical discussion without current information. " * 10_000
+    ) + phrase
+    document = _document(full_text)
+    ai = _DomainOpenAI(response)
+
+    entry, cache_hit = asyncio.run(
+        ManagementGuidanceExtractor(ai, FileSystemCache(tmp_path)).extract(
+            _filing(), document, full_text, valuation_date=datetime.date(2026, 8, 1)
+        )
+    )
+
+    assert not cache_hit
+    assert len(ai.contents[0]) <= GUIDANCE_CONTEXT_MAX_CHARS
+    assert len(ai.contents[0]) < len(full_text)
+    assert phrase in ai.contents[0]
+    assert extract_guidance_context(full_text) == ai.contents[0]
+    assert len(entry.accepted) == 1
+    assert entry.accepted[0].supporting_text == phrase
 
 
 @pytest.mark.parametrize(
@@ -275,7 +323,9 @@ def test_results_analyst_estimates_and_qualitative_text_cannot_validate(
     response = _response(text).model_copy(
         update={
             "guidance": [
-                _response(text).guidance[0].model_copy(
+                _response(text)
+                .guidance[0]
+                .model_copy(
                     update={
                         "point": Decimal("10.0"),
                         "low": None,

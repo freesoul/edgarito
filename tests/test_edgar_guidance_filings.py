@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from edgarito.schemas.providers.edgar.filing import SecFiling
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.guidance.documents import GuidanceDocumentSelector
 from edgarito.services.providers.edgar import EdgarClient
 
 SUBMISSION = """<SEC-DOCUMENT>
@@ -104,9 +105,7 @@ def _row(form, filed, accession):
     return SimpleNamespace(
         accessionNumber=accession,
         filingDate=filed,
-        acceptanceDateTime=datetime.datetime.combine(
-            filed, datetime.time(12, 0)
-        ),
+        acceptanceDateTime=datetime.datetime.combine(filed, datetime.time(12, 0)),
         reportDate=filed,
         form=form,
         items="2.02,7.01",
@@ -133,5 +132,114 @@ def test_form_filter_and_as_of_cutoff_include_amendments(tmp_path):
         )
     )
 
-    assert [item.form for item in filings] == ["6-K/A", "8-K/A", "8-K"]
+    assert [item.form for item in filings] == ["10-Q", "6-K/A", "8-K/A", "8-K"]
     assert all(item.filing_date <= datetime.date(2026, 8, 1) for item in filings)
+
+
+def test_guidance_forms_include_periodic_reports():
+    assert EdgarClient.GUIDANCE_FORMS == frozenset(
+        {"8-K", "8-K/A", "6-K", "6-K/A", "10-Q", "10-Q/A", "10-K", "10-K/A"}
+    )
+
+
+def test_filing_ranking_keeps_current_reports_above_itemless_periodic_reports():
+    selector = GuidanceDocumentSelector()
+    current = _filing().model_copy(
+        update={
+            "form": "8-K",
+            "items": (),
+            "accession_number": "0000001234-26-000008",
+        }
+    )
+    foreign_current = _filing().model_copy(
+        update={
+            "form": "6-K/A",
+            "items": (),
+            "accession_number": "0000001234-26-000009",
+        }
+    )
+    periodic = _filing().model_copy(
+        update={
+            "form": "10-Q/A",
+            "items": (),
+            "filing_date": datetime.date(2026, 7, 15),
+            "accession_number": "0000001234-26-000010",
+        }
+    )
+    annual = _filing().model_copy(
+        update={
+            "form": "10-K",
+            "items": (),
+            "filing_date": datetime.date(2026, 7, 14),
+            "accession_number": "0000001234-26-000011",
+        }
+    )
+
+    assert selector._filing_score(current) > selector._filing_score(periodic)
+    assert selector._filing_score(foreign_current) > selector._filing_score(annual)
+    assert selector._filing_score(periodic) > 0
+    assert [item.form for item in selector.select_filings([annual, periodic])] == [
+        "10-Q/A",
+        "10-K",
+    ]
+
+
+def test_latest_periodic_report_cannot_be_crowded_out():
+    selector = GuidanceDocumentSelector()
+    current_reports = [
+        _filing().model_copy(
+            update={
+                "form": "8-K",
+                "filing_date": datetime.date(2026, 7, day),
+                "accession_number": f"0000001234-26-00000{day}",
+            }
+        )
+        for day in range(11, 15)
+    ]
+    latest_periodic = _filing().model_copy(
+        update={
+            "form": "10-Q",
+            "filing_date": datetime.date(2026, 7, 15),
+            "accession_number": "0000001234-26-000015",
+            "items": (),
+            "primary_document": "10q.htm",
+            "primary_document_description": "Quarterly report",
+        }
+    )
+
+    selected = selector.select_filings(current_reports + [latest_periodic])
+
+    assert latest_periodic in selected
+    assert len(selected) == 4
+    assert [item.form for item in selected] == ["8-K", "8-K", "8-K", "10-Q"]
+
+
+def test_latest_periodic_report_wins_periodic_quota():
+    selector = GuidanceDocumentSelector()
+    older_periodic = _filing().model_copy(
+        update={
+            "form": "10-K",
+            "filing_date": datetime.date(2026, 6, 30),
+            "accession_number": "0000001234-26-000016",
+            "primary_document_description": "Annual guidance outlook revenue",
+        }
+    )
+    latest_periodic = _filing().model_copy(
+        update={
+            "form": "10-Q",
+            "filing_date": datetime.date(2026, 7, 15),
+            "accession_number": "0000001234-26-000017",
+            "items": (),
+        }
+    )
+
+    assert selector.select_filings([older_periodic, latest_periodic], limit=1) == [
+        latest_periodic
+    ]
+
+
+def test_filing_selection_deduplicates_accessions():
+    selector = GuidanceDocumentSelector()
+    filing = _filing().model_copy(update={"form": "8-K"})
+
+    assert selector.select_filings([filing, filing]) == [filing]
