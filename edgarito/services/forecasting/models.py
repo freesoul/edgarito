@@ -455,7 +455,13 @@ class AdaptiveMultistagePlan(BaseModel):
     terminal_roic_warnings: tuple[str, ...] = ()
     terminal_reinvestment_rate: Optional[Decimal] = None
     terminal_capex_to_revenue: Optional[Decimal] = None
-    depreciable_asset_life_years: Optional[int] = None
+    capex_transition_years: int = Field(default=0, ge=0, le=30)
+    depreciable_asset_life_years: Optional[int] = Field(default=None, ge=2, le=30)
+    capex_benefits_modeled: bool = False
+    capex_benefits_disclosure: str = (
+        "Associated revenue and margin benefits from the CAPEX transition are not "
+        "modeled by AdaptiveMultistagePlan."
+    )
     forward_evidence_score: Decimal = Decimal("0")
     forward_evidence_summary: tuple[str, ...] = ()
     # ``high_growth_years`` is retained as a serialized compatibility field.

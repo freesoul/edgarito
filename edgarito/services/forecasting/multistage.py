@@ -20,6 +20,9 @@ from edgarito.services.forecasting.models import (
 class AdaptiveMultistageFcffForecastService:
     """Fade FCFF operating drivers into a sustainable perpetual-growth stage."""
 
+    _REINVESTMENT_TOLERANCE = Decimal("1e-12")
+    _REINVESTMENT_MAX_ITERATIONS = 50
+
     def __init__(self, base_service: FcffForecastService | None = None):
         self._base_service = base_service or FcffForecastService()
 
@@ -86,6 +89,36 @@ class AdaptiveMultistageFcffForecastService:
                     "terminal_growth_rate": terminal_growth_rate,
                 }
             )
+        material_capex_shock_indices = self._material_capex_shock_indices(
+            financials,
+            seed_forecast,
+            requested_parameters,
+            configuration,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        if (
+            material_capex_shock_indices
+            and configuration.depreciable_asset_life_years is None
+        ):
+            raise ValueError(
+                "Material absolute CAPEX shock detected; configure "
+                "depreciable_asset_life_years so post-shock D&A can be rolled "
+                "forward"
+            )
+        capex_anchor_index = self._capex_anchor_index(
+            seed_forecast, requested_parameters
+        )
+        independent_capex_transition = bool(material_capex_shock_indices)
+        if configuration.fade_reinvestment_to_terminal and independent_capex_transition:
+            growth_path, plan = self._extend_for_capex_transition(
+                growth_path,
+                plan,
+                requested_parameters,
+                seed_forecast,
+                configuration,
+                terminal_growth_rate,
+            )
         values = requested_parameters.model_dump()
         values["forecast_years"] = plan.effective_years
         values["revenue_growth"] = growth_path
@@ -115,7 +148,25 @@ class AdaptiveMultistageFcffForecastService:
                 configuration,
                 as_of,
                 availability_mode,
+                force_depreciation_rollforward=bool(material_capex_shock_indices),
+                independent_capex_transition=independent_capex_transition,
+                capex_anchor_index=capex_anchor_index,
             )
+        elif material_capex_shock_indices:
+            values = self._apply_shock_depreciation_rollforward(
+                financials,
+                values,
+                configuration.depreciable_asset_life_years,
+                as_of,
+                availability_mode,
+            )
+        plan = plan.model_copy(
+            update={
+                "depreciable_asset_life_years": (
+                    configuration.depreciable_asset_life_years
+                )
+            }
+        )
 
         parameters = FcffForecastParameters.model_validate(values)
         forecast = self._base_service.forecast(
@@ -142,9 +193,9 @@ class AdaptiveMultistageFcffForecastService:
             forecast.assumption_sources[FcffForecastDriver.CAPEX_TO_REVENUE] = (
                 ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
             )
-        if (
-            configuration.depreciable_asset_life_years is not None
-            and requested_parameters.depreciation_to_revenue is None
+        if configuration.depreciable_asset_life_years is not None and (
+            requested_parameters.depreciation_to_revenue is None
+            or bool(material_capex_shock_indices)
         ):
             forecast.assumption_sources[FcffForecastDriver.DEPRECIATION_TO_REVENUE] = (
                 ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
@@ -156,9 +207,13 @@ class AdaptiveMultistageFcffForecastService:
             forward_growth=resolved_forward_growth,
             tax_is_adaptive=tax_is_adaptive,
             reinvestment_is_adaptive=configuration.fade_reinvestment_to_terminal,
+            independent_capex_transition=independent_capex_transition,
             depreciation_is_adaptive=(
                 configuration.depreciable_asset_life_years is not None
-                and requested_parameters.depreciation_to_revenue is None
+                and (
+                    requested_parameters.depreciation_to_revenue is None
+                    or bool(material_capex_shock_indices)
+                )
             ),
         )
         for driver, source_path in forecast.assumption_source_paths.items():
@@ -569,6 +624,7 @@ class AdaptiveMultistageFcffForecastService:
         forward_growth: ForwardGrowthOutlook | None,
         tax_is_adaptive: bool,
         reinvestment_is_adaptive: bool,
+        independent_capex_transition: bool,
         depreciation_is_adaptive: bool,
     ) -> dict[FcffForecastDriver, tuple[ForecastAssumptionSource, ...]]:
         years = plan.effective_years
@@ -609,20 +665,31 @@ class AdaptiveMultistageFcffForecastService:
                 requested_parameters,
                 FcffForecastDriver.CAPEX_TO_REVENUE,
             )
-            capex_path = requested_parameters.capex_to_revenue
-            convergence_year = plan.effective_years - plan.stable_years
-            if capex_path is not None and len(capex_path) > 1:
-                capex_prefix = min(len(capex_path), convergence_year)
-            elif capex_path is not None and capex_base in {
-                ForecastAssumptionSource.EXPLICIT,
-                ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
-            }:
+            if independent_capex_transition:
                 capex_prefix = min(
-                    plan.explicit_growth_prefix_years + plan.high_growth_years,
+                    cls._capex_anchor_index(seed_forecast, requested_parameters) + 1,
                     years,
                 )
+                if requested_parameters.capex_to_revenue is not None:
+                    capex_prefix = max(
+                        capex_prefix,
+                        min(len(requested_parameters.capex_to_revenue), years),
+                    )
             else:
-                capex_prefix = 0
+                capex_path = requested_parameters.capex_to_revenue
+                convergence_year = plan.effective_years - plan.stable_years
+                if capex_path is not None and len(capex_path) > 1:
+                    capex_prefix = min(len(capex_path), convergence_year)
+                elif capex_path is not None and capex_base in {
+                    ForecastAssumptionSource.EXPLICIT,
+                    ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
+                }:
+                    capex_prefix = min(
+                        plan.explicit_growth_prefix_years + plan.high_growth_years,
+                        years,
+                    )
+                else:
+                    capex_prefix = 0
             paths[FcffForecastDriver.CAPEX_TO_REVENUE] = cls._prefix_adaptive_path(
                 capex_base, capex_prefix, years
             )
@@ -699,6 +766,141 @@ class AdaptiveMultistageFcffForecastService:
             + ("stable",) * plan.stable_years
         )
 
+    def _material_capex_shock_indices(
+        self,
+        financials,
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        configuration,
+        *,
+        as_of,
+        availability_mode,
+    ) -> tuple[int, ...]:
+        """Return forecast indexes whose absolute CAPEX guidance is material.
+
+        The comparison is against the same forecast with monetary constraints
+        removed.  This keeps the shock test focused on the amount-level guidance
+        rather than on a ratio path that may already have been rewritten by an
+        earlier forecast pass.
+        """
+
+        if not requested_parameters.capex_constraints:
+            return ()
+        unconstrained_parameters = requested_parameters.model_copy(
+            update={"capex_constraints": {}}
+        )
+        unconstrained = self._base_service.forecast(
+            financials,
+            unconstrained_parameters,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        baseline_by_year = {
+            observation.fiscal_year: observation
+            for observation in unconstrained.observations
+        }
+        threshold = configuration.material_capex_shock_threshold
+        material: list[int] = []
+        for index, observation in enumerate(seed_forecast.observations):
+            if observation.fiscal_year not in requested_parameters.capex_constraints:
+                continue
+            baseline = baseline_by_year.get(observation.fiscal_year)
+            if baseline is None:
+                continue
+            shock_percentage = self._capex_shock_percentage(
+                baseline.capital_expenditures,
+                observation.capital_expenditures,
+            )
+            if shock_percentage >= threshold:
+                material.append(index)
+        return tuple(material)
+
+    @staticmethod
+    def _capex_shock_percentage(
+        baseline_amount: Decimal, guided_amount: Decimal
+    ) -> Decimal:
+        if baseline_amount == 0:
+            return Decimal(0) if guided_amount == 0 else Decimal("100")
+        return (
+            abs(guided_amount - baseline_amount) / abs(baseline_amount) * Decimal(100)
+        )
+
+    @staticmethod
+    def _capex_anchor_index(
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+    ) -> int:
+        constraint_indexes = [
+            index
+            for index, observation in enumerate(seed_forecast.observations)
+            if observation.fiscal_year in requested_parameters.capex_constraints
+        ]
+        anchor = max(constraint_indexes, default=0)
+        if (
+            requested_parameters.capex_to_revenue is not None
+            and len(requested_parameters.capex_to_revenue) > 1
+        ):
+            anchor = max(anchor, len(requested_parameters.capex_to_revenue) - 1)
+        return anchor
+
+    def _extend_for_capex_transition(
+        self,
+        growth_path: tuple[Decimal, ...],
+        plan: AdaptiveMultistagePlan,
+        requested_parameters: FcffForecastParameters,
+        seed_forecast: FcffForecast,
+        configuration,
+        terminal_growth_rate: Decimal,
+    ) -> tuple[tuple[Decimal, ...], AdaptiveMultistagePlan]:
+        transition_years = configuration.capex_transition_years
+        anchor_index = self._capex_anchor_index(seed_forecast, requested_parameters)
+        required_years = anchor_index + transition_years + 1
+        if required_years > 30:
+            raise ValueError(
+                "CAPEX transition exceeds the 30-year forecast limit; shorten "
+                "the CAPEX transition horizon or the explicit forecast path"
+            )
+        if required_years <= plan.effective_years:
+            return growth_path, plan.model_copy(
+                update={"capex_transition_years": transition_years}
+            )
+
+        additional_years = required_years - plan.effective_years
+        extended_growth_path = (
+            *growth_path,
+            *(terminal_growth_rate for _ in range(additional_years)),
+        )
+        return extended_growth_path, plan.model_copy(
+            update={
+                "effective_years": required_years,
+                "stable_years": plan.stable_years + additional_years,
+                "extended_to_stable": True,
+                "capex_transition_years": transition_years,
+            }
+        )
+
+    def _apply_shock_depreciation_rollforward(
+        self,
+        financials,
+        values,
+        life_years: int | None,
+        as_of,
+        availability_mode,
+    ):
+        if life_years is None:
+            return values
+        provisional = FcffForecastParameters.model_validate(values)
+        forecast = self._base_service.forecast(
+            financials,
+            provisional,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        values["depreciation_to_revenue"] = self._depreciation_rollforward(
+            forecast, life_years
+        )
+        return values
+
     def _apply_sustainable_reinvestment(
         self,
         financials,
@@ -708,6 +910,10 @@ class AdaptiveMultistageFcffForecastService:
         configuration,
         as_of,
         availability_mode,
+        *,
+        force_depreciation_rollforward: bool = False,
+        independent_capex_transition: bool = False,
+        capex_anchor_index: int = 0,
     ):
         terminal_roic = configuration.terminal_return_on_invested_capital
         if terminal_roic is None:
@@ -722,25 +928,18 @@ class AdaptiveMultistageFcffForecastService:
             )
         reinvestment_rate = plan.terminal_growth_rate / terminal_roic
         life = configuration.depreciable_asset_life_years
+        rollforward_depreciation = life is not None and (
+            requested_parameters.depreciation_to_revenue is None
+            or force_depreciation_rollforward
+        )
 
-        # Iterate because the terminal capex target depends on D&A, while an
-        # asset-life roll-forward makes D&A depend on prior capex.
+        # The terminal CAPEX target depends on D&A, while an asset-life
+        # roll-forward makes D&A depend on prior CAPEX.  Iterate to a fixed
+        # point instead of assuming three passes are enough for every horizon.
         target_capex_ratio = None
-        for _ in range(3):
-            if (
-                life is not None
-                and requested_parameters.depreciation_to_revenue is None
-            ):
-                provisional = FcffForecastParameters.model_validate(values)
-                seed = self._base_service.forecast(
-                    financials,
-                    provisional,
-                    as_of=as_of,
-                    availability_mode=availability_mode,
-                )
-                values["depreciation_to_revenue"] = self._depreciation_rollforward(
-                    seed, life
-                )
+        previous_target = None
+        converged = False
+        for _ in range(self._REINVESTMENT_MAX_ITERATIONS):
             provisional = FcffForecastParameters.model_validate(values)
             forecast = self._base_service.forecast(
                 financials,
@@ -748,6 +947,17 @@ class AdaptiveMultistageFcffForecastService:
                 as_of=as_of,
                 availability_mode=availability_mode,
             )
+            if rollforward_depreciation:
+                values["depreciation_to_revenue"] = self._depreciation_rollforward(
+                    forecast, life
+                )
+                provisional = FcffForecastParameters.model_validate(values)
+                forecast = self._base_service.forecast(
+                    financials,
+                    provisional,
+                    as_of=as_of,
+                    availability_mode=availability_mode,
+                )
             final = forecast.observations[-1]
             required_net_reinvestment = final.nopat * reinvestment_rate
             target_capex = (
@@ -758,11 +968,41 @@ class AdaptiveMultistageFcffForecastService:
             target_capex_ratio = max(
                 Decimal(0), target_capex / final.revenue * Decimal(100)
             )
-            values["capex_to_revenue"] = self._fade_driver_path(
-                requested_parameters.capex_to_revenue,
-                forecast.observations[0].capex_to_revenue,
-                target_capex_ratio,
-                plan,
+            if independent_capex_transition:
+                capex_path = self._capex_driver_path(
+                    requested_parameters.capex_to_revenue,
+                    forecast,
+                    target_capex_ratio,
+                    plan,
+                    anchor_index=capex_anchor_index,
+                )
+            else:
+                capex_path = self._fade_driver_path(
+                    requested_parameters.capex_to_revenue,
+                    forecast.observations[0].capex_to_revenue,
+                    target_capex_ratio,
+                    plan,
+                )
+            path_delta = self._path_delta(values.get("capex_to_revenue"), capex_path)
+            target_delta = (
+                None
+                if previous_target is None
+                else abs(target_capex_ratio - previous_target)
+            )
+            values["capex_to_revenue"] = capex_path
+            if (
+                target_delta is not None
+                and target_delta <= self._REINVESTMENT_TOLERANCE
+                and path_delta <= self._REINVESTMENT_TOLERANCE
+            ):
+                converged = True
+                break
+            previous_target = target_capex_ratio
+
+        if not converged:
+            raise ValueError(
+                "Sustainable reinvestment did not converge within "
+                f"{self._REINVESTMENT_MAX_ITERATIONS} iterations"
             )
 
         updated_plan = plan.model_copy(
@@ -774,6 +1014,71 @@ class AdaptiveMultistageFcffForecastService:
             }
         )
         return values, updated_plan
+
+    def _capex_driver_path(
+        self,
+        explicit,
+        forecast: FcffForecast,
+        target: Decimal,
+        plan: AdaptiveMultistagePlan,
+        *,
+        anchor_index: int,
+    ) -> tuple[Decimal, ...]:
+        """Build an independent CAPEX fade path around amount-level guidance."""
+
+        years = plan.effective_years
+        if explicit is None:
+            path = [
+                observation.capex_to_revenue
+                for observation in forecast.observations[:years]
+            ]
+            if not path:
+                path = [Decimal(0)]
+            path.extend([path[-1]] * (years - len(path)))
+        elif len(explicit) == 1:
+            path = [explicit[0]] * years
+        else:
+            path = list(self._extend_explicit_path(explicit, years))
+
+        constraint_indexes = [
+            index
+            for index, observation in enumerate(forecast.observations[:years])
+            if observation.fiscal_year in forecast.parameters.capex_constraints
+        ]
+        for index in constraint_indexes:
+            path[index] = forecast.observations[index].capex_to_revenue
+
+        anchor_index = min(anchor_index, years - 1)
+        start = path[anchor_index]
+
+        transition_years = plan.capex_transition_years
+        for offset in range(1, transition_years + 1):
+            index = anchor_index + offset
+            if index >= years:
+                break
+            path[index] = start + (target - start) * Decimal(offset) / Decimal(
+                transition_years
+            )
+        endpoint = anchor_index + transition_years
+        for index in range(max(anchor_index + 1, endpoint + 1), years):
+            path[index] = target
+        return tuple(path)
+
+    @classmethod
+    def _path_delta(
+        cls,
+        previous: tuple[Decimal, ...] | list[Decimal] | None,
+        current: tuple[Decimal, ...],
+    ) -> Decimal:
+        if previous is None or len(previous) != len(current):
+            return Decimal("Infinity")
+        return max(
+            (
+                abs(before - after)
+                for before, after in zip(previous, current, strict=True)
+            ),
+            default=Decimal(0),
+        )
 
     @staticmethod
     def _fade_driver_path(explicit, initial, target, plan):

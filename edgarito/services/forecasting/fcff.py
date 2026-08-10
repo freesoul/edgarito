@@ -530,14 +530,9 @@ class FcffForecastService:
     def _capex_constraint_for(
         parameters: FcffForecastParameters, fiscal_year: int
     ) -> MonetaryForecastConstraint | None:
-        if (
-            parameters.capex_to_revenue is not None
-            and parameters.assumption_source_overrides.get(
-                FcffForecastDriver.CAPEX_TO_REVENUE
-            )
-            != ForecastAssumptionSource.MANAGEMENT_GUIDANCE
-        ):
-            return None
+        # Monetary CAPEX guidance is an amount-level constraint, so it remains
+        # authoritative even after adaptive multistage forecasting materializes
+        # a ratio path for the surrounding transition years.
         return parameters.capex_constraints.get(fiscal_year)
 
     @staticmethod
@@ -550,7 +545,9 @@ class FcffForecastService:
             and constraint.maximum is None
         ):
             return constraint.point
-        constrained = constraint.point or provisional_capex
+        constrained = (
+            constraint.point if constraint.point is not None else provisional_capex
+        )
         if constraint.minimum is not None:
             constrained = max(constrained, constraint.minimum)
         if constraint.maximum is not None:

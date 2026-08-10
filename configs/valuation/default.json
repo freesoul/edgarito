@@ -67,6 +67,8 @@
       "maximum_high_growth_years": 3,
       "extend_to_stable": true,
       "fade_reinvestment_to_terminal": true,
+      "capex_transition_years": 3,
+      "material_capex_shock_threshold": "25",
       "terminal_return_on_invested_capital": null,
       "depreciable_asset_life_years": null
     },

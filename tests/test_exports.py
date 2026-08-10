@@ -238,6 +238,9 @@ def test_metrics_and_forecasts_copy_formulas_inputs_and_adaptive_plan():
     )
     assert isinstance(forecast_export.adaptive_plan, AdaptiveMultistagePlanExport)
     assert forecast_export.adaptive_plan.forward_evidence_summary == ("guidance",)
+    assert forecast_export.adaptive_plan.capex_transition_years == 0
+    assert not forecast_export.adaptive_plan.capex_benefits_modeled
+    assert "not modeled" in forecast_export.adaptive_plan.capex_benefits_disclosure
 
     fcff = FcffForecast(
         provider="normalized-sec",

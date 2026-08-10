@@ -368,7 +368,13 @@ class AdaptiveMultistagePlanExport(BaseModel):
     terminal_roic_warnings: tuple[str, ...] = ()
     terminal_reinvestment_rate: Decimal | None = None
     terminal_capex_to_revenue: Decimal | None = None
+    capex_transition_years: int = 0
     depreciable_asset_life_years: int | None = None
+    capex_benefits_modeled: bool = False
+    capex_benefits_disclosure: str = (
+        "Associated revenue and margin benefits from the CAPEX transition are not "
+        "modeled by AdaptiveMultistagePlan."
+    )
     forward_evidence_score: Decimal
     forward_evidence_summary: tuple[str, ...] = ()
     current_growth_years: int = 0
