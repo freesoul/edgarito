@@ -364,6 +364,12 @@ def test_driver_based_fcff_forecasts_the_full_operating_bridge():
             ),
             Decimal("9"),
         ),
+        (
+            MonetaryForecastConstraint(
+                point=Decimal("0"), minimum=Decimal("0"), maximum=Decimal("1")
+            ),
+            Decimal("0"),
+        ),
     ],
 )
 def test_absolute_capex_constraints_recalculate_ratio_and_preserve_fcff_identity(
@@ -672,6 +678,102 @@ def test_adaptive_multistage_preserves_guidance_prefix_sources_by_year():
     assert (
         "transition" in forecast.observations[2].cell_audits["revenue_growth"].method
         or "stable" in forecast.observations[2].cell_audits["revenue_growth"].method
+    )
+
+
+def _absolute_capex_shock_parameters() -> FcffForecastParameters:
+    return FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("0"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        operating_working_capital_to_revenue=Decimal("15"),
+        capex_constraints={
+            2025: MonetaryForecastConstraint(point=Decimal("30")),
+        },
+    )
+
+
+def test_adaptive_capex_shock_fades_without_revenue_transition_or_a_capex_cliff():
+    parameters = _absolute_capex_shock_parameters()
+    base_service = FcffForecastService()
+    seed = base_service.forecast(_fcff_financials(), parameters)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15"),
+        capex_transition_years=3,
+        depreciable_asset_life_years=4,
+    )
+
+    forecast, plan = AdaptiveMultistageFcffForecastService(base_service).forecast(
+        _fcff_financials(),
+        seed,
+        parameters,
+        Decimal("0"),
+        configuration,
+    )
+
+    assert plan.transition_years == 0
+    assert plan.capex_transition_years == 3
+    assert plan.effective_years == 4
+    assert [item.revenue_growth for item in forecast.observations] == [Decimal("0")] * 4
+    assert forecast.observations[0].capital_expenditures == Decimal("30")
+    assert forecast.observations[0].capex_to_revenue == Decimal("25")
+    assert [item.capital_expenditures for item in forecast.observations] == sorted(
+        (item.capital_expenditures for item in forecast.observations), reverse=True
+    )
+    assert forecast.observations[-1].capex_to_revenue == (
+        plan.terminal_capex_to_revenue
+    )
+    assert forecast.capex_constraints_applied == (2025,)
+    assert not FcffForecastService().economic_identity_issues(forecast)
+    assert not plan.capex_benefits_modeled
+    assert "not modeled" in plan.capex_benefits_disclosure
+    assert forecast.observations[-1].capex_to_revenue == plan.terminal_capex_to_revenue
+
+
+def test_adaptive_rejects_a_material_absolute_capex_shock_without_asset_life():
+    parameters = _absolute_capex_shock_parameters()
+    base_service = FcffForecastService()
+    seed = base_service.forecast(_fcff_financials(), parameters)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15"),
+    )
+
+    with pytest.raises(ValueError, match="Material absolute CAPEX shock.*asset"):
+        AdaptiveMultistageFcffForecastService(base_service).forecast(
+            _fcff_financials(),
+            seed,
+            parameters,
+            Decimal("0"),
+            configuration,
+        )
+
+
+def test_adaptive_capex_shock_rolls_d_and_a_forward_from_post_shock_capex():
+    parameters = _absolute_capex_shock_parameters()
+    base_service = FcffForecastService()
+    seed = base_service.forecast(_fcff_financials(), parameters)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15"),
+        capex_transition_years=3,
+        depreciable_asset_life_years=4,
+    )
+
+    forecast, _ = AdaptiveMultistageFcffForecastService(base_service).forecast(
+        _fcff_financials(),
+        seed,
+        parameters,
+        Decimal("0"),
+        configuration,
+    )
+
+    first, second = forecast.observations[:2]
+    assert first.depreciation_and_amortization == Decimal("5")
+    assert second.depreciation_and_amortization > first.depreciation_and_amortization
+    assert second.depreciation_and_amortization == Decimal("11.25")
+    assert (
+        "depreciation_to_revenue=adaptive_multistage"
+        in second.cell_audits["depreciation_and_amortization"].source
     )
 
 

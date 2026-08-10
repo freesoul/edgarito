@@ -43,6 +43,8 @@ def test_default_profile_fixture_is_valid_and_complete():
     assert profile.valuation.multistage.enabled
     assert profile.valuation.multistage.stable_growth_rate is None
     assert profile.valuation.multistage.max_annual_growth_fade == Decimal("3")
+    assert profile.valuation.multistage.capex_transition_years == 3
+    assert profile.valuation.multistage.material_capex_shock_threshold == Decimal("25")
     assert profile.valuation.multistage.extend_to_stable
     assert profile.valuation.share_repurchases.annual_cash_amounts == ()
     assert profile.valuation.decision_analysis.enabled
@@ -238,6 +240,14 @@ def test_profile_validation_rejects_unknown_or_invalid_parameters(tmp_path):
                     }
                 }
             }
+        )
+    with pytest.raises(ValueError, match="capex_transition_years"):
+        ForecastValuationProfile.model_validate(
+            {"valuation": {"multistage": {"capex_transition_years": 0}}}
+        )
+    with pytest.raises(ValueError, match="material_capex_shock_threshold"):
+        ForecastValuationProfile.model_validate(
+            {"valuation": {"multistage": {"material_capex_shock_threshold": "101"}}}
         )
     configured = ForecastValuationProfile.model_validate(
         {

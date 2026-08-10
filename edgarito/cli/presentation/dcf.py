@@ -315,6 +315,11 @@ class FcffDcfConsolePresenter:
                         f" | asset life {plan.depreciable_asset_life_years} years"
                     )
                 lines.append(details)
+            if plan.capex_transition_years:
+                lines.append(
+                    f"CAPEX transition: {plan.capex_transition_years} years | "
+                    f"{plan.capex_benefits_disclosure}"
+                )
         if result.assumptions is not None:
             lines.append("Resolved assumptions:")
             for assumption in result.assumptions.assumptions:
