@@ -232,7 +232,23 @@ class FcffForecastService:
 
         context = self._forecast_context(financials, periods, parameters, as_of)
         historical_periods = periods[-parameters.historical_window :]
-        paths, sources = self._driver_paths(parameters, list(context.path_periods))
+        normalized_historical_growth_path = tuple(
+            self._historical_values(
+                FcffForecastDriver.REVENUE_GROWTH,
+                list(historical_periods),
+            )
+        )
+        normalized_historical_growth = (
+            sum(normalized_historical_growth_path, Decimal(0))
+            / Decimal(len(normalized_historical_growth_path))
+            if normalized_historical_growth_path
+            else None
+        )
+        paths, sources = self._driver_paths(
+            parameters,
+            list(context.path_periods),
+            fallback_revenue_growth=self._current_run_rate_growth(context),
+        )
         base = context.base
         previous = (
             periods[-2]
@@ -502,6 +518,11 @@ class FcffForecastService:
             ),
             ytd_anchor=ytd_anchor,
             capex_constraints_applied=tuple(capex_constraints_applied),
+            current_growth_rate=(
+                observations[0].revenue_growth if observations else None
+            ),
+            normalized_historical_growth=normalized_historical_growth,
+            normalized_historical_growth_path=normalized_historical_growth_path,
         )
         return self.regenerate_cell_audits(forecast)
 
@@ -919,6 +940,15 @@ class FcffForecastService:
             ForecastAssumptionSource.TRAILING_AVERAGE.value: (
                 "trailing historical average forecast driver"
             ),
+            ForecastAssumptionSource.FORWARD_EVIDENCE.value: (
+                "available forward evidence forecast driver"
+            ),
+            ForecastAssumptionSource.NORMALIZED_HISTORICAL.value: (
+                "normalized historical growth forecast driver"
+            ),
+            ForecastAssumptionSource.CURRENT_RUN_RATE.value: (
+                "current run-rate forecast driver"
+            ),
             ForecastAssumptionSource.ADAPTIVE_MULTISTAGE.value: (
                 "adaptive multistage forecast driver path"
             ),
@@ -931,7 +961,7 @@ class FcffForecastService:
 
     @staticmethod
     def _stage_method(method: str, stage: str | None) -> str:
-        if stage in {"high_growth", "transition", "stable"}:
+        if stage in {"current", "near_term", "transition", "stable"}:
             return f"{stage} stage: {method}"
         return method
 
@@ -987,9 +1017,13 @@ class FcffForecastService:
             return "high"
         if source in {
             ForecastAssumptionSource.TRAILING_AVERAGE.value,
+            ForecastAssumptionSource.FORWARD_EVIDENCE.value,
+            ForecastAssumptionSource.NORMALIZED_HISTORICAL.value,
             ForecastAssumptionSource.ADAPTIVE_MULTISTAGE.value,
         }:
             return "medium"
+        if source == ForecastAssumptionSource.CURRENT_RUN_RATE.value:
+            return "low"
         return "low"
 
     @classmethod
@@ -1289,6 +1323,8 @@ class FcffForecastService:
         self,
         parameters: FcffForecastParameters,
         historical_periods: list[_HistoricalDrivers],
+        *,
+        fallback_revenue_growth: Decimal | None = None,
     ) -> tuple[
         dict[FcffForecastDriver, tuple[Decimal, ...]],
         dict[FcffForecastDriver, ForecastAssumptionSource],
@@ -1306,6 +1342,13 @@ class FcffForecastService:
 
             historical_values = self._historical_values(driver, historical_periods)
             if not historical_values:
+                if (
+                    driver == FcffForecastDriver.REVENUE_GROWTH
+                    and fallback_revenue_growth is not None
+                ):
+                    paths[driver] = (fallback_revenue_growth,) * parameters.forecast_years
+                    sources[driver] = ForecastAssumptionSource.CURRENT_RUN_RATE
+                    continue
                 option = driver.value.replace("_", "-")
                 required_history = (
                     "complete, consecutive annual periods"
@@ -1321,6 +1364,23 @@ class FcffForecastService:
             sources[driver] = ForecastAssumptionSource.TRAILING_AVERAGE
         sources.update(parameters.assumption_source_overrides)
         return paths, sources
+
+    @staticmethod
+    def _current_run_rate_growth(context: _ForecastContext) -> Decimal | None:
+        latest_annual_revenue = context.latest_annual.revenue
+        if latest_annual_revenue <= 0:
+            return None
+        if context.actual_ytd is not None and context.actual_quarters:
+            annualized_revenue = context.actual_ytd.revenue * Decimal(4) / Decimal(
+                context.actual_quarters
+            )
+            return (annualized_revenue / latest_annual_revenue - Decimal(1)) * PERCENT
+        if context.seed_type in {
+            ForecastSeedType.TTM,
+            ForecastSeedType.YTD_RUN_RATE,
+        }:
+            return (context.base.revenue / latest_annual_revenue - Decimal(1)) * PERCENT
+        return None
 
     def _historical_values(
         self,

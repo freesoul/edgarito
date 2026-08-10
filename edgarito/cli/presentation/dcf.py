@@ -395,10 +395,12 @@ class FcffDcfConsolePresenter:
         if plan is None:
             return "constant explicit forecast"
         stages = []
+        if plan.current_growth_years:
+            stages.append(f"{plan.current_growth_years} current")
         if plan.explicit_growth_prefix_years:
             stages.append(f"{plan.explicit_growth_prefix_years} explicit")
         if plan.high_growth_years:
-            stages.append(f"{plan.high_growth_years} high-growth")
+            stages.append(f"{plan.high_growth_years} near-term")
         if plan.transition_years:
             stages.append(f"{plan.transition_years} transition")
         if plan.stable_years:

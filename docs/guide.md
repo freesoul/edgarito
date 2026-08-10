@@ -572,8 +572,8 @@ uv run edgarito valuation --ticker AAPL --years 5
 ```
 
 FCFF valuation uses an adaptive multistage projection by default. It derives the
-initial growth regime, assigns up to three high-growth years according to the
-gap from perpetual growth, and then fades growth by no more than three
+initial forward-growth regime, assigns up to three near-term years according to
+the gap from perpetual growth, and then fades growth by no more than three
 percentage points per year. `--years` is a minimum horizon: when it ends before
 the first complete stable year, the projection is extended automatically. Once
 stability has been reached, requesting more years only moves stable cash flows

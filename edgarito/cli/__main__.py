@@ -2095,6 +2095,9 @@ def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
     records = ()
     if guidance_overlay is not None:
         records = (*guidance_overlay.applications, *guidance_overlay.evidence_only)
+    evidence_records = tuple(
+        getattr(item, "guidance", item) for item in records
+    )
     traits = {getattr(item, "value", str(item)) for item in economic_traits}
     backlog = "backlog_driven" in traits
     for item in guidance_overlay.applications if guidance_overlay is not None else ():
@@ -2103,26 +2106,40 @@ def _forward_growth_evidence(lifecycle, economic_traits, guidance_overlay):
     guidance = any(
         getattr(getattr(item, "metric", None), "value", "")
         in {"revenue", "revenue_growth"}
-        for item in records
+        for item in evidence_records
     )
-    text = " ".join(getattr(item, "supporting_text", "").casefold() for item in records)
+    text = " ".join(
+        getattr(item, "supporting_text", "").casefold() for item in evidence_records
+    )
     capacity = any(
         term in text for term in ("capacity", "cleanroom", "fab", "shipment")
     )
     visible_years = {
         item.fiscal_year
-        for item in records
+        for item in evidence_records
         if getattr(item, "fiscal_year", None) is not None
         and getattr(getattr(item, "period_type", None), "value", "")
         in {"multi_year_target", "long_term_target"}
     }
     growth_visibility = min(Decimal("1"), Decimal(len(visible_years)) / Decimal("3"))
+    forward_growth_records = sorted(
+        (
+            item.fiscal_year,
+            item.midpoint,
+        )
+        for item in evidence_records
+        if getattr(getattr(item, "metric", None), "value", "")
+        == "revenue_growth"
+        and item.midpoint is not None
+    )
     return ForwardGrowthEvidence(
         backlog=backlog,
         guidance=guidance,
         capacity=capacity,
         growth_visibility=growth_visibility,
         lifecycle=getattr(lifecycle, "value", str(lifecycle)),
+        growth_path=tuple(value for _year, value in forward_growth_records),
+        confidence="high" if forward_growth_records else None,
     )
 
 

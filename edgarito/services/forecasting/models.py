@@ -3,7 +3,14 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.identifiers import SecurityIdentifiers
@@ -13,6 +20,9 @@ class ForecastAssumptionSource(str, Enum):
     EXPLICIT = "explicit"
     MANAGEMENT_GUIDANCE = "management_guidance"
     TRAILING_AVERAGE = "trailing_average"
+    FORWARD_EVIDENCE = "forward_evidence"
+    NORMALIZED_HISTORICAL = "normalized_historical"
+    CURRENT_RUN_RATE = "current_run_rate"
     ADAPTIVE_MULTISTAGE = "adaptive_multistage"
 
 
@@ -406,6 +416,21 @@ class FcffForecast(BaseModel):
     warnings: tuple[str, ...] = ()
     ytd_anchor: Optional[FcffForecastYtdAnchor] = None
     capex_constraints_applied: tuple[int, ...] = ()
+    # The first projected observation can be a current/YTD estimate.  Keep it
+    # separate from the annual history used to normalize the forward growth
+    # regime so adaptive forecasting does not mistake a partial-year result for
+    # a sustainable long-run anchor.
+    current_growth_rate: Optional[Decimal] = None
+    normalized_historical_growth: Optional[Decimal] = None
+    normalized_historical_growth_path: tuple[Decimal, ...] = ()
+
+    @property
+    def current_growth(self) -> Optional[Decimal]:
+        return self.current_growth_rate
+
+    @property
+    def normalized_forward_growth(self) -> Optional[Decimal]:
+        return self.normalized_historical_growth
 
 
 class AdaptiveMultistagePlan(BaseModel):
@@ -433,13 +458,26 @@ class AdaptiveMultistagePlan(BaseModel):
     depreciable_asset_life_years: Optional[int] = None
     forward_evidence_score: Decimal = Decimal("0")
     forward_evidence_summary: tuple[str, ...] = ()
+    # ``high_growth_years`` is retained as a serialized compatibility field.
+    # Its adaptive-stage meaning is now near-term years, not a claim that the
+    # selected rate is economically high.
+    current_growth_years: int = Field(default=0, ge=0, le=30)
+    current_growth_rate: Optional[Decimal] = None
+    forward_growth_rate: Optional[Decimal] = None
+    forward_growth_path: tuple[Decimal, ...] = ()
+    forward_growth_source: Optional[str] = None
+    forward_growth_confidence: Optional[str] = None
+    stable_state_supported: bool = False
+    current_growth_near_terminal: bool = False
+    warnings: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_stages(self) -> "AdaptiveMultistagePlan":
         if self.effective_years < self.requested_years:
             raise ValueError("effective_years cannot be below requested_years")
         if (
-            self.high_growth_years
+            self.current_growth_years
+            + self.high_growth_years
             + self.explicit_growth_prefix_years
             + self.transition_years
             + self.stable_years
@@ -447,6 +485,32 @@ class AdaptiveMultistagePlan(BaseModel):
         ):
             raise ValueError("Adaptive stages must span the effective forecast")
         return self
+
+    @property
+    def near_term_years(self) -> int:
+        """Compatibility-friendly name for the initial forward regime."""
+
+        return self.high_growth_years
+
+    @property
+    def initial_stage_years(self) -> int:
+        return self.high_growth_years
+
+    @property
+    def forward_growth_anchor(self) -> Optional[Decimal]:
+        return self.forward_growth_rate
+
+    @property
+    def normalized_forward_growth(self) -> Optional[Decimal]:
+        return self.forward_growth_rate
+
+    @property
+    def terminal_ready(self) -> bool:
+        return self.stable_state_supported
+
+    @property
+    def stable_state_eligible(self) -> bool:
+        return self.stable_state_supported
 
 
 class ForwardGrowthEvidence(BaseModel):
@@ -459,6 +523,87 @@ class ForwardGrowthEvidence(BaseModel):
     capacity: bool = False
     growth_visibility: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     lifecycle: str = "unknown"
+    growth_path: tuple[Decimal, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "growth_path",
+            "forward_growth_path",
+            "consensus_growth_path",
+            "explicit_path",
+            "path",
+        ),
+    )
+    growth_anchor: Optional[Decimal] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "growth_anchor",
+            "forward_growth_anchor",
+            "normalized_growth",
+            "consensus_growth",
+            "forward_anchor",
+        ),
+    )
+    confidence: Optional[str] = None
+
+    @field_validator("growth_path", mode="before")
+    @classmethod
+    def normalize_growth_path(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, (str, int, float, Decimal)):
+            return (value,)
+        return tuple(value)
+
+    @field_validator("growth_path")
+    @classmethod
+    def validate_growth_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
+        if any(
+            not item.is_finite()
+            or item <= Decimal("-100")
+            or item > Decimal("1000")
+            for item in value
+        ):
+            raise ValueError(
+                "Forward growth evidence must be finite and greater than -100%"
+            )
+        return value
+
+    @field_validator("growth_anchor")
+    @classmethod
+    def validate_growth_anchor(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and (
+            not value.is_finite()
+            or value <= Decimal("-100")
+            or value > Decimal("1000")
+        ):
+            raise ValueError(
+                "Forward growth evidence anchor must be finite and greater than -100%"
+            )
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_optional_confidence(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().casefold()
+        if normalized not in {"high", "medium", "low"}:
+            raise ValueError("Forward growth confidence must be high, medium, or low")
+        return normalized
+
+    @model_validator(mode="after")
+    def normalize_anchor(self) -> "ForwardGrowthEvidence":
+        if self.growth_anchor is None and self.growth_path:
+            object.__setattr__(self, "growth_anchor", self.growth_path[-1])
+        return self
+
+    @property
+    def forward_growth_path(self) -> tuple[Decimal, ...]:
+        return self.growth_path
+
+    @property
+    def forward_growth_anchor(self) -> Optional[Decimal]:
+        return self.growth_anchor
 
     @property
     def score(self) -> Decimal:
@@ -483,6 +628,7 @@ class ForwardGrowthEvidence(BaseModel):
         return tuple(
             name
             for name, present in (
+                ("forward growth path", bool(self.growth_path)),
                 ("backlog/bookings", self.backlog),
                 ("forward guidance", self.guidance),
                 ("capacity", self.capacity),
@@ -491,6 +637,135 @@ class ForwardGrowthEvidence(BaseModel):
             )
             if present
         )
+
+
+class ForwardGrowthOutlook(BaseModel):
+    """Resolved forward revenue-growth outlook used by adaptive FCFF.
+
+    ``current_growth`` is deliberately not the same value as
+    ``normalized_growth``.  The former may describe a partial current fiscal
+    year, while the latter is the forward anchor that drives the near-term and
+    transition stages.  ``growth_path`` is reserved for explicit quantitative
+    forward evidence and is preserved before the adaptive fade.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    growth_path: tuple[Decimal, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "growth_path",
+            "forward_path",
+            "forward_growth_path",
+            "consensus_growth_path",
+            "explicit_path",
+            "path",
+        ),
+    )
+    normalized_growth: Optional[Decimal] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "normalized_growth",
+            "normalized_forward_growth",
+            "normalized_forward_anchor",
+            "forward_growth_anchor",
+            "anchor",
+            "consensus_growth",
+        ),
+    )
+    source: str = ForecastAssumptionSource.NORMALIZED_HISTORICAL.value
+    confidence: str = "medium"
+    current_growth: Optional[Decimal] = None
+    stable_state_supported: bool = False
+    current_growth_near_terminal: bool = False
+    warnings: tuple[str, ...] = ()
+
+    @field_validator("growth_path", mode="before")
+    @classmethod
+    def normalize_path(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, (str, int, float, Decimal)):
+            return (value,)
+        return tuple(value)
+
+    @field_validator("growth_path")
+    @classmethod
+    def validate_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
+        if any(
+            not item.is_finite()
+            or item <= Decimal("-100")
+            or item > Decimal("1000")
+            for item in value
+        ):
+            raise ValueError(
+                "Forward growth path must be finite and greater than -100%"
+            )
+        return value
+
+    @field_validator("normalized_growth", "current_growth")
+    @classmethod
+    def validate_rate(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and (
+            not value.is_finite()
+            or value <= Decimal("-100")
+            or value > Decimal("1000")
+        ):
+            raise ValueError("Forward growth rates must be finite and greater than -100%")
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"high", "medium", "low"}:
+            raise ValueError("Forward growth confidence must be high, medium, or low")
+        return normalized
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forward growth source cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_anchor(self) -> "ForwardGrowthOutlook":
+        if self.normalized_growth is None and self.growth_path:
+            object.__setattr__(self, "normalized_growth", self.growth_path[-1])
+        if self.normalized_growth is None:
+            raise ValueError("Forward growth outlook requires an anchor or path")
+        return self
+
+    @property
+    def path(self) -> tuple[Decimal, ...]:
+        return self.growth_path
+
+    @property
+    def forward_path(self) -> tuple[Decimal, ...]:
+        return self.growth_path
+
+    @property
+    def anchor(self) -> Decimal:
+        assert self.normalized_growth is not None
+        return self.normalized_growth
+
+    @property
+    def forward_growth_anchor(self) -> Decimal:
+        return self.anchor
+
+    @property
+    def normalized_forward_growth(self) -> Decimal:
+        return self.anchor
+
+    @property
+    def terminal_ready(self) -> bool:
+        return self.stable_state_supported
+
+    @property
+    def stable_state_eligible(self) -> bool:
+        return self.stable_state_supported
 
 
 # The generic historical public names now point to the valuation-grade default.
