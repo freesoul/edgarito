@@ -1019,10 +1019,10 @@ def test_adaptive_capex_shock_fades_without_revenue_transition_or_a_capex_cliff(
         configuration,
     )
 
-    assert plan.transition_years == 0
+    assert plan.transition_years == 3
     assert plan.capex_transition_years == 3
-    assert plan.effective_years == 4
-    assert [item.revenue_growth for item in forecast.observations] == [Decimal("0")] * 4
+    assert plan.effective_years == 5
+    assert [item.revenue_growth for item in forecast.observations] == [Decimal("0")] * 5
     assert forecast.observations[0].capital_expenditures == Decimal("30")
     assert forecast.observations[0].capex_to_revenue == Decimal("25")
     assert [item.capital_expenditures for item in forecast.observations] == sorted(

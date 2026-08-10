@@ -938,6 +938,7 @@ class AdaptiveMultistageFcffForecastService:
         # point instead of assuming three passes are enough for every horizon.
         target_capex_ratio = None
         previous_target = None
+        capex_fade_anchor = None
         converged = False
         for _ in range(self._REINVESTMENT_MAX_ITERATIONS):
             provisional = FcffForecastParameters.model_validate(values)
@@ -977,9 +978,11 @@ class AdaptiveMultistageFcffForecastService:
                     anchor_index=capex_anchor_index,
                 )
             else:
+                if capex_fade_anchor is None:
+                    capex_fade_anchor = forecast.observations[0].capex_to_revenue
                 capex_path = self._fade_driver_path(
                     requested_parameters.capex_to_revenue,
-                    forecast.observations[0].capex_to_revenue,
+                    capex_fade_anchor,
                     target_capex_ratio,
                     plan,
                 )
