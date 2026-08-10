@@ -38,8 +38,15 @@ class FcffDcfConsolePresenter:
                 ]
             )
         scale, suffix = self._scale_values(values)
+        share_count_label = result.capital_bridge.share_count_label
+        share_dilution_sensitivities = (
+            result.share_dilution_sensitivities if result.equity_value > 0 else ()
+        )
         share_scale, share_suffix = self._scale_values(
-            [result.capital_bridge.diluted_shares]
+            [
+                result.capital_bridge.diluted_shares,
+                *(item.share_count for item in share_dilution_sensitivities),
+            ]
         )
         amount_unit = f"{result.unit} {suffix}".rstrip()
         timing = result.parameters.cash_flow_timing.value.replace("_", " ")
@@ -102,10 +109,19 @@ class FcffDcfConsolePresenter:
                 f"{'Less: net debt':<30}{result.capital_bridge.net_debt / scale:>16,.1f} {amount_unit}",
                 f"{'Add: non-operating assets':<30}{result.capital_bridge.non_operating_assets / scale:>16,.1f} {amount_unit}",
                 f"{'Equity value':<30}{result.equity_value / scale:>16,.1f} {amount_unit}",
-                f"{'Diluted shares':<30}{result.capital_bridge.diluted_shares / share_scale:>16,.1f} {share_suffix or 'units'}",
+                f"{share_count_label:<30}{result.capital_bridge.diluted_shares / share_scale:>16,.1f} {share_suffix or 'units'}",
                 f"{'Intrinsic value/share':<30}{result.value_per_share:>16,.2f} {result.unit}",
             ]
         )
+        if share_dilution_sensitivities:
+            lines.extend(
+                self._share_dilution_details(
+                    result,
+                    share_scale,
+                    share_suffix,
+                    share_count_label,
+                )
+            )
         if result.terminal_value_percentage is not None:
             lines.append(
                 f"{'Terminal PV / enterprise value':<30}"
@@ -218,6 +234,32 @@ class FcffDcfConsolePresenter:
                     f"  {key}: source={audit.source} | "
                     f"method={audit.method} | confidence={audit.confidence}"
                 )
+        return lines
+
+    def _share_dilution_details(
+        self,
+        result: FcffDcfResult,
+        share_scale: Decimal,
+        share_suffix: str,
+        share_count_label: str,
+    ) -> list[str]:
+        lines = [
+            "",
+            *subsection("SHARE DILUTION SENSITIVITY"),
+            "Equity value held constant; only the share-count denominator changes.",
+            f"Base denominator: {share_count_label}",
+            f"{'Additional dilution':<30}{'Share count':>16}{'Value/share':>18}",
+            "-" * 66,
+        ]
+        for item in result.share_dilution_sensitivities:
+            dilution_label = f"+{item.dilution_percentage:,.0f}%"
+            lines.append(
+                f"{dilution_label:<30}"
+                f"{item.share_count / share_scale:>16,.2f}"
+                f"{item.value_per_share:>18,.2f} {result.unit}"
+            )
+        if share_suffix:
+            lines.append(f"Share-count unit scale: {share_suffix}")
         return lines
 
     @staticmethod
@@ -345,6 +387,7 @@ class FcffDcfConsolePresenter:
             [
                 f"Net debt source: {bridge.net_debt_source}",
                 f"Non-operating assets source: {bridge.non_operating_assets_source}",
+                f"Share-count basis: {bridge.share_count_basis.value}",
                 f"Shares source: {bridge.shares_source}",
                 "Capital bridge dates: "
                 f"debt={bridge.debt_date or 'explicit/unknown'}, "

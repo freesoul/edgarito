@@ -43,6 +43,7 @@ from edgarito.services.valuation import (
     PeerSelectionParameters,
     PeerUniverse,
     RelativeValuationBasis,
+    ShareCountBasis,
     ShareRepurchaseParameters,
     TerminalMetric,
     TerminalValueMethod,
@@ -70,6 +71,13 @@ def test_fcff_dcf_discounts_forecast_terminal_value_and_equity_bridge():
     assert result.enterprise_value.quantize(Decimal("0.001")) == Decimal("1340.909")
     assert result.equity_value.quantize(Decimal("0.001")) == Decimal("1240.909")
     assert result.value_per_share.quantize(Decimal("0.001")) == Decimal("124.091")
+    assert [
+        item.dilution_percentage for item in result.share_dilution_sensitivities
+    ] == [Decimal("5"), Decimal("10"), Decimal("20")]
+    assert result.share_dilution_sensitivities[0].share_count == Decimal("10.5")
+    assert result.share_dilution_sensitivities[0].value_per_share == (
+        result.equity_value / Decimal("10.5")
+    )
     assert result.terminal_value_percentage is not None
     assert result.terminal_value_percentage > Decimal(75)
     assert "highly sensitive" in result.warnings[0]
@@ -100,6 +108,10 @@ def test_fcff_dcf_verbose_output_includes_economic_model_and_cell_provenance():
     assert f"Revenue ({result.unit}" in output
     assert f"FCFF ({result.unit}" in output
     assert "ECONOMIC CELL PROVENANCE" in output
+    assert "SHARE DILUTION SENSITIVITY" in output
+    assert "+5%" in output
+    assert "+10%" in output
+    assert "+20%" in output
     assert "revenue: source=" in output
     assert "revenue: value=" not in output
     assert "source=explicit" in output
@@ -411,6 +423,129 @@ def test_valuation_excel_export_contains_linked_formulas_yellow_inputs_and_cache
         assert float(summary_value.text) == pytest.approx(
             float(result.enterprise_value)
         )
+
+
+def test_valuation_excel_export_uses_share_count_basis_label_without_changing_keys(
+    tmp_path,
+):
+    bridge = FcffDcfCapitalBridge(
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+        net_debt=Decimal("100"),
+        diluted_shares=Decimal("10"),
+        share_count_basis=ShareCountBasis.CURRENT_SHARES_OUTSTANDING,
+        current_shares_outstanding=Decimal("10"),
+        net_debt_source="test",
+        shares_source="test",
+    )
+    forecast = _consistent_forecast()
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+    output = tmp_path / "current-shares.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output)
+
+    with ZipFile(output) as archive:
+        shared_strings = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+        strings = "".join(shared_strings.itertext())
+        assert "Current shares outstanding" in strings
+        assert "Diluted Shares" not in strings
+
+        dcf_sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet4.xml"))
+        diluted_shares_formula = dcf_sheet.find(".//main:c[@r='B21']/main:f", XML_NS)
+        assert diluted_shares_formula is not None
+        assert "FCFF Inputs" in diluted_shares_formula.text
+
+
+def test_fcff_dcf_suppresses_dilution_sensitivity_for_nonpositive_equity_value():
+    forecast = _forecast()
+    parameters = FcffDcfParameters(wacc="10", perpetual_growth_rate="2")
+    positive_result = FcffDcfService().value(forecast, parameters, _capital_bridge())
+
+    for net_debt in (
+        positive_result.enterprise_value,
+        positive_result.enterprise_value + Decimal("1"),
+    ):
+        result = FcffDcfService().value(
+            forecast,
+            parameters,
+            _capital_bridge().model_copy(update={"net_debt": net_debt}),
+        )
+
+        assert result.equity_value <= 0
+        assert result.share_dilution_sensitivities == ()
+        output = FcffDcfConsolePresenter().render(result)
+        assert "SHARE DILUTION SENSITIVITY" not in output
+        assert "not meaningful for non-positive equity value" in output
+
+
+@pytest.mark.parametrize(
+    ("basis", "field"),
+    (
+        (
+            ShareCountBasis.CURRENT_SHARES_OUTSTANDING,
+            "current_shares_outstanding",
+        ),
+        (
+            ShareCountBasis.WEIGHTED_AVERAGE_DILUTED,
+            "weighted_average_diluted_shares",
+        ),
+    ),
+)
+def test_capital_bridge_requires_positive_matching_basis_specific_count(basis, field):
+    with pytest.raises(ValueError, match="positive"):
+        FcffDcfCapitalBridge(
+            fiscal_year=2025,
+            period_end=datetime.date(2025, 12, 31),
+            unit="USD",
+            net_debt=Decimal("100"),
+            diluted_shares=Decimal("10"),
+            share_count_basis=basis,
+            **{field: Decimal("0")},
+            net_debt_source="test",
+            shares_source="test",
+        )
+
+    with pytest.raises(ValueError, match="equal diluted_shares"):
+        FcffDcfCapitalBridge(
+            fiscal_year=2025,
+            period_end=datetime.date(2025, 12, 31),
+            unit="USD",
+            net_debt=Decimal("100"),
+            diluted_shares=Decimal("10"),
+            share_count_basis=basis,
+            **{field: Decimal("9")},
+            net_debt_source="test",
+            shares_source="test",
+        )
+
+
+def test_capital_bridge_rejects_contradictory_basis_specific_counts():
+    with pytest.raises(ValueError, match="Contradictory basis-specific"):
+        FcffDcfCapitalBridge(
+            fiscal_year=2025,
+            period_end=datetime.date(2025, 12, 31),
+            unit="USD",
+            net_debt=Decimal("100"),
+            diluted_shares=Decimal("10"),
+            share_count_basis=ShareCountBasis.CURRENT_SHARES_OUTSTANDING,
+            current_shares_outstanding=Decimal("10"),
+            weighted_average_diluted_shares=Decimal("10"),
+            net_debt_source="test",
+            shares_source="test",
+        )
+
+
+def test_capital_bridge_preserves_unknown_legacy_without_basis_specific_counts():
+    bridge = _capital_bridge()
+
+    assert bridge.share_count_basis == ShareCountBasis.UNKNOWN
+    assert bridge.current_shares_outstanding is None
+    assert bridge.weighted_average_diluted_shares is None
 
 
 def test_valuation_excel_export_contains_economic_cell_audit_section(tmp_path):
@@ -847,7 +982,7 @@ def test_fcff_dcf_rejects_invalid_forecast_or_terminal_economics():
         FcffDcfParameters(wacc="2", perpetual_growth_rate="2")
 
 
-def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
+def test_capital_bridge_resolves_normalized_net_debt_and_current_shares():
     financials = _financials_with_bridge()
     result = FcffDcfCapitalBridgeResolver().resolve(
         financials,
@@ -864,7 +999,15 @@ def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
         "short_term_investments + noncurrent_investments"
     )
     assert result.diluted_shares == Decimal("9")
+    assert result.current_shares_outstanding == Decimal("9")
+    assert result.weighted_average_diluted_shares is None
+    assert result.share_count_basis.value == "current_shares_outstanding"
     assert "current shares outstanding" in result.shares_source
+    assert "not a fully diluted share count" in result.shares_source
+    assert any(
+        "options" in warning and "RSUs" in warning and "other claims" in warning
+        for warning in result.warnings
+    )
 
 
 def test_capital_bridge_prefers_latest_coherent_quarterly_balance_over_annual():
@@ -904,6 +1047,7 @@ def test_capital_bridge_prefers_latest_coherent_quarterly_balance_over_annual():
     assert result.gross_debt == Decimal("60")
     assert result.cash_and_equivalents == Decimal("11")
     assert result.diluted_shares == Decimal("8")
+    assert result.current_shares_outstanding == Decimal("8")
     assert not any("latest annual" in warning for warning in result.warnings)
 
 
@@ -962,6 +1106,52 @@ def test_capital_bridge_prefers_quarterly_current_shares_to_annual_shares():
     assert result.shares_date == datetime.date(2026, 3, 31)
 
 
+def test_capital_bridge_uses_weighted_average_diluted_fallback_without_current_warning():
+    financials = _financials_with_bridge()
+    financials.observations = [
+        observation
+        for observation in financials.observations
+        if observation.concept != FinancialConcept.SHARES_OUTSTANDING
+    ]
+
+    result = FcffDcfCapitalBridgeResolver().resolve(
+        financials,
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+    )
+
+    assert result.diluted_shares == Decimal("10")
+    assert result.current_shares_outstanding is None
+    assert result.weighted_average_diluted_shares == Decimal("10")
+    assert result.share_count_basis.value == "weighted_average_diluted_shares"
+    assert "weighted-average diluted shares fallback" in result.shares_source
+    assert not any(
+        "Current shares outstanding" in warning for warning in result.warnings
+    )
+
+
+def test_fcff_dcf_console_discloses_current_share_basis_and_dilution_sensitivity():
+    bridge = FcffDcfCapitalBridgeResolver().resolve(
+        _financials_with_bridge(),
+        fiscal_year=2025,
+        period_end=datetime.date(2025, 12, 31),
+        unit="USD",
+    )
+    result = FcffDcfService().value(
+        _forecast(),
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+    )
+
+    output = FcffDcfConsolePresenter().render(result)
+
+    assert "Current shares outstanding" in output
+    assert "SHARE DILUTION SENSITIVITY" in output
+    assert "+5%" in output and "+10%" in output and "+20%" in output
+    assert "options, RSUs, and other claims" in output
+
+
 def test_capital_bridge_accepts_reported_debt_when_short_term_line_is_absent():
     financials = _financials_with_bridge()
     financials.observations = [
@@ -1007,7 +1197,12 @@ def test_capital_bridge_missing_data_can_be_supplied_explicitly():
     )
     assert supplied.net_debt == Decimal("-20")
     assert supplied.gross_debt is None
-    assert supplied.shares_source == "explicit profile or CLI override"
+    assert supplied.shares_source.startswith("user-supplied share count")
+    assert supplied.share_count_basis.value == "user_supplied_share_count"
+    assert any(
+        "fully diluted status is not verified" in warning
+        for warning in supplied.warnings
+    )
 
     supplied_components = resolver.resolve(
         financials,

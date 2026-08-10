@@ -31,6 +31,8 @@ from edgarito.services.valuation.models import (
     FcffDcfCapitalBridge,
     FcffDcfParameters,
     FcffDcfResult,
+    FcffDcfShareDilutionSensitivity,
+    ShareCountBasis,
     ShareRepurchaseParameters,
     ShareRepurchasePeriod,
     ShareRepurchaseResult,
@@ -39,6 +41,16 @@ from edgarito.services.valuation.models import (
 )
 
 _CAPITAL_BRIDGE_STALE_DAYS = 180
+_DILUTION_SENSITIVITY_PERCENTAGES = (Decimal("5"), Decimal("10"), Decimal("20"))
+_CURRENT_SHARES_LIMITATION_WARNING = (
+    "Current shares outstanding are used as the valuation denominator; this is not "
+    "a fully diluted share count and excludes potential dilution from options, "
+    "RSUs, and other claims"
+)
+_USER_SUPPLIED_SHARES_WARNING = (
+    "A user-supplied share count is used as provided; its fully diluted status is "
+    "not verified and options, RSUs, and other claims may be excluded"
+)
 
 
 class FcffDcfCapitalBridgeResolver:
@@ -144,29 +156,41 @@ class FcffDcfCapitalBridgeResolver:
             net_debt_source = "explicit profile or CLI override"
 
         share_observation = None
+        share_count_basis = ShareCountBasis.UNKNOWN
+        current_shares_outstanding = None
+        weighted_average_diluted_shares = None
         if diluted_shares is None:
             share_observation = self._latest_share_observation(eligible)
             if share_observation is None or share_observation.value <= 0:
                 raise ValueError(
-                    f"FCFF DCF requires a positive current share count by {as_of}; "
+                    f"FCFF DCF requires a positive share count by {as_of}; "
                     "provide valuation.capital_bridge.diluted_shares in the profile "
                     "or --shares"
                 )
             diluted_shares = share_observation.value
             if share_observation.concept == FinancialConcept.SHARES_OUTSTANDING:
+                share_count_basis = ShareCountBasis.CURRENT_SHARES_OUTSTANDING
+                current_shares_outstanding = share_observation.value
                 shares_source = (
                     f"{share_observation.source_concept} current shares outstanding; "
-                    "preferred to period-average diluted shares for a point-in-time "
-                    "equity claim count"
+                    "not a fully diluted share count"
                 )
+                warnings.append(_CURRENT_SHARES_LIMITATION_WARNING)
             else:
+                share_count_basis = ShareCountBasis.WEIGHTED_AVERAGE_DILUTED
+                weighted_average_diluted_shares = share_observation.value
                 shares_source = (
                     f"{share_observation.source_concept}; weighted-average diluted "
                     "shares fallback because a current shares-outstanding balance "
                     "was unavailable"
                 )
         else:
-            shares_source = "explicit profile or CLI override"
+            share_count_basis = ShareCountBasis.USER_SUPPLIED
+            shares_source = (
+                "user-supplied share count from explicit profile or CLI override; "
+                "fully diluted status not verified"
+            )
+            warnings.append(_USER_SUPPLIED_SHARES_WARNING)
 
         if (
             share_observation is not None
@@ -215,6 +239,9 @@ class FcffDcfCapitalBridgeResolver:
             unit=unit,
             net_debt=net_debt,
             diluted_shares=diluted_shares,
+            share_count_basis=share_count_basis,
+            current_shares_outstanding=current_shares_outstanding,
+            weighted_average_diluted_shares=weighted_average_diluted_shares,
             net_debt_source=net_debt_source,
             shares_source=shares_source,
             gross_debt=gross_debt,
@@ -502,12 +529,42 @@ class FcffDcfService:
             + capital_bridge.non_operating_assets
         )
         value_per_share = equity_value / capital_bridge.diluted_shares
+        share_dilution_sensitivities = (
+            tuple(
+                self._share_dilution_sensitivity(
+                    equity_value=equity_value,
+                    base_share_count=capital_bridge.diluted_shares,
+                    dilution_percentage=dilution_percentage,
+                )
+                for dilution_percentage in _DILUTION_SENSITIVITY_PERCENTAGES
+            )
+            if equity_value > 0
+            else ()
+        )
         terminal_percentage = (
             terminal_present_value.present_value / enterprise_value * Decimal(100)
             if enterprise_value != 0
             else None
         )
         warnings = [*forecast.warnings, *capital_bridge.warnings]
+        if (
+            capital_bridge.share_count_basis
+            == ShareCountBasis.CURRENT_SHARES_OUTSTANDING
+        ):
+            if not any(
+                "current shares outstanding" in warning.casefold()
+                and "options" in warning.casefold()
+                and "rsu" in warning.casefold()
+                and "other claims" in warning.casefold()
+                for warning in warnings
+            ):
+                warnings.append(_CURRENT_SHARES_LIMITATION_WARNING)
+        elif capital_bridge.share_count_basis == ShareCountBasis.USER_SUPPLIED:
+            if not any(
+                "user-supplied share count" in warning.casefold()
+                for warning in warnings
+            ):
+                warnings.append(_USER_SUPPLIED_SHARES_WARNING)
         if terminal_percentage is not None and terminal_percentage > Decimal(75):
             warnings.append(
                 "Discounted terminal value exceeds 75% of enterprise value; "
@@ -524,6 +581,10 @@ class FcffDcfService:
             warnings.append(transition_warning)
         if equity_value <= 0:
             warnings.append("Enterprise value does not cover reported net debt")
+            warnings.append(
+                "Share-dilution sensitivity is not meaningful for non-positive "
+                "equity value and was omitted"
+            )
         if parameters.cash_flow_timing == CashFlowTiming.MID_YEAR:
             warnings.append(
                 "Explicit FCFF uses mid-year timing; terminal value remains at "
@@ -622,6 +683,7 @@ class FcffDcfService:
             enterprise_value=enterprise_value,
             equity_value=equity_value,
             value_per_share=value_per_share,
+            share_dilution_sensitivities=share_dilution_sensitivities,
             share_repurchases=share_repurchases,
             terminal_value_percentage=terminal_percentage,
             warnings=tuple(warnings),
@@ -650,6 +712,24 @@ class FcffDcfService:
     @classmethod
     def _year_fraction(cls, start: datetime.date, end: datetime.date) -> Decimal:
         return Decimal((end - start).days) / cls._DAYS_PER_YEAR
+
+    @staticmethod
+    def _share_dilution_sensitivity(
+        *,
+        equity_value: Decimal,
+        base_share_count: Decimal,
+        dilution_percentage: Decimal,
+    ) -> FcffDcfShareDilutionSensitivity:
+        share_count = base_share_count * (
+            Decimal(1) + dilution_percentage / Decimal(100)
+        )
+        return FcffDcfShareDilutionSensitivity(
+            dilution_percentage=dilution_percentage,
+            base_share_count=base_share_count,
+            share_count=share_count,
+            equity_value=equity_value,
+            value_per_share=equity_value / share_count,
+        )
 
     @classmethod
     def _terminal_transition_warning(
