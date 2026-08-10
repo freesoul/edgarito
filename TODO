@@ -1,11 +1,7 @@
 
-6. **Report architecture**
-
-   * One canonical analysis/report object used by CLI, Excel, PDF and AI.
 
 7. **Exports**
 
-   * Excel first, with editable assumptions and calculations.
    * PDF afterward.
 
 8. **Portfolio mode**

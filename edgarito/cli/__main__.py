@@ -935,7 +935,15 @@ def _equity_relative_valuation(
     label = ""
     if basis == RelativeValuationBasis.PE:
         earnings = profile.valuation.dividend_discount.earnings
-        metric = earnings[0] if earnings else fundamentals.net_income
+        metric = (
+            earnings[0]
+            if earnings
+            else (
+                fundamentals.net_income_common
+                if fundamentals.net_income_common is not None
+                else fundamentals.net_income
+            )
+        )
         label = (
             "forward common earnings" if earnings else "LTM common earnings fallback"
         )
@@ -1115,10 +1123,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         )
     if getattr(args, "excel_output", None) is not None and selected_model not in {
         "fcff-dcf",
+        "comparables",
         "both",
     }:
         raise ValueError(
-            "Excel valuation export currently supports FCFF DCF only; the selected "
+            "Excel valuation export supports FCFF DCF and relative valuation; the selected "
             f"model ({selected_model}) does not produce an FCFF DCF result"
         )
     if selected_model not in {"fcff-dcf", "comparables", "both"}:
@@ -1655,6 +1664,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             forecast,
             result,
             args.excel_output,
+            relative=relative_result or provider_relative_result,
+            peer_report=peer_report,
             discount_timing_basis="calendar",
         )
         print(f"Exported valuation Excel workbook to {output}")

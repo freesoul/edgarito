@@ -89,6 +89,13 @@ class ValuationSelectionConsolePresenter:
 
     @staticmethod
     def _label(value: str) -> str:
+        relative_labels = {
+            "price_to_earnings": "P/E (PER)",
+            "ev_to_ebitda": "EV/EBITDA",
+            "ev_to_fcf": "EV/FCF",
+        }
+        if value in relative_labels:
+            return relative_labels[value]
         acronyms = {
             "affo": "AFFO",
             "dcf": "DCF",

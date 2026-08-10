@@ -38,6 +38,7 @@ class LtmMultiplesService:
         FinancialConcept.INCOME_TAX_EXPENSE,
         FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
         FinancialConcept.NET_INCOME,
+        FinancialConcept.NET_INCOME_COMMON,
         FinancialConcept.OPERATING_CASH_FLOW,
         FinancialConcept.CAPITAL_EXPENDITURES,
         FinancialConcept.DIVIDENDS_PAID,
@@ -179,6 +180,7 @@ class LtmMultiplesService:
             depreciation_and_amortization=depreciation,
             ebitda=ebitda,
             net_income=flows[FinancialConcept.NET_INCOME],
+            net_income_common=flows[FinancialConcept.NET_INCOME_COMMON],
             free_cash_flow=free_cash_flow,
             capital_expenditures=flows[FinancialConcept.CAPITAL_EXPENDITURES],
             dividends_paid=flows[FinancialConcept.DIVIDENDS_PAID],
@@ -326,6 +328,7 @@ class LtmMultiplesService:
             depreciation_and_amortization=depreciation,
             ebitda=ebitda,
             net_income=value(FinancialConcept.NET_INCOME),
+            net_income_common=value(FinancialConcept.NET_INCOME_COMMON),
             free_cash_flow=free_cash_flow,
             capital_expenditures=value(FinancialConcept.CAPITAL_EXPENDITURES),
             dividends_paid=value(FinancialConcept.DIVIDENDS_PAID),
@@ -584,7 +587,13 @@ class LtmMultiplesService:
     ) -> list[TradingMultiple]:
         return [
             self._multiple(
-                RelativeValuationBasis.PE, market_cap, fundamentals.net_income
+                RelativeValuationBasis.PE,
+                market_cap,
+                (
+                    fundamentals.net_income_common
+                    if fundamentals.net_income_common is not None
+                    else fundamentals.net_income
+                ),
             ),
             self._multiple(
                 RelativeValuationBasis.PRICE_TO_BOOK,

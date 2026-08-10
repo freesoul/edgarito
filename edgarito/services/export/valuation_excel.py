@@ -5,12 +5,14 @@ from __future__ import annotations
 import datetime
 import math
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 
+from edgarito.schemas.valuation.relative import ProviderNeutralRelativeValuation
 from edgarito.services.forecasting.models import FcffForecast, ForecastSeedType
 from edgarito.services.valuation.discounting import (
     PresentValueService,
@@ -18,7 +20,11 @@ from edgarito.services.valuation.discounting import (
 )
 from edgarito.services.valuation.models import (
     CashFlowTiming,
+    ComparableImpliedValuation,
+    ComparableMultiplesReport,
     FcffDcfResult,
+    MultipleStatus,
+    RelativeValuationBasis,
     TerminalMetric,
     TerminalValueMethod,
 )
@@ -68,6 +74,13 @@ class ValuationExcelRenderer:
         *,
         report: Any | None = None,
         canonical_report: Any | None = None,
+        relative: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        relative_result: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        peer_report: ComparableMultiplesReport | None = None,
         discount_timing_basis: DiscountTimingBasis | str | None = None,
     ) -> Path:
         """Render ``forecast`` and ``result`` to ``output``.
@@ -84,6 +97,9 @@ class ValuationExcelRenderer:
             raise ValueError("FCFF valuation export requires forecast observations")
         if report is not None and canonical_report is not None:
             raise TypeError("report and canonical_report are mutually exclusive")
+        if relative is not None and relative_result is not None:
+            raise TypeError("relative and relative_result are mutually exclusive")
+        relative_result = relative if relative is not None else relative_result
 
         self._validate_export_inputs(forecast, result)
         timing_basis = self._validate_result_alignment(
@@ -132,6 +148,13 @@ class ValuationExcelRenderer:
                 formats,
                 worksheet=summary_worksheet,
             )
+            if relative_result is not None or peer_report is not None:
+                self._write_relative_valuation(
+                    relative_result,
+                    peer_report,
+                    formats,
+                    workbook=workbook,
+                )
         finally:
             workbook.close()
         return output_path
@@ -330,6 +353,13 @@ class ValuationExcelRenderer:
         *,
         report: Any | None = None,
         canonical_report: Any | None = None,
+        relative: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        relative_result: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        peer_report: ComparableMultiplesReport | None = None,
         discount_timing_basis: DiscountTimingBasis | str | None = None,
     ) -> Path:
         """Alias for :meth:`render` for export-service style callers."""
@@ -339,6 +369,9 @@ class ValuationExcelRenderer:
             output,
             report=report,
             canonical_report=canonical_report,
+            relative=relative,
+            relative_result=relative_result,
+            peer_report=peer_report,
             discount_timing_basis=discount_timing_basis,
         )
 
@@ -350,6 +383,13 @@ class ValuationExcelRenderer:
         *,
         report: Any | None = None,
         canonical_report: Any | None = None,
+        relative: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        relative_result: ComparableImpliedValuation
+        | ProviderNeutralRelativeValuation
+        | None = None,
+        peer_report: ComparableMultiplesReport | None = None,
         discount_timing_basis: DiscountTimingBasis | str | None = None,
     ) -> Path:
         return self.render(
@@ -358,6 +398,9 @@ class ValuationExcelRenderer:
             output,
             report=report,
             canonical_report=canonical_report,
+            relative=relative,
+            relative_result=relative_result,
+            peer_report=peer_report,
             discount_timing_basis=discount_timing_basis,
         )
 
@@ -392,6 +435,7 @@ class ValuationExcelRenderer:
             ),
             "percent": workbook.add_format({"num_format": "0.00"}),
             "date": workbook.add_format({"num_format": "yyyy-mm-dd"}),
+            "datetime": workbook.add_format({"num_format": "yyyy-mm-dd hh:mm:ss"}),
             "formula": workbook.add_format(
                 {
                     "font_color": "#0000FF",
@@ -2137,6 +2181,258 @@ class ValuationExcelRenderer:
         worksheet.set_column(1, terminal_column, 18)
         return {"output_rows": output_rows}
 
+    def _write_relative_valuation(
+        self,
+        relative: ComparableImpliedValuation | ProviderNeutralRelativeValuation | None,
+        peer_report: ComparableMultiplesReport | None,
+        formats: dict[str, Any],
+        *,
+        workbook: xlsxwriter.Workbook,
+    ) -> None:
+        """Write the relative outputs attached to a valuation CLI run.
+
+        Relative valuation is resolved from provider observations and peer
+        evidence, so this sheet deliberately preserves the resolved values and
+        provenance rather than pretending that the peer-selection process is an
+        editable Excel formula model.
+        """
+        worksheet = workbook.add_worksheet("Relative Valuation")
+        worksheet.freeze_panes(4, 0)
+        worksheet.write("A1", "Relative Valuation", formats["title"])
+        worksheet.write(
+            "A2",
+            "Static peer evidence and resolved target-date cases from the valuation run.",
+            formats["source"],
+        )
+
+        row = 3
+
+        def section_row(label: str) -> None:
+            nonlocal row
+            worksheet.write(row, 0, label, formats["section"])
+            row += 1
+
+        def table_header(headers: tuple[str, ...]) -> None:
+            nonlocal row
+            for column, header in enumerate(headers):
+                worksheet.write(row, column, header, formats["header"])
+            row += 1
+
+        def cell(column: int, value: Any) -> None:
+            if value is None:
+                worksheet.write_blank(row, column, None, formats["number"])
+            elif isinstance(value, datetime.datetime):
+                worksheet.write_datetime(row, column, value, formats["datetime"])
+            elif isinstance(value, datetime.date):
+                worksheet.write_datetime(
+                    row,
+                    column,
+                    datetime.datetime.combine(value, datetime.time()),
+                    formats["date"],
+                )
+            elif isinstance(value, Decimal):
+                worksheet.write_number(
+                    row, column, self._number(value), formats["number"]
+                )
+            elif isinstance(value, Enum):
+                worksheet.write_string(row, column, str(value.value), formats["text"])
+            elif isinstance(value, (int, float)):
+                worksheet.write_number(row, column, value, formats["number"])
+            else:
+                worksheet.write(row, column, value, formats["text"])
+
+        if peer_report is not None:
+            section_row("LTM Peer Multiples")
+            table_header(
+                (
+                    "Basis",
+                    "Target",
+                    "Peer Median",
+                    "Peer Minimum",
+                    "Peer Maximum",
+                    "N",
+                    "Forward Peer Median",
+                    "Forward Peer Minimum",
+                    "Forward Peer Maximum",
+                    "Forward N",
+                    "Unit",
+                    "Target Status",
+                )
+            )
+            target_multiples = {
+                item.basis: item for item in peer_report.target.multiples
+            }
+            summaries = {item.basis: item for item in peer_report.summaries}
+            forward_summaries = {
+                item.basis: item for item in peer_report.forward_summaries
+            }
+            bases = list(
+                dict.fromkeys(
+                    (
+                        RelativeValuationBasis.PE,
+                        RelativeValuationBasis.EV_TO_EBITDA,
+                        RelativeValuationBasis.EV_TO_FCF,
+                        *target_multiples,
+                        *summaries,
+                        *forward_summaries,
+                    )
+                )
+            )
+            for basis in bases:
+                target_multiple = target_multiples.get(basis)
+                summary = summaries.get(basis)
+                forward_summary = forward_summaries.get(basis)
+                values = (
+                    target_multiple.value
+                    if target_multiple is not None
+                    and target_multiple.status == MultipleStatus.COMPUTED
+                    else None
+                )
+                cell(0, basis.label)
+                cell(1, values)
+                cell(2, summary.median if summary is not None else None)
+                cell(3, summary.minimum if summary is not None else None)
+                cell(4, summary.maximum if summary is not None else None)
+                cell(5, summary.sample_size if summary is not None else None)
+                cell(
+                    6,
+                    forward_summary.median if forward_summary is not None else None,
+                )
+                cell(
+                    7,
+                    forward_summary.minimum if forward_summary is not None else None,
+                )
+                cell(
+                    8,
+                    forward_summary.maximum if forward_summary is not None else None,
+                )
+                cell(
+                    9,
+                    forward_summary.sample_size
+                    if forward_summary is not None
+                    else None,
+                )
+                cell(
+                    10,
+                    target_multiple.unit if target_multiple is not None else None,
+                )
+                cell(
+                    11,
+                    target_multiple.status.value
+                    if target_multiple is not None
+                    else None,
+                )
+                row += 1
+
+        if relative is not None:
+            row += 1
+            section_row("Resolved Relative Valuation")
+            table_header(("Input", "Value", "Units / description"))
+            if isinstance(relative, ComparableImpliedValuation):
+                basis_label = relative.basis.label
+                metric_amount = relative.forecast_metric
+                metric_label = relative.forecast_metric_label
+            else:
+                basis_label = relative.metric.basis.label
+                metric_amount = relative.metric.amount
+                metric_label = relative.metric.label
+            input_rows = (
+                ("Basis", basis_label, "relative basis"),
+                ("Forecast Metric", metric_amount, relative.currency),
+                ("Forecast Metric Label", metric_label, "target date"),
+                ("Target Date", relative.target_date, "date"),
+                ("Horizon", relative.horizon_years, "years"),
+                ("Discount Rate", relative.discount_rate, "% points"),
+            )
+            if isinstance(relative, ComparableImpliedValuation):
+                input_rows = (
+                    *input_rows,
+                    (
+                        "Projected Diluted Shares",
+                        relative.projected_diluted_shares,
+                        "shares",
+                    ),
+                    (
+                        "Projected Net Debt",
+                        relative.projected_net_debt,
+                        relative.currency,
+                    ),
+                )
+            else:
+                input_rows = (
+                    *input_rows,
+                    ("Diluted Shares", relative.diluted_shares, "shares"),
+                    (
+                        "Numerator Basis",
+                        relative.metric.numerator_basis,
+                        "enterprise or equity value",
+                    ),
+                )
+            for label, value, units in input_rows:
+                cell(0, label)
+                cell(1, value)
+                cell(2, units)
+                row += 1
+
+            row += 1
+            table_header(
+                (
+                    "Case",
+                    "Multiple",
+                    "Target-date Numerator / EV",
+                    "Target-date Equity Value",
+                    "Target-date Value / Share",
+                    "Present Value / Share",
+                )
+            )
+            cases = (
+                ("Lower", relative.lower_case),
+                ("Resolved", relative.point_case),
+                ("Upper", relative.upper_case),
+            )
+            for label, case in cases:
+                cell(0, label)
+                cell(1, case.multiple)
+                if isinstance(relative, ComparableImpliedValuation):
+                    cell(2, case.implied_enterprise_value)
+                    cell(3, case.implied_equity_value)
+                    cell(4, case.implied_value_per_share)
+                    cell(5, case.present_value_per_share)
+                else:
+                    cell(2, case.target_date_numerator_value)
+                    cell(3, case.target_date_equity_value)
+                    cell(4, case.target_date_value_per_share)
+                    cell(5, case.present_value_per_share)
+                row += 1
+
+            if relative.current_price is not None:
+                row += 1
+                cell(0, "Current Price")
+                cell(1, relative.current_price)
+                cell(2, relative.currency)
+                row += 1
+            if (
+                isinstance(relative, ComparableImpliedValuation)
+                and relative.analyst_target_price is not None
+            ):
+                cell(0, "Analyst Target Price")
+                cell(1, relative.analyst_target_price)
+                cell(2, relative.currency)
+                row += 1
+
+            if relative.warnings:
+                row += 1
+                section_row("Warnings")
+                for warning in relative.warnings:
+                    cell(0, "Warning")
+                    cell(1, warning)
+                    row += 1
+
+        worksheet.set_column("A:A", 32)
+        worksheet.set_column("B:J", 22)
+        worksheet.set_column("K:K", 22)
+        worksheet.set_column("L:L", 18)
+
     def _write_summary(
         self,
         forecast: FcffForecast,
@@ -2482,6 +2778,13 @@ def render_valuation_excel(
     *,
     report: Any | None = None,
     canonical_report: Any | None = None,
+    relative: ComparableImpliedValuation
+    | ProviderNeutralRelativeValuation
+    | None = None,
+    relative_result: ComparableImpliedValuation
+    | ProviderNeutralRelativeValuation
+    | None = None,
+    peer_report: ComparableMultiplesReport | None = None,
     discount_timing_basis: DiscountTimingBasis | str | None = None,
 ) -> Path:
     """Render an FCFF forecast and DCF result as an Excel workbook."""
@@ -2491,6 +2794,9 @@ def render_valuation_excel(
         output,
         report=report,
         canonical_report=canonical_report,
+        relative=relative,
+        relative_result=relative_result,
+        peer_report=peer_report,
         discount_timing_basis=discount_timing_basis,
     )
 

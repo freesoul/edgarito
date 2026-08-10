@@ -217,18 +217,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     valuation.add_argument(
         "--relative-basis",
+        type=_relative_basis,
         choices=(
             "ev_to_ebitda",
             "ev_to_ebit",
             "ev_to_revenue",
             "ev_to_fcf",
             "price_to_earnings",
+            "pe",
+            "per",
+            "p/e",
+            "p-e",
+            "ev/ebitda",
+            "ev/ebit",
+            "ev/revenue",
+            "ev/fcf",
             "price_to_book",
             "price_to_tangible_book",
             "price_to_affo",
             "price_to_nav",
         ),
-        help="Forward multiple basis; overrides the relative-valuation policy",
+        help=(
+            "Forward multiple basis; overrides the relative-valuation policy. "
+            "Aliases include pe/per/p-e, ev/ebitda, and ev/fcf"
+        ),
     )
     valuation.add_argument(
         "--horizon-years",
@@ -486,8 +498,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         help=(
-            "Write a parameterized FCFF DCF Excel workbook; parent directories are "
-            "created and an existing file is overwritten"
+            "Write a parameterized FCFF DCF workbook, including relative valuation "
+            "outputs when available; parent directories are created and an existing "
+            "file is overwritten"
         ),
     )
     valuation.add_argument(
@@ -757,6 +770,10 @@ def _decimal_value(value: str) -> Decimal:
     if not converted.is_finite():
         raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}")
     return converted
+
+
+def _relative_basis(value: str) -> str:
+    return value.strip().casefold()
 
 
 __all__ = ["build_parser"]

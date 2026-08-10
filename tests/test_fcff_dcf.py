@@ -26,14 +26,23 @@ from edgarito.services.forecasting import (
 )
 from edgarito.services.valuation import (
     CashFlowTiming,
+    CompanyTradingMultiples,
+    ComparableMultiplesReport,
     FcffDcfCapitalBridge,
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
     FcffDcfResult,
     FcffDcfService,
+    LtmFundamentals,
+    MultipleStatus,
+    PeerMultipleSummary,
+    PeerSelectionParameters,
+    PeerUniverse,
+    RelativeValuationBasis,
     ShareRepurchaseParameters,
     TerminalMetric,
     TerminalValueMethod,
+    TradingMultiple,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -315,6 +324,91 @@ def test_valuation_excel_export_contains_linked_formulas_yellow_inputs_and_cache
         assert float(summary_value.text) == pytest.approx(
             float(result.enterprise_value)
         )
+
+
+def test_valuation_excel_export_includes_requested_relative_multiple_evidence(tmp_path):
+    forecast = _consistent_forecast()
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    target = CompanyTradingMultiples(
+        provider="test",
+        market_provider="test-market",
+        company_id="EX",
+        company_name="Example Co",
+        ticker="EX",
+        price_date=datetime.date(2026, 7, 1),
+        price=Decimal("100"),
+        currency="USD",
+        market_capitalization=Decimal("1000"),
+        enterprise_value=Decimal("1100"),
+        fundamentals=LtmFundamentals(
+            period_start=datetime.date(2025, 1, 1),
+            period_end=datetime.date(2025, 12, 31),
+            currency="USD",
+            revenue=Decimal("500"),
+            ebitda=Decimal("100"),
+            net_income=Decimal("50"),
+            free_cash_flow=Decimal("75"),
+            shares=Decimal("10"),
+        ),
+        multiples=[
+            TradingMultiple(
+                basis=basis,
+                status=MultipleStatus.COMPUTED,
+                value=value,
+                numerator=Decimal("1000"),
+                denominator=denominator,
+            )
+            for basis, value, denominator in (
+                (RelativeValuationBasis.PE, Decimal("20"), Decimal("50")),
+                (RelativeValuationBasis.EV_TO_EBITDA, Decimal("11"), Decimal("100")),
+                (RelativeValuationBasis.EV_TO_FCF, Decimal("14.6667"), Decimal("75")),
+            )
+        ],
+    )
+    universe = PeerUniverse(
+        target_ticker="EX",
+        target_company_id="EX",
+        parameters=PeerSelectionParameters(max_peers=3, preferred_minimum=1),
+        selected_tickers=("PEER",),
+    )
+    peer_report = ComparableMultiplesReport(
+        universe=universe,
+        target=target,
+        summaries=[
+            PeerMultipleSummary(
+                basis=basis,
+                median=value,
+                minimum=value - Decimal("1"),
+                maximum=value + Decimal("1"),
+                sample_size=3,
+            )
+            for basis, value in (
+                (RelativeValuationBasis.PE, Decimal("18")),
+                (RelativeValuationBasis.EV_TO_EBITDA, Decimal("10")),
+                (RelativeValuationBasis.EV_TO_FCF, Decimal("12")),
+            )
+        ],
+    )
+    output = tmp_path / "relative-valuations.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output, peer_report=peer_report)
+
+    with ZipFile(output) as archive:
+        workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+        names = [
+            sheet.attrib["name"]
+            for sheet in workbook.findall("main:sheets/main:sheet", XML_NS)
+        ]
+        assert names[-1] == "Relative Valuation"
+        shared_strings = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+        strings = "".join(shared_strings.itertext())
+        assert "P/E (PER)" in strings
+        assert "EV/EBITDA" in strings
+        assert "EV/FCF" in strings
 
 
 def test_valuation_excel_export_allows_missing_base_fcff_and_writes_blank_cells(

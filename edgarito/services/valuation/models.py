@@ -97,6 +97,8 @@ class ForecastProfile(str, Enum):
 
 class RelativeValuationBasis(str, Enum):
     PE = "price_to_earnings"
+    PER = "price_to_earnings"
+    P_E = "price_to_earnings"
     PRICE_TO_BOOK = "price_to_book"
     PRICE_TO_TANGIBLE_BOOK = "price_to_tangible_book"
     PRICE_TO_AFFO = "price_to_affo"
@@ -106,6 +108,49 @@ class RelativeValuationBasis(str, Enum):
     EV_TO_EBITDA = "ev_to_ebitda"
     EV_TO_FCF = "ev_to_fcf"
     DIVIDEND_YIELD = "dividend_yield"
+
+    @property
+    def label(self) -> str:
+        return {
+            RelativeValuationBasis.PE: "P/E (PER)",
+            RelativeValuationBasis.PRICE_TO_BOOK: "P/B",
+            RelativeValuationBasis.PRICE_TO_TANGIBLE_BOOK: "P/TBV",
+            RelativeValuationBasis.PRICE_TO_AFFO: "P/AFFO",
+            RelativeValuationBasis.PRICE_TO_NAV: "P/NAV",
+            RelativeValuationBasis.EV_TO_REVENUE: "EV/Revenue",
+            RelativeValuationBasis.EV_TO_EBIT: "EV/EBIT",
+            RelativeValuationBasis.EV_TO_EBITDA: "EV/EBITDA",
+            RelativeValuationBasis.EV_TO_FCF: "EV/FCF",
+            RelativeValuationBasis.DIVIDEND_YIELD: "Dividend Yield",
+        }[self]
+
+    @classmethod
+    def _missing_(cls, value):
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().casefold()
+        aliases = {
+            "pe": cls.PE,
+            "per": cls.PE,
+            "p/e": cls.PE,
+            "p-e": cls.PE,
+            "p_e": cls.PE,
+            "price/earnings": cls.PE,
+            "price-earnings": cls.PE,
+            "ev/ebitda": cls.EV_TO_EBITDA,
+            "ev-ebitda": cls.EV_TO_EBITDA,
+            "ev_ebitda": cls.EV_TO_EBITDA,
+            "ev/ebit": cls.EV_TO_EBIT,
+            "ev-ebit": cls.EV_TO_EBIT,
+            "ev_ebit": cls.EV_TO_EBIT,
+            "ev/fcf": cls.EV_TO_FCF,
+            "ev-fcf": cls.EV_TO_FCF,
+            "ev_fcf": cls.EV_TO_FCF,
+            "ev/revenue": cls.EV_TO_REVENUE,
+            "ev-revenue": cls.EV_TO_REVENUE,
+            "ev_revenue": cls.EV_TO_REVENUE,
+        }
+        return aliases.get(normalized)
 
 
 class ValuationInput(str, Enum):
@@ -301,6 +346,7 @@ class LtmFundamentals(BaseModel):
     depreciation_and_amortization: Optional[Decimal] = None
     ebitda: Optional[Decimal] = None
     net_income: Optional[Decimal] = None
+    net_income_common: Optional[Decimal] = None
     free_cash_flow: Optional[Decimal] = None
     capital_expenditures: Optional[Decimal] = None
     dividends_paid: Optional[Decimal] = None

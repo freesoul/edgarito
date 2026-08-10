@@ -252,6 +252,40 @@ def test_computes_ltm_fundamentals_enterprise_value_and_multiples():
     assert multiples[RelativeValuationBasis.DIVIDEND_YIELD].value == Decimal("0.8")
 
 
+def test_pe_uses_common_earnings_when_reported_separately():
+    source = _financials().model_copy(
+        update={
+            "observations": [
+                *_financials().observations,
+                *(
+                    _observation(
+                        FinancialConcept.NET_INCOME_COMMON,
+                        "10",
+                        fiscal_year,
+                        fiscal_period,
+                        period_end,
+                    )
+                    for fiscal_year, fiscal_period, period_end in (
+                        (2025, FiscalPeriod.Q2, datetime.date(2025, 6, 30)),
+                        (2025, FiscalPeriod.Q3, datetime.date(2025, 9, 30)),
+                        (2025, FiscalPeriod.Q4, datetime.date(2025, 12, 31)),
+                        (2026, FiscalPeriod.Q1, datetime.date(2026, 3, 31)),
+                    )
+                ),
+            ]
+        }
+    )
+
+    result = LtmMultiplesService().compute(source, _market_data())
+    pe = next(
+        item for item in result.multiples if item.basis == RelativeValuationBasis.PE
+    )
+
+    assert result.fundamentals.net_income == Decimal("48")
+    assert result.fundamentals.net_income_common == Decimal("40")
+    assert pe.value == Decimal("500") / Decimal("40")
+
+
 def test_peer_selector_enforces_market_cap_band_and_scores_margin_and_roic():
     target_profile = _profile("TARGET")
     similar_profile = _profile("SIMILAR")

@@ -19,6 +19,7 @@ from edgarito.services.valuation import (
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    RelativeValuationBasis,
     ValuationInput,
     ValuationProfile,
 )
@@ -56,6 +57,25 @@ def test_default_profile_fixture_is_valid_and_complete():
     assert ForecastValuationProfile.model_validate_json(profile.model_dump_json()) == (
         profile
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("pe", RelativeValuationBasis.PE),
+        ("per", RelativeValuationBasis.PE),
+        ("p/e", RelativeValuationBasis.PE),
+        ("p-e", RelativeValuationBasis.PE),
+        ("ev/ebitda", RelativeValuationBasis.EV_TO_EBITDA),
+        ("ev/fcf", RelativeValuationBasis.EV_TO_FCF),
+    ),
+)
+def test_relative_basis_cli_aliases_are_accepted(value, expected):
+    args = build_parser().parse_args(
+        ["valuation", "--ticker", "AAPL", "--relative-basis", value]
+    )
+
+    assert RelativeValuationBasis(args.relative_basis) == expected
 
 
 def test_race_profile_overrides_provider_classification_with_luxury_economics():
