@@ -890,6 +890,16 @@ class TerminalMetric(str, Enum):
     REVENUE = "revenue"
 
 
+class ShareCountBasis(str, Enum):
+    """Semantic basis of the share count used by an FCFF DCF."""
+
+    CURRENT_SHARES_OUTSTANDING = "current_shares_outstanding"
+    WEIGHTED_AVERAGE_DILUTED = "weighted_average_diluted_shares"
+    FULLY_DILUTED = "fully_diluted_shares"
+    USER_SUPPLIED = "user_supplied_share_count"
+    UNKNOWN = "unknown"
+
+
 class FcffDcfCapitalBridge(BaseModel):
     """Normalized enterprise-to-equity inputs with explicit source labels."""
 
@@ -900,6 +910,9 @@ class FcffDcfCapitalBridge(BaseModel):
     unit: str
     net_debt: Decimal
     diluted_shares: Decimal = Field(gt=0)
+    share_count_basis: ShareCountBasis = ShareCountBasis.UNKNOWN
+    current_shares_outstanding: Optional[Decimal] = None
+    weighted_average_diluted_shares: Optional[Decimal] = None
     net_debt_source: str
     shares_source: str
     gross_debt: Optional[Decimal] = None
@@ -918,6 +931,8 @@ class FcffDcfCapitalBridge(BaseModel):
     @field_validator(
         "net_debt",
         "diluted_shares",
+        "current_shares_outstanding",
+        "weighted_average_diluted_shares",
         "gross_debt",
         "cash_and_equivalents",
         "non_operating_assets",
@@ -926,6 +941,15 @@ class FcffDcfCapitalBridge(BaseModel):
     def require_finite(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and not value.is_finite():
             raise ValueError("Capital-bridge values must be finite")
+        return value
+
+    @field_validator("current_shares_outstanding", "weighted_average_diluted_shares")
+    @classmethod
+    def require_positive_basis_share_count(
+        cls, value: Optional[Decimal]
+    ) -> Optional[Decimal]:
+        if value is not None and value <= 0:
+            raise ValueError("Basis-specific share counts must be positive")
         return value
 
     @field_validator(
@@ -956,6 +980,78 @@ class FcffDcfCapitalBridge(BaseModel):
             if not _decimal_close(self.net_debt, expected):
                 raise ValueError("Net debt does not match gross debt minus cash")
         return self
+
+    @model_validator(mode="after")
+    def validate_share_count_basis(self) -> "FcffDcfCapitalBridge":
+        basis_fields = (
+            "current_shares_outstanding",
+            "weighted_average_diluted_shares",
+        )
+        populated_fields = tuple(
+            field for field in basis_fields if getattr(self, field) is not None
+        )
+        if len(populated_fields) > 1:
+            raise ValueError(
+                "Contradictory basis-specific share counts cannot both be populated"
+            )
+
+        applicable_field = {
+            ShareCountBasis.CURRENT_SHARES_OUTSTANDING: "current_shares_outstanding",
+            ShareCountBasis.WEIGHTED_AVERAGE_DILUTED: (
+                "weighted_average_diluted_shares"
+            ),
+        }.get(self.share_count_basis)
+
+        if self.share_count_basis == ShareCountBasis.UNKNOWN:
+            if populated_fields:
+                raise ValueError(
+                    "Unknown share-count basis cannot include basis-specific counts"
+                )
+            return self
+
+        if applicable_field is None:
+            if populated_fields:
+                raise ValueError(
+                    f"{self.share_count_basis.value} cannot include basis-specific "
+                    "counts"
+                )
+            return self
+
+        if populated_fields != (applicable_field,):
+            raise ValueError(
+                f"{applicable_field} is required for {self.share_count_basis.value}"
+            )
+        applicable_count = getattr(self, applicable_field)
+        if applicable_count is None:
+            raise ValueError(
+                f"{applicable_field} is required for {self.share_count_basis.value}"
+            )
+        if not _decimal_close(applicable_count, self.diluted_shares):
+            raise ValueError(
+                f"{applicable_field} must equal diluted_shares for "
+                f"{self.share_count_basis.value}"
+            )
+        return self
+
+    @property
+    def shares_outstanding(self) -> Optional[Decimal]:
+        """Return the reported current shares-outstanding balance, when available."""
+
+        return self.current_shares_outstanding
+
+    @property
+    def share_count_label(self) -> str:
+        """Return a user-facing label that does not overstate dilution."""
+
+        return {
+            ShareCountBasis.CURRENT_SHARES_OUTSTANDING: "Current shares outstanding",
+            ShareCountBasis.WEIGHTED_AVERAGE_DILUTED: (
+                "Weighted-average diluted shares"
+            ),
+            ShareCountBasis.FULLY_DILUTED: "Fully diluted shares",
+            ShareCountBasis.USER_SUPPLIED: "User-supplied share count",
+            ShareCountBasis.UNKNOWN: "Share count used for valuation",
+        }[self.share_count_basis]
 
 
 class FcffDcfParameters(BaseModel):
@@ -1007,6 +1103,45 @@ class FcffDcfParameters(BaseModel):
                 raise ValueError("exit_multiple cannot be negative")
             if self.perpetual_growth_rate is not None:
                 raise ValueError("Exit multiple cannot include perpetual growth")
+        return self
+
+
+class FcffDcfShareDilutionSensitivity(BaseModel):
+    """Per-share value under a larger share-count denominator."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dilution_percentage: Decimal = Field(ge=0)
+    base_share_count: Decimal = Field(gt=0)
+    share_count: Decimal = Field(gt=0)
+    equity_value: Decimal
+    value_per_share: Decimal
+
+    @field_validator(
+        "dilution_percentage",
+        "base_share_count",
+        "share_count",
+        "equity_value",
+        "value_per_share",
+    )
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Share-dilution sensitivity values must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_calculation(self) -> "FcffDcfShareDilutionSensitivity":
+        expected_share_count = self.base_share_count * (
+            Decimal(1) + self.dilution_percentage / Decimal(100)
+        )
+        if not _decimal_close(self.share_count, expected_share_count):
+            raise ValueError("Dilution sensitivity share count does not match inputs")
+        expected_value_per_share = self.equity_value / self.share_count
+        if not _decimal_close(self.value_per_share, expected_value_per_share):
+            raise ValueError(
+                "Dilution sensitivity per-share value does not match equity value"
+            )
         return self
 
 
@@ -1199,6 +1334,7 @@ class FcffDcfResult(BaseModel):
     enterprise_value: Decimal
     equity_value: Decimal
     value_per_share: Decimal
+    share_dilution_sensitivities: tuple[FcffDcfShareDilutionSensitivity, ...] = ()
     share_repurchases: Optional[ShareRepurchaseResult] = None
     terminal_value_percentage: Optional[Decimal] = None
     warnings: tuple[str, ...] = ()
@@ -1256,4 +1392,15 @@ class FcffDcfResult(BaseModel):
             raise ValueError(
                 "terminal_value_percentage does not match enterprise value"
             )
+        for sensitivity in self.share_dilution_sensitivities:
+            if not _decimal_close(sensitivity.equity_value, self.equity_value):
+                raise ValueError(
+                    "Share-dilution sensitivity must use the result equity value"
+                )
+            if not _decimal_close(
+                sensitivity.base_share_count, self.capital_bridge.diluted_shares
+            ):
+                raise ValueError(
+                    "Share-dilution sensitivity must use the result share count"
+                )
         return self

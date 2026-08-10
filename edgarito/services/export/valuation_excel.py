@@ -1318,7 +1318,7 @@ class ValuationExcelRenderer:
         )
         input_row(
             "diluted_shares",
-            "Diluted Shares",
+            bridge.share_count_label,
             bridge.diluted_shares,
             "shares",
             bridge.shares_source,
@@ -2007,6 +2007,7 @@ class ValuationExcelRenderer:
 
         input_sheet = self._INPUTS
         input_rows = input_refs["assumption_rows"]
+        bridge = result.capital_bridge
 
         def input_ref(key: str) -> str:
             return self._ref(input_sheet, input_rows[key], 1)
@@ -2190,7 +2191,7 @@ class ValuationExcelRenderer:
             "net_debt": "Net Debt",
             "non_operating_assets": "Non-operating Assets",
             "equity_value": "Equity Value",
-            "diluted_shares": "Diluted Shares",
+            "diluted_shares": bridge.share_count_label,
             "value_per_share": "Value / Share",
             "terminal_value_percentage": "Terminal Value % of EV",
         }
