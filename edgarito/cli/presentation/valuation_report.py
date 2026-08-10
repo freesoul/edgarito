@@ -174,14 +174,27 @@ class ValuationReportConsolePresenter:
                 f"Extraction cache: {result.cache_hits} hit(s), "
                 f"{result.cache_misses} miss(es)"
             )
-            for record in source_records:
-                lines.extend(
-                    (
-                        f"  {record.accession_number} | {record.source_document} | "
-                        f"{record.source_document_type}",
-                        f"    Evidence: {record.supporting_text}",
+            if result.document_audits:
+                lines.extend(("", "SEC document audit (contents omitted):"))
+                for audit in result.document_audits:
+                    hits = audit.keyword_hits
+                    lines.append(
+                        f"  SEC form={audit.filing_form} "
+                        f"date={audit.filing_date.isoformat()} "
+                        f"accession={audit.accession_number} | "
+                        f"filename={audit.filename} type={audit.document_type} | "
+                        f"primary={'yes' if audit.is_primary else 'no'} | "
+                        f"cleaned={audit.cleaned_size} chars "
+                        f"context={audit.bounded_context_size} chars | "
+                        "hits="
+                        f"expect={hits.get('expect', 0)} "
+                        f"capex={hits.get('capex', 0)} "
+                        f"capital expenditures={hits.get('capital expenditures', 0)} "
+                        f"revenue={hits.get('revenue', 0)} "
+                        f"margin={hits.get('margin', 0)} | "
+                        f"accepted={audit.accepted_records} "
+                        f"rejected={audit.rejected_records}"
                     )
-                )
             lines.extend(f"  Rejected: {reason}" for reason in result.rejected_reasons)
         return "\n".join(lines)
 

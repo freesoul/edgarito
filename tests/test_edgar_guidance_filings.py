@@ -2,7 +2,7 @@ import asyncio
 import datetime
 from types import SimpleNamespace
 
-from edgarito.schemas.providers.edgar.filing import SecFiling
+from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import GuidanceDocumentSelector
 from edgarito.services.providers.edgar import EdgarClient
@@ -243,3 +243,38 @@ def test_filing_selection_deduplicates_accessions():
     filing = _filing().model_copy(update={"form": "8-K"})
 
     assert selector.select_filings([filing, filing]) == [filing]
+
+
+def test_periodic_primary_document_is_selected_before_higher_ranked_exhibits():
+    primary = SecFilingDocument(
+        filename="primary.htm",
+        document_type="10-Q",
+        description="Quarterly report",
+        content="Selected primary report.",
+    )
+    exhibits = tuple(
+        SecFilingDocument(
+            filename=f"ex99.{index}.htm",
+            document_type=f"EX-99.{index}",
+            description="Earnings outlook guidance revenue margin capex",
+            content="We expect revenue and margin guidance.",
+            sequence=str(index + 1),
+        )
+        for index in range(1, 4)
+    )
+    filing = _filing().model_copy(
+        update={
+            "form": "10-Q",
+            "primary_document": "primary.htm",
+            "documents": (primary, *exhibits),
+        }
+    )
+
+    selected = GuidanceDocumentSelector().select_documents(filing, limit=2)
+
+    assert [document.filename for document in selected] == [
+        "primary.htm",
+        "ex99.1.htm",
+    ]
+    assert selected[0].is_primary
+    assert not selected[1].is_primary

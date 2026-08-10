@@ -1,10 +1,12 @@
 import asyncio
 import datetime
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
+import edgarito.services.guidance.extraction as extraction_module
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
@@ -205,6 +207,68 @@ def test_normalized_extraction_cache_is_one_time_per_identity(tmp_path):
     assert "api_key" not in next(tmp_path.rglob("*.json")).read_text().casefold()
 
 
+def test_legacy_cache_hit_normalizes_primary_provenance(tmp_path):
+    cache = FileSystemCache(tmp_path)
+    ai = _DomainOpenAI(_response())
+    extractor = ManagementGuidanceExtractor(ai, cache)
+    filing = _filing().model_copy(update={"primary_document": "ex991.htm"})
+    document = _document()
+
+    asyncio.run(
+        extractor.extract(
+            filing,
+            document,
+            document.content,
+            valuation_date=datetime.date(2026, 8, 1),
+        )
+    )
+    cache_file = next(tmp_path.rglob("*.json"))
+    payload = json.loads(cache_file.read_text())
+    for record in payload["accepted"]:
+        record.pop("is_primary", None)
+    cache_file.write_text(json.dumps(payload))
+
+    entry, cache_hit = asyncio.run(
+        ManagementGuidanceExtractor(ai, cache).extract(
+            filing,
+            document,
+            document.content,
+            valuation_date=datetime.date(2026, 8, 1),
+        )
+    )
+
+    assert cache_hit
+    assert entry.accepted[0].is_primary
+    assert ai.calls == 1
+
+
+def test_supplied_guidance_context_is_not_rebounded_by_extractor(tmp_path, monkeypatch):
+    ai = _DomainOpenAI(_response())
+    extractor = ManagementGuidanceExtractor(ai, FileSystemCache(tmp_path))
+    document = _document()
+    context = "bounded context"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("extractor must not rebuild supplied context")
+
+    monkeypatch.setattr(extraction_module, "extract_guidance_context", fail_if_called)
+
+    entry, cache_hit = asyncio.run(
+        extractor.extract(
+            _filing(),
+            document,
+            document.content,
+            valuation_date=datetime.date(2026, 8, 1),
+            source_text=document.content,
+            context_text=context,
+        )
+    )
+
+    assert not cache_hit
+    assert ai.contents == [context]
+    assert len(entry.accepted) == 1
+
+
 @pytest.mark.parametrize("change", ["content", "model", "prompt", "schema"])
 def test_extraction_cache_invalidates_for_identity_changes(tmp_path, change):
     cache = FileSystemCache(tmp_path)
@@ -257,6 +321,30 @@ def test_unmatched_supporting_evidence_is_rejected_and_cached(tmp_path):
     assert entry.accepted == ()
     assert (
         entry.rejected[0].reason == "Supporting text was not found in the SEC document"
+    )
+
+
+def test_every_extracted_numeric_bound_must_appear_in_supporting_evidence(tmp_path):
+    text = "We expect FY2026 revenue of $10 billion."
+    item = _response(text).guidance[0].model_copy(
+        update={"low": Decimal("10"), "high": Decimal("11")}
+    )
+    response = ExtractedGuidanceResponse(guidance=[item])
+
+    entry, _ = asyncio.run(
+        ManagementGuidanceExtractor(
+            _DomainOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(
+            _filing(),
+            _document(text),
+            text,
+            valuation_date=datetime.date(2026, 8, 1),
+        )
+    )
+
+    assert entry.accepted == ()
+    assert entry.rejected[0].reason == (
+        "Extracted numerical values are absent from supporting text"
     )
 
 

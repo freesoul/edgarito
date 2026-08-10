@@ -4,6 +4,7 @@ import datetime
 from dataclasses import dataclass
 
 from edgarito.schemas.guidance.management import (
+    GuidanceDocumentAudit,
     GuidanceRejection,
     ManagementGuidance,
 )
@@ -11,6 +12,8 @@ from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     clean_document_text,
     extract_guidance_context,
+    guidance_keyword_hits,
+    is_periodic_filing,
 )
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.resolver import ManagementGuidanceResolver
@@ -29,6 +32,7 @@ class GuidanceDiscoveryResult:
     documents_inspected: int = 0
     extracted_guidance_records: int = 0
     rejected_records: int = 0
+    document_audits: tuple[GuidanceDocumentAudit, ...] = ()
 
 
 class ManagementGuidanceService:
@@ -77,6 +81,13 @@ class ManagementGuidanceService:
             make_cache=True,
         )
         filings = self._selector.select_filings(filings, limit=self.max_filings)
+        # The selector retains current-report ranking, but process selected
+        # periodic filings first so their guaranteed primary document cannot
+        # be consumed by the service-wide document budget before it is seen.
+        filings = [
+            *[filing for filing in filings if is_periodic_filing(filing)],
+            *[filing for filing in filings if not is_periodic_filing(filing)],
+        ]
         filings_inspected = len(filings)
         records: list[ManagementGuidance] = []
         rejected: list[GuidanceRejection] = []
@@ -85,6 +96,7 @@ class ManagementGuidanceService:
         misses = 0
         documents_inspected = 0
         extracted_guidance_records = 0
+        document_audits: list[GuidanceDocumentAudit] = []
         for filing in filings:
             if documents_inspected >= self.max_documents:
                 break
@@ -106,16 +118,36 @@ class ManagementGuidanceService:
                     break
                 documents_inspected += 1
                 clean_text = clean_document_text(document.content)
-                if not clean_text:
-                    continue
                 context_text = extract_guidance_context(clean_text)
+                document_audit = GuidanceDocumentAudit(
+                    filing_form=filing.form,
+                    filing_date=filing.filing_date,
+                    accession_number=filing.accession_number,
+                    filename=document.filename,
+                    document_type=document.document_type,
+                    is_primary=self._selector.is_primary(filing, document),
+                    cleaned_size=len(clean_text),
+                    bounded_context_size=len(context_text),
+                    keyword_hits=guidance_keyword_hits(clean_text),
+                )
+                if document.is_pdf:
+                    warnings.append(
+                        f"{filing.form} {filing.accession_number} document "
+                        f"{document.filename} is PDF; PDF extraction is unsupported"
+                    )
+                    document_audits.append(document_audit)
+                    continue
+                if not clean_text:
+                    document_audits.append(document_audit)
+                    continue
                 try:
                     entry, cache_hit = await self._extractor.extract(
                         filing,
                         document,
-                        context_text,
+                        clean_text,
                         valuation_date=as_of,
                         source_text=clean_text,
+                        context_text=context_text,
                     )
                 except OpenAIAuthenticationError:
                     raise
@@ -124,12 +156,24 @@ class ManagementGuidanceService:
                         f"Guidance extraction skipped for {filing.accession_number} "
                         f"{document.filename}: {exc}"
                     )
+                    document_audits.append(document_audit)
                     continue
                 hits += int(cache_hit)
                 misses += int(not cache_hit)
-                records.extend(entry.accepted)
+                records.extend(
+                    record.model_copy(update={"is_primary": document_audit.is_primary})
+                    for record in entry.accepted
+                )
                 rejected.extend(entry.rejected)
                 extracted_guidance_records += len(entry.accepted)
+                document_audits.append(
+                    document_audit.model_copy(
+                        update={
+                            "accepted_records": len(entry.accepted),
+                            "rejected_records": len(entry.rejected),
+                        }
+                    )
+                )
         resolved = ManagementGuidanceResolver().resolve(records, as_of=as_of)
         warnings.extend(resolved.warnings)
         return GuidanceDiscoveryResult(
@@ -142,4 +186,5 @@ class ManagementGuidanceService:
             documents_inspected=documents_inspected,
             extracted_guidance_records=extracted_guidance_records,
             rejected_records=len(rejected),
+            document_audits=tuple(document_audits),
         )
