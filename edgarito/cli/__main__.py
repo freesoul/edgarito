@@ -1379,6 +1379,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 terminal_roic=terminal_roic.value,
                 terminal_roic_confidence=terminal_roic.confidence,
                 generated_on=valuation_date,
+                terminal_roic_source=terminal_roic.source,
+                terminal_roic_methodology=terminal_roic.methodology,
                 peers=discovered_peers,
                 path=generated_profile_path,
             )
