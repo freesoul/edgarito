@@ -246,6 +246,7 @@ def _fcff_parameters(source):
         tax_rate=source.tax_rate,
         depreciation_to_revenue=source.depreciation_to_revenue,
         capex_to_revenue=source.capex_to_revenue,
+        capex_constraints=tuple(sorted(source.capex_constraints.items())),
         operating_working_capital_to_revenue=source.operating_working_capital_to_revenue,
         revenue_anchors=tuple(sorted(source.revenue_anchors.items())),
         revenue_anchor_sources=tuple(sorted(source.revenue_anchor_sources.items())),
@@ -297,6 +298,7 @@ def _fcff_forecast(source: FcffForecast) -> FcffForecastExport:
             for observation in source.observations
         ),
         warnings=tuple(source.warnings),
+        capex_constraints_applied=tuple(source.capex_constraints_applied),
         ytd_anchor=(
             FcffForecastYtdAnchorExport.model_validate(
                 deepcopy(source.ytd_anchor.model_dump(mode="python"))

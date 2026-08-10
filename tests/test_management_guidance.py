@@ -2,20 +2,30 @@ import asyncio
 import datetime
 from decimal import Decimal
 
+from edgarito.enums.edgar.period import FiscalPeriod
+from edgarito.enums.granularity import Granularity
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
     GuidanceBasis,
     GuidanceMetric,
     GuidancePeriodType,
+    GuidanceQualifier,
     GuidanceScope,
     GuidanceStatus,
     GuidanceUnit,
     GuidanceValueKind,
     ManagementGuidance,
+    MonetaryForecastConstraint,
+)
+from edgarito.schemas.normalization.financials import (
+    FinancialConcept,
+    FinancialObservation,
+    NormalizedCompanyFinancials,
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.forecasting import FcffForecastService
 from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastDriver,
@@ -79,6 +89,45 @@ def _baseline():
     )
 
 
+def _forecast_financials():
+    values = {
+        FinancialConcept.REVENUE: "120",
+        FinancialConcept.OPERATING_INCOME: "30",
+        FinancialConcept.PRETAX_INCOME: "24",
+        FinancialConcept.INCOME_TAX_EXPENSE: "4.8",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "5",
+        FinancialConcept.CAPITAL_EXPENDITURES: "6",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "18",
+        FinancialConcept.INVENTORY: "12",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "6",
+        FinancialConcept.ACCOUNTS_PAYABLE: "9",
+        FinancialConcept.ACCRUED_LIABILITIES: "5",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "2",
+    }
+    return NormalizedCompanyFinancials(
+        provider="test",
+        company_id="1",
+        company_name="Test",
+        ticker="TEST",
+        observations=[
+            FinancialObservation(
+                concept=concept,
+                statement=concept.statement,
+                value=Decimal(value),
+                unit="USD",
+                granularity=Granularity.ANNUAL,
+                fiscal_year=2024,
+                fiscal_period=FiscalPeriod.FY,
+                period_end=datetime.date(2024, 12, 31),
+                provider="test",
+                taxonomy="test",
+                source_concept=concept.value,
+            )
+            for concept, value in values.items()
+        ],
+    )
+
+
 def _guidance(
     metric,
     *,
@@ -89,6 +138,7 @@ def _guidance(
     point=None,
     kind=GuidanceValueKind.MONETARY,
     currency="USD",
+    qualifier=GuidanceQualifier.UNKNOWN,
     basis=GuidanceBasis.GAAP,
     status=GuidanceStatus.ISSUED,
     filed=datetime.date(2025, 2, 1),
@@ -104,6 +154,7 @@ def _guidance(
         value_kind=kind,
         currency=currency,
         unit=currency or kind.value,
+        qualifier=qualifier,
         basis=basis,
         scope=GuidanceScope.CONSOLIDATED,
         status=status,
@@ -227,6 +278,43 @@ def test_capex_uses_guided_revenue_but_gross_margin_never_maps_to_operating_marg
     assert parameters.capex_to_revenue[0] == Decimal("12")
     assert parameters.operating_margin is None
     assert gross in result.evidence_only
+
+
+def test_more_than_capex_guidance_is_a_floor_through_fcff_forecasting():
+    capex = _guidance(
+        GuidanceMetric.CAPEX,
+        year=2025,
+        point="25000000000",
+        qualifier=GuidanceQualifier.MORE_THAN,
+    )
+    financials = _forecast_financials()
+    forecast_service = FcffForecastService()
+    forecast_parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("10"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        operating_working_capital_to_revenue=Decimal("10"),
+    )
+    baseline = forecast_service.forecast(financials, forecast_parameters)
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [capex],
+        baseline=baseline,
+        parameters=forecast_parameters,
+    )
+
+    assert parameters.capex_constraints == {
+        2025: MonetaryForecastConstraint(minimum=Decimal("25000000000"))
+    }
+    assert result.applications[0].guidance is capex
+    forecast = forecast_service.forecast(financials, parameters)
+    assert forecast.observations[0].capital_expenditures >= Decimal("25e9")
+    assert (
+        forecast.assumption_sources[FcffForecastDriver.CAPEX_TO_REVENUE]
+        == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+    )
 
 
 def test_explicit_cli_or_profile_driver_has_precedence_over_guidance():
@@ -386,6 +474,7 @@ def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
                 currency="USD",
                 unit=GuidanceUnit.BILLIONS,
                 scope=GuidanceScope.CONSOLIDATED,
+                qualifier=GuidanceQualifier.MORE_THAN,
                 supporting_text=phrase,
             )
         ]
@@ -421,3 +510,4 @@ def test_service_sends_bounded_periodic_filing_context_but_validates_full_text(
     assert len(ai.contents[0]) < len(document.content)
     assert phrase in ai.contents[0]
     assert [item.metric for item in result.records] == [GuidanceMetric.CAPEX]
+    assert result.records[0].qualifier == GuidanceQualifier.MORE_THAN

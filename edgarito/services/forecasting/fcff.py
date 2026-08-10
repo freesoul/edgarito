@@ -23,6 +23,7 @@ from edgarito.services.forecasting.models import (
     ForecastAssumptionSource,
     ForecastSeedType,
     ForecastValue,
+    MonetaryForecastConstraint,
 )
 from edgarito.services.metrics.calculator import (
     OPERATING_WORKING_CAPITAL_CONCEPTS,
@@ -247,6 +248,8 @@ class FcffForecastService:
         projected_revenue = base.revenue
         previous_working_capital = base.operating_working_capital
         observations = []
+        capex_constraints_applied: list[int] = []
+        ytd_capex_ratio = None
         first_fiscal_year = (
             context.current_fiscal_year
             if context.current_fiscal_year is not None
@@ -298,10 +301,12 @@ class FcffForecastService:
                     actual.depreciation_and_amortization
                     + remaining_revenue * depreciation_ratio / PERCENT
                 )
-                capital_expenditures = (
+                provisional_capex = (
                     actual.capital_expenditures
                     + remaining_revenue * capex_ratio / PERCENT
                 )
+                capital_expenditures = provisional_capex
+                ytd_capex_ratio = capex_ratio
                 operating_margin = operating_income / projected_revenue * PERCENT
                 tax_rate = (
                     (Decimal(1) - nopat / operating_income) * PERCENT
@@ -325,7 +330,30 @@ class FcffForecastService:
                 operating_income = projected_revenue * operating_margin / PERCENT
                 nopat = operating_income * (Decimal(1) - tax_rate / PERCENT)
                 depreciation = projected_revenue * depreciation_ratio / PERCENT
-                capital_expenditures = projected_revenue * capex_ratio / PERCENT
+                provisional_capex = projected_revenue * capex_ratio / PERCENT
+                capital_expenditures = provisional_capex
+
+            capex_constraint = self._capex_constraint_for(parameters, fiscal_year)
+            if capex_constraint is not None:
+                constrained_capex = self._apply_capex_constraint(
+                    provisional_capex, capex_constraint
+                )
+                if constrained_capex != provisional_capex:
+                    capex_constraints_applied.append(fiscal_year)
+                capital_expenditures = constrained_capex
+                capex_ratio = capital_expenditures / projected_revenue * PERCENT
+                if index == 0 and context.actual_ytd is not None:
+                    if remaining_revenue != 0:
+                        ytd_capex_ratio = (
+                            (
+                                capital_expenditures
+                                - context.actual_ytd.capital_expenditures
+                            )
+                            / remaining_revenue
+                            * PERCENT
+                        )
+                    else:
+                        ytd_capex_ratio = capex_ratio
             operating_working_capital = (
                 projected_revenue * working_capital_ratio / PERCENT
             )
@@ -363,6 +391,11 @@ class FcffForecastService:
             )
             previous_working_capital = operating_working_capital
 
+        ytd_anchor_capex_ratio = (
+            ytd_capex_ratio
+            if context.actual_ytd is not None and ytd_capex_ratio is not None
+            else paths[FcffForecastDriver.CAPEX_TO_REVENUE][0]
+        )
         ytd_anchor = None
         if (
             context.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
@@ -392,11 +425,24 @@ class FcffForecastService:
                 depreciation_to_revenue=paths[
                     FcffForecastDriver.DEPRECIATION_TO_REVENUE
                 ][0],
-                capex_to_revenue=paths[FcffForecastDriver.CAPEX_TO_REVENUE][0],
+                capex_to_revenue=ytd_anchor_capex_ratio,
                 operating_working_capital_to_revenue=paths[
                     FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE
                 ][0],
             )
+
+        forecast_fiscal_years = {
+            first_fiscal_year + index for index in range(parameters.forecast_years)
+        }
+        for year in forecast_fiscal_years:
+            constraint = self._capex_constraint_for(parameters, year)
+            if constraint is not None and constraint.source == (
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value
+            ):
+                sources[FcffForecastDriver.CAPEX_TO_REVENUE] = (
+                    ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                )
+                break
 
         forecast = FcffForecast(
             provider=financials.provider,
@@ -432,8 +478,40 @@ class FcffForecastService:
                 financials, context.seed_period_end
             ),
             ytd_anchor=ytd_anchor,
+            capex_constraints_applied=tuple(capex_constraints_applied),
         )
         return self.regenerate_cell_audits(forecast)
+
+    @staticmethod
+    def _capex_constraint_for(
+        parameters: FcffForecastParameters, fiscal_year: int
+    ) -> MonetaryForecastConstraint | None:
+        if (
+            parameters.capex_to_revenue is not None
+            and parameters.assumption_source_overrides.get(
+                FcffForecastDriver.CAPEX_TO_REVENUE
+            )
+            != ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+        ):
+            return None
+        return parameters.capex_constraints.get(fiscal_year)
+
+    @staticmethod
+    def _apply_capex_constraint(
+        provisional_capex: Decimal, constraint: MonetaryForecastConstraint
+    ) -> Decimal:
+        if (
+            constraint.point is not None
+            and constraint.minimum is None
+            and constraint.maximum is None
+        ):
+            return constraint.point
+        constrained = provisional_capex
+        if constraint.minimum is not None:
+            constrained = max(constrained, constraint.minimum)
+        if constraint.maximum is not None:
+            constrained = min(constrained, constraint.maximum)
+        return constrained
 
     def _build_observation_audits(
         self,
@@ -527,6 +605,40 @@ class FcffForecastService:
             forecast,
             FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE,
             index,
+        )
+        capex_constraint = self._capex_constraint_for(
+            forecast.parameters, observation.fiscal_year
+        )
+        capex_constraint_applied = (
+            capex_constraint is not None
+            and observation.fiscal_year in forecast.capex_constraints_applied
+        )
+        capex_constraint_components = (
+            (
+                (
+                    f"capex_constraint_fy{observation.fiscal_year}",
+                    capex_constraint.source,
+                ),
+            )
+            if capex_constraint_applied
+            else ()
+        )
+        capex_constraint_prefix = (
+            (
+                f"{capex_constraint.source} {capex_constraint.methodology} capex "
+                "constraint; "
+            )
+            if capex_constraint_applied
+            else ""
+        )
+        capex_method = capex_constraint_prefix + (
+            "actual YTD capex + remaining revenue × capex-to-revenue / 100"
+            if is_ytd_seed
+            else "revenue × capex-to-revenue / 100"
+        )
+        fcff_method = capex_constraint_prefix + (
+            "NOPAT + depreciation and amortization - capital expenditures - "
+            "change in operating working capital"
         )
         prior_working_capital = "historical_seed" if index == 0 else "prior_forecast"
         ytd_projection_components = (
@@ -658,15 +770,9 @@ class FcffForecastService:
                     *ytd_capex_components,
                     *ytd_projection_components,
                     *capex_components,
+                    *capex_constraint_components,
                 ),
-                self._stage_method(
-                    (
-                        "actual YTD capex + remaining revenue × capex-to-revenue / 100"
-                        if is_ytd_seed
-                        else "revenue × capex-to-revenue / 100"
-                    ),
-                    stage,
-                ),
+                self._stage_method(capex_method, stage),
                 derived=True,
             ),
             "change_in_operating_working_capital": self._audit_value(
@@ -692,16 +798,11 @@ class FcffForecastService:
                     *ytd_projection_components,
                     *depreciation_components,
                     *capex_components,
+                    *capex_constraint_components,
                     *working_capital_components,
                     ("prior_working_capital", prior_working_capital),
                 ),
-                self._stage_method(
-                    (
-                        "NOPAT + depreciation and amortization - capital expenditures - "
-                        "change in operating working capital"
-                    ),
-                    stage,
-                ),
+                self._stage_method(fcff_method, stage),
                 derived=True,
             ),
         }

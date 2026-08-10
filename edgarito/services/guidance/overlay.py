@@ -9,10 +9,12 @@ from edgarito.schemas.guidance.management import (
     GuidanceMetric,
     GuidanceOverlayResult,
     GuidancePeriodType,
+    GuidanceQualifier,
     GuidanceScope,
     GuidanceStatus,
     GuidanceValueKind,
     ManagementGuidance,
+    MonetaryForecastConstraint,
 )
 from edgarito.services.forecasting.models import (
     FcffForecast,
@@ -196,53 +198,117 @@ class GuidanceForecastOverlay:
             rejected=rejected,
         )
 
-        # Capex maps only when matching full-year absolute revenue guidance exists.
-        if parameters.capex_to_revenue is None:
+        capex_records = [
+            record
+            for (metric, _year), record in by_metric_year.items()
+            if metric == GuidanceMetric.CAPEX
+        ]
+        if parameters.capex_to_revenue is not None:
+            for record in capex_records:
+                evidence_only.append(record)
+                rejected.append(
+                    f"{record.period_label} capex: explicit CLI/profile "
+                    "capex_to_revenue wins"
+                )
+        else:
+            # Keep the historical ratio overlay for exact/range guidance when a
+            # matching revenue anchor is available.  Absolute capex guidance,
+            # including lower/upper bounds, is represented separately so it is
+            # still enforceable when no revenue guidance was issued.
             capex_path = [item.capex_to_revenue for item in baseline.observations]
-            changed = False
+            capex_constraints = dict(parameters.capex_constraints)
+            ratio_changed = False
+            constraints_changed = False
             for index, observation in enumerate(baseline.observations):
                 capex = by_metric_year.get(
                     (GuidanceMetric.CAPEX, observation.fiscal_year)
                 )
-                revenue = revenue_guidance.get(observation.fiscal_year)
                 if capex is None:
                     continue
-                if capex.value_kind != GuidanceValueKind.MONETARY or (
-                    revenue is not None
-                    and revenue.value_kind != GuidanceValueKind.MONETARY
-                ):
+                if capex.value_kind != GuidanceValueKind.MONETARY:
                     evidence_only.append(capex)
                     rejected.append(
                         f"{capex.period_label} capex: monetary guidance is required"
                     )
                     continue
-                if (
-                    revenue is None
-                    or capex.midpoint is None
-                    or revenue.midpoint is None
-                    or capex.currency != baseline.unit.upper()
-                    or revenue.currency != baseline.unit.upper()
-                ):
+                if capex.currency != baseline.unit.upper():
                     evidence_only.append(capex)
                     rejected.append(
-                        f"{capex.period_label} capex: matching guided revenue in "
-                        "forecast currency is required"
+                        f"{capex.period_label} capex: currency {capex.currency} "
+                        f"does not match forecast unit {baseline.unit}"
                     )
                     continue
-                ratio = capex.midpoint / revenue.midpoint * Decimal(100)
-                capex_path[index] = ratio
-                changed = True
+
+                constraint = self._capex_constraint(capex)
+                if constraint is None:
+                    evidence_only.append(capex)
+                    rejected.append(
+                        f"{capex.period_label} capex: qualifier and values do not "
+                        "form a supported point or bound"
+                    )
+                    continue
+
+                revenue = revenue_guidance.get(observation.fiscal_year)
+                is_absolute_bound = capex.qualifier in {
+                    GuidanceQualifier.AT_LEAST,
+                    GuidanceQualifier.AT_MOST,
+                    GuidanceQualifier.MORE_THAN,
+                    GuidanceQualifier.LESS_THAN,
+                }
+                if not is_absolute_bound and revenue is not None:
+                    if (
+                        revenue.value_kind != GuidanceValueKind.MONETARY
+                        or capex.midpoint is None
+                        or revenue.midpoint is None
+                        or revenue.currency != baseline.unit.upper()
+                    ):
+                        evidence_only.append(capex)
+                        rejected.append(
+                            f"{capex.period_label} capex: matching guided revenue in "
+                            "forecast currency is required"
+                        )
+                        continue
+                    ratio = capex.midpoint / revenue.midpoint * Decimal(100)
+                    capex_path[index] = ratio
+                    ratio_changed = True
+                    applications.append(
+                        GuidanceApplication(
+                            driver=FcffForecastDriver.CAPEX_TO_REVENUE.value,
+                            fiscal_year=observation.fiscal_year,
+                            value=ratio,
+                            guidance=capex,
+                            methodology="guided capex / guided revenue midpoint",
+                        )
+                    )
+                    continue
+
+                previous_constraint = capex_constraints.get(observation.fiscal_year)
+                if previous_constraint is not None:
+                    evidence_only.append(capex)
+                    rejected.append(
+                        f"{capex.period_label} capex: explicit CAPEX constraint wins"
+                    )
+                    continue
+                capex_constraints[observation.fiscal_year] = constraint
+                constraints_changed = True
                 applications.append(
                     GuidanceApplication(
                         driver=FcffForecastDriver.CAPEX_TO_REVENUE.value,
                         fiscal_year=observation.fiscal_year,
-                        value=ratio,
+                        value=self._capex_application_value(constraint),
                         guidance=capex,
-                        methodology="guided capex / guided revenue midpoint",
+                        methodology=(
+                            f"management guidance {constraint.methodology} "
+                            "capex constraint"
+                        ),
+                        source=constraint.source,
                     )
                 )
-            if changed:
+            if ratio_changed:
                 updates["capex_to_revenue"] = tuple(capex_path)
+            if constraints_changed:
+                updates["capex_constraints"] = capex_constraints
+            if ratio_changed or constraints_changed:
                 source_overrides[FcffForecastDriver.CAPEX_TO_REVENUE] = (
                     ForecastAssumptionSource.MANAGEMENT_GUIDANCE
                 )
@@ -367,7 +433,14 @@ class GuidanceForecastOverlay:
 
     @staticmethod
     def _record_values(record: ManagementGuidance) -> tuple:
-        return record.point, record.low, record.high, record.currency, record.unit
+        return (
+            record.point,
+            record.low,
+            record.high,
+            record.currency,
+            record.unit,
+            record.qualifier,
+        )
 
     @staticmethod
     def _stable_record_identity(record: ManagementGuidance) -> tuple[str, ...]:
@@ -377,6 +450,77 @@ class GuidanceForecastOverlay:
             (record.metric_name or "").casefold(),
             record.supporting_text.casefold(),
         )
+
+    @staticmethod
+    def _capex_constraint(
+        record: ManagementGuidance,
+    ) -> MonetaryForecastConstraint | None:
+        if record.qualifier in {
+            GuidanceQualifier.POINT,
+            GuidanceQualifier.APPROXIMATELY,
+            GuidanceQualifier.UNKNOWN,
+        }:
+            if record.point is not None:
+                return MonetaryForecastConstraint(
+                    point=record.point,
+                    source=ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+                )
+            if record.low is not None and record.high is not None:
+                midpoint = (record.low + record.high) / Decimal(2)
+                return MonetaryForecastConstraint(
+                    point=midpoint,
+                    minimum=record.low,
+                    maximum=record.high,
+                    source=ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+                )
+            return None
+
+        if record.qualifier == GuidanceQualifier.RANGE:
+            if record.low is None or record.high is None:
+                return None
+            midpoint = (record.low + record.high) / Decimal(2)
+            return MonetaryForecastConstraint(
+                point=midpoint,
+                minimum=record.low,
+                maximum=record.high,
+                source=ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+            )
+
+        reference = record.point
+        if reference is None:
+            reference = record.low if record.low is not None else record.high
+        if reference is None:
+            return None
+        if record.qualifier in {
+            GuidanceQualifier.AT_LEAST,
+            GuidanceQualifier.MORE_THAN,
+        }:
+            return MonetaryForecastConstraint(
+                minimum=reference,
+                source=ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+            )
+        if record.qualifier in {
+            GuidanceQualifier.AT_MOST,
+            GuidanceQualifier.LESS_THAN,
+        }:
+            return MonetaryForecastConstraint(
+                maximum=reference,
+                source=ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+            )
+        return None
+
+    @staticmethod
+    def _capex_application_value(constraint: MonetaryForecastConstraint) -> Decimal:
+        if constraint.methodology == "point":
+            assert constraint.point is not None
+            return constraint.point
+        if constraint.methodology == "range":
+            assert constraint.minimum is not None and constraint.maximum is not None
+            return (constraint.minimum + constraint.maximum) / Decimal(2)
+        if constraint.minimum is not None:
+            return constraint.minimum
+        assert constraint.maximum is not None
+        return constraint.maximum
 
     @staticmethod
     def _apply_percentage_driver(
