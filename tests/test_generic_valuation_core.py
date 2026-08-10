@@ -75,11 +75,17 @@ def _observation(
     )
 
 
-def _roic_financials(ticker, roics):
+def _roic_financials(
+    ticker,
+    roics,
+    *,
+    short_term_investments=None,
+    noncurrent_investments=None,
+):
     observations = []
     for year, roic in zip(range(2021, 2021 + len(roics)), roics, strict=True):
         end = datetime.date(year, 12, 31)
-        # Invested capital is 90 equity + 20 debt - 10 cash = 100.
+        # Base invested capital is 90 equity + 20 debt - 10 cash = 100.
         values = {
             FinancialConcept.OPERATING_INCOME: Decimal(str(roic)) / Decimal("0.75"),
             FinancialConcept.PRETAX_INCOME: "20",
@@ -89,6 +95,10 @@ def _roic_financials(ticker, roics):
             FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "15",
             FinancialConcept.CASH_AND_EQUIVALENTS: "10",
         }
+        if short_term_investments is not None:
+            values[FinancialConcept.SHORT_TERM_INVESTMENTS] = short_term_investments
+        if noncurrent_investments is not None:
+            values[FinancialConcept.NONCURRENT_INVESTMENTS] = noncurrent_investments
         observations.extend(
             _observation(concept, value, year, end) for concept, value in values.items()
         )
@@ -99,6 +109,59 @@ def _roic_financials(ticker, roics):
         ticker=ticker,
         observations=observations,
     )
+
+
+def test_terminal_roic_subtracts_non_operating_investments_from_invested_capital():
+    base = _roic_financials("BASE", [30])
+    invested = _roic_financials(
+        "INVESTED",
+        [30],
+        short_term_investments="7",
+        noncurrent_investments="13",
+    )
+    base_values = {item.concept: item for item in base.observations}
+    invested_values = {item.concept: item for item in invested.observations}
+
+    assert TerminalRoicResolver._invested_capital(base_values, "USD") == Decimal("100")
+    assert TerminalRoicResolver._invested_capital(invested_values, "USD") == Decimal(
+        "80"
+    )
+
+    resolver = TerminalRoicResolver()
+    base_result = resolver.resolve(
+        base,
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2.5"),
+        valuation_date=VALUATION_DATE,
+        currency="USD",
+    )
+    invested_result = resolver.resolve(
+        invested,
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2.5"),
+        valuation_date=VALUATION_DATE,
+        currency="USD",
+    )
+
+    assert base_result.normalized_roic == Decimal("30")
+    assert invested_result.normalized_roic == Decimal("37.5")
+
+
+@pytest.mark.parametrize(
+    "concept",
+    [FinancialConcept.SHORT_TERM_INVESTMENTS, FinancialConcept.NONCURRENT_INVESTMENTS],
+)
+def test_terminal_roic_rejects_investment_with_mismatched_currency(concept):
+    financials = _roic_financials(
+        "MISMATCH",
+        [30],
+        short_term_investments="7",
+        noncurrent_investments="13",
+    )
+    values = {item.concept: item for item in financials.observations}
+    values[concept] = values[concept].model_copy(update={"unit": "EUR"})
+
+    assert TerminalRoicResolver._invested_capital(values, "USD") is None
 
 
 def test_terminal_roic_rewards_durable_returns_but_mean_reverts_a_peak():

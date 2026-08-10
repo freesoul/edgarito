@@ -859,6 +859,10 @@ def test_capital_bridge_resolves_normalized_net_debt_and_diluted_shares():
     assert result.gross_debt == Decimal("100")
     assert result.cash_and_equivalents == Decimal("25")
     assert result.net_debt == Decimal("75")
+    assert result.non_operating_assets == Decimal("20")
+    assert result.non_operating_assets_source == (
+        "short_term_investments + noncurrent_investments"
+    )
     assert result.diluted_shares == Decimal("9")
     assert "current shares outstanding" in result.shares_source
 
@@ -1218,6 +1222,8 @@ def _financials_with_bridge() -> NormalizedCompanyFinancials:
         FinancialConcept.LONG_TERM_DEBT_CURRENT: "20",
         FinancialConcept.LONG_TERM_DEBT_NONCURRENT: "70",
         FinancialConcept.CASH_AND_EQUIVALENTS: "25",
+        FinancialConcept.SHORT_TERM_INVESTMENTS: "7",
+        FinancialConcept.NONCURRENT_INVESTMENTS: "13",
         FinancialConcept.SHARES_OUTSTANDING: "9",
         FinancialConcept.WEIGHTED_AVERAGE_DILUTED_SHARES: "10",
     }
