@@ -14,12 +14,14 @@ from edgarito.cli.__main__ import (
 from edgarito.config import ForecastMethod, ValuationProfileLoader
 from edgarito.config.valuation import CashFlowTiming, ForecastValuationProfile
 from edgarito.schemas.normalization.classification import Sector
+from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
 from edgarito.services.valuation import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
     RelativeValuationBasis,
+    TerminalRoicResolver,
     ValuationInput,
     ValuationProfile,
 )
@@ -528,9 +530,25 @@ def test_generated_ticker_profile_materializes_structural_inference_once(tmp_pat
     assert generated.model_selection.lifecycle == CompanyLifecycle.GROWTH
     assert generated.model_selection.peer_count == 2
     assert EconomicTrait.PRICING_POWER in generated.model_selection.economic_traits
+    assert generated.valuation.multistage.terminal_return_on_invested_capital is None
+    assert generated.valuation.multistage.terminal_roic_metadata is not None
+    assert generated.valuation.multistage.terminal_roic_metadata.value == Decimal(
+        "27.5"
+    )
     assert (
-        generated.valuation.multistage.terminal_return_on_invested_capital
-        == Decimal("27.5")
+        generated.valuation.multistage.terminal_roic_metadata.resolved_on
+        == datetime.date(2026, 8, 7)
+    )
+    assert generated.valuation.multistage.terminal_roic_metadata.source == (
+        "terminal ROIC resolver"
+    )
+    assert generated.valuation.multistage.terminal_roic_metadata.confidence == "high"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert (
+        saved["valuation"]["multistage"]["terminal_return_on_invested_capital"] is None
+    )
+    assert saved["valuation"]["multistage"]["terminal_roic_metadata"]["value"] == (
+        "27.5"
     )
     assert generated.valuation.discount_rates.wacc is None
     assert generated.valuation.terminal_value.perpetual_growth_rate is None
@@ -580,6 +598,44 @@ def test_generated_ticker_profile_materializes_structural_inference_once(tmp_pat
     )
 
 
+def test_generated_profile_preserves_a_deliberate_base_profile_terminal_roic(tmp_path):
+    base = ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json")
+    explicit_base = base.model_copy(
+        update={
+            "valuation": base.valuation.model_copy(
+                update={
+                    "multistage": base.valuation.multistage.model_copy(
+                        update={"terminal_return_on_invested_capital": Decimal("42")}
+                    )
+                }
+            )
+        }
+    )
+    inferred = ValuationProfile(
+        provider="test",
+        company_id="EXPLICIT",
+        company_name="Explicit",
+        business_archetype=BusinessArchetype.GENERAL_OPERATING,
+        lifecycle=CompanyLifecycle.MATURE,
+        cyclicality=Cyclicality.LOW,
+    )
+
+    generated = ValuationProfileLoader.build_generated(
+        ticker="EXPLICIT",
+        base_profile=explicit_base,
+        inferred_profile=inferred,
+        terminal_roic=Decimal("27.5"),
+        terminal_roic_confidence="medium",
+        generated_on=datetime.date(2026, 8, 7),
+        path=tmp_path / "explicit.json",
+    )
+
+    assert (
+        generated.valuation.multistage.terminal_return_on_invested_capital
+        == Decimal("42")
+    )
+
+
 def test_default_valuation_creates_and_reports_a_ticker_profile(
     tmp_path, capsys, monkeypatch
 ):
@@ -626,7 +682,133 @@ def test_default_valuation_creates_and_reports_a_ticker_profile(
     assert f"Generated valuation profile: {generated_path.resolve()}" in output
     assert "Profile: aapl" in output
     generated = ValuationProfileLoader.load(generated_path)
-    assert (
-        generated.valuation.multistage.terminal_return_on_invested_capital
-        == Decimal("15")
+    assert generated.valuation.multistage.terminal_return_on_invested_capital is None
+    assert generated.valuation.multistage.terminal_roic_metadata is not None
+    assert generated.valuation.multistage.terminal_roic_metadata.value == Decimal("15")
+    assert generated.valuation.multistage.terminal_roic_metadata.source == (
+        "explicit CLI override"
     )
+
+
+def _empty_terminal_roic_financials() -> NormalizedCompanyFinancials:
+    return NormalizedCompanyFinancials(
+        provider="test",
+        company_id="ACME",
+        company_name="Acme",
+        ticker="ACME",
+    )
+
+
+def test_generated_terminal_roic_is_metadata_only_and_next_resolution_is_dynamic(
+    tmp_path,
+):
+    path = tmp_path / "acme.json"
+    base_profile = ValuationProfileLoader.load(PROFILE_FIXTURES / "default.json")
+    inferred = ValuationProfile(
+        provider="test",
+        company_id="ACME",
+        company_name="Acme",
+        ticker="ACME",
+        business_archetype=BusinessArchetype.GENERAL_OPERATING,
+        lifecycle=CompanyLifecycle.MATURE,
+        cyclicality=Cyclicality.LOW,
+    )
+
+    generated = ValuationProfileLoader.build_generated(
+        ticker="ACME",
+        base_profile=base_profile,
+        inferred_profile=inferred,
+        terminal_roic=Decimal("27.5"),
+        terminal_roic_confidence="medium",
+        terminal_roic_source="automatic: prior evidence",
+        terminal_roic_methodology="Prior evidence methodology",
+        generated_on=datetime.date(2026, 8, 7),
+        path=path,
+    )
+    loaded = ForecastValuationProfile.model_validate_json(generated.model_dump_json())
+
+    assert loaded.valuation.multistage.terminal_return_on_invested_capital is None
+    metadata = loaded.valuation.multistage.terminal_roic_metadata
+    assert metadata is not None
+    assert metadata.value == Decimal("27.5")
+    assert metadata.resolved_on == datetime.date(2026, 8, 7)
+    assert metadata.source == "automatic: prior evidence"
+    assert metadata.methodology == "Prior evidence methodology"
+    assert metadata.confidence == "medium"
+
+    current = TerminalRoicResolver().resolve(
+        _empty_terminal_roic_financials(),
+        wacc=Decimal("12"),
+        terminal_growth=Decimal("2"),
+        valuation_date=datetime.date(2026, 8, 10),
+        currency="USD",
+        explicit_roic=loaded.valuation.multistage.terminal_return_on_invested_capital,
+        lifecycle=CompanyLifecycle.MATURE,
+        cyclicality=Cyclicality.LOW,
+    )
+
+    assert current.source == "automatic: WACC and company maturity fallback"
+    assert current.value == Decimal("12.7")
+    assert current.value != metadata.value
+
+
+def test_terminal_roic_metadata_never_overrides_an_explicit_profile_value():
+    profile = ForecastValuationProfile.model_validate(
+        {
+            "valuation": {
+                "multistage": {
+                    "terminal_return_on_invested_capital": "25",
+                    "terminal_roic_metadata": {
+                        "value": "12",
+                        "resolved_on": "2026-08-07",
+                        "source": "automatic: stale evidence",
+                        "methodology": "Stale automatic methodology",
+                        "confidence": "high",
+                    },
+                }
+            }
+        }
+    )
+
+    result = TerminalRoicResolver().resolve(
+        _empty_terminal_roic_financials(),
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2"),
+        valuation_date=datetime.date(2026, 8, 10),
+        currency="USD",
+        explicit_roic=profile.valuation.multistage.terminal_return_on_invested_capital,
+        explicit_source="explicit valuation profile",
+    )
+
+    assert result.value == Decimal("25")
+    assert result.source == "explicit valuation profile"
+    assert result.confidence == "high"
+    assert result.assumption.provenance.origin.value == "explicit"
+
+
+def test_cli_terminal_roic_override_remains_highest_precedence_and_distinct():
+    automatic = TerminalRoicResolver().resolve(
+        _empty_terminal_roic_financials(),
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2"),
+        valuation_date=datetime.date(2026, 8, 10),
+        currency="USD",
+        lifecycle=CompanyLifecycle.MATURE,
+    )
+    cli = TerminalRoicResolver().resolve(
+        _empty_terminal_roic_financials(),
+        wacc=Decimal("8"),
+        terminal_growth=Decimal("2"),
+        valuation_date=datetime.date(2026, 8, 10),
+        currency="USD",
+        explicit_roic=Decimal("30"),
+        explicit_source="explicit CLI override",
+    )
+
+    assert automatic.source.startswith("automatic:")
+    assert automatic.confidence == "low"
+    assert automatic.assumption.provenance.origin.value == "derived"
+    assert cli.value == Decimal("30")
+    assert cli.source == "explicit CLI override"
+    assert cli.confidence == "high"
+    assert cli.assumption.provenance.origin.value == "explicit"

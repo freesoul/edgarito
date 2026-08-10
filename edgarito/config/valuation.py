@@ -145,6 +145,31 @@ class TerminalValueConfiguration(_ProfileModel):
         return self
 
 
+class TerminalRoicResolutionMetadata(_ProfileModel):
+    """Informational record of a terminal ROIC resolved for a generated profile."""
+
+    value: Decimal
+    resolved_on: datetime.date
+    source: str
+    methodology: str
+    confidence: str
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: Decimal) -> Decimal:
+        if not value.is_finite() or value <= 0:
+            raise ValueError("Terminal ROIC metadata must be finite and positive")
+        return value
+
+    @field_validator("source", "methodology", "confidence")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Terminal ROIC metadata text fields cannot be blank")
+        return normalized
+
+
 class CapitalBridgeConfiguration(_ProfileModel):
     net_debt: Optional[Decimal] = None
     gross_debt: Optional[Decimal] = None
@@ -257,7 +282,13 @@ class MultistageValuationConfiguration(_ProfileModel):
     extend_to_stable: bool = True
     fade_reinvestment_to_terminal: bool = True
     terminal_return_on_invested_capital: Optional[Decimal] = None
+    terminal_roic_metadata: Optional[TerminalRoicResolutionMetadata] = None
     depreciable_asset_life_years: Optional[int] = Field(default=None, ge=2, le=30)
+
+    @property
+    def terminal_roic_resolution(self) -> Optional[TerminalRoicResolutionMetadata]:
+        """Compatibility alias for the informational terminal ROIC record."""
+        return self.terminal_roic_metadata
 
     @field_validator(
         "convergence_tolerance",
@@ -684,6 +715,8 @@ class ValuationProfileLoader:
         terminal_roic: Decimal,
         terminal_roic_confidence: str,
         generated_on: datetime.date,
+        terminal_roic_source: str | None = None,
+        terminal_roic_methodology: str | None = None,
         peers: tuple[str, ...] = (),
         path: Path | None = None,
     ) -> tuple[ForecastValuationProfile, Path, bool]:
@@ -699,6 +732,8 @@ class ValuationProfileLoader:
             terminal_roic=terminal_roic,
             terminal_roic_confidence=terminal_roic_confidence,
             generated_on=generated_on,
+            terminal_roic_source=terminal_roic_source,
+            terminal_roic_methodology=terminal_roic_methodology,
             peers=peers,
             path=profile_path,
         )
@@ -732,6 +767,8 @@ class ValuationProfileLoader:
         terminal_roic: Decimal,
         terminal_roic_confidence: str,
         generated_on: datetime.date,
+        terminal_roic_source: str | None = None,
+        terminal_roic_methodology: str | None = None,
         peers: tuple[str, ...] = (),
         path: Path | None = None,
     ) -> ForecastValuationProfile:
@@ -762,8 +799,16 @@ class ValuationProfileLoader:
                 ),
             }
         )
+        terminal_roic_metadata = TerminalRoicResolutionMetadata(
+            value=terminal_roic,
+            resolved_on=generated_on,
+            source=terminal_roic_source or "terminal ROIC resolver",
+            methodology=terminal_roic_methodology
+            or "Terminal ROIC was resolved for this generated profile",
+            confidence=terminal_roic_confidence,
+        )
         multistage = base_profile.valuation.multistage.model_copy(
-            update={"terminal_return_on_invested_capital": terminal_roic}
+            update={"terminal_roic_metadata": terminal_roic_metadata}
         )
         valuation = base_profile.valuation.model_copy(update={"multistage": multistage})
         comparables = base_profile.comparables.model_copy(
@@ -777,10 +822,12 @@ class ValuationProfileLoader:
                 "description": (
                     f"Auto-generated for {ticker.strip().upper()} on "
                     f"{generated_on.isoformat()}. Structural company inference and "
-                    f"terminal ROIC ({terminal_roic_confidence} confidence) are "
-                    "materialized for tuning, including economically selected peers "
-                    "when discovery succeeds; market rates, terminal growth, forecast "
-                    "run-rate, and capital-bridge values remain dynamic."
+                    f"terminal ROIC resolution ({terminal_roic_confidence} confidence) "
+                    "are recorded as informational metadata; the active terminal ROIC "
+                    "remains dynamic unless explicitly configured. Economically selected "
+                    "peers are materialized when discovery succeeds; market rates, "
+                    "terminal growth, forecast run-rate, and capital-bridge values remain "
+                    "dynamic."
                 ),
                 "model_selection": selection,
                 "valuation": valuation,
@@ -813,6 +860,7 @@ __all__ = [
     "SotpConfiguration",
     "SpecializedInputConfiguration",
     "TerminalValueConfiguration",
+    "TerminalRoicResolutionMetadata",
     "ValuationCalculationConfiguration",
     "ValuationProfileLoader",
 ]

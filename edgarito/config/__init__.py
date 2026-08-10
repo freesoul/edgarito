@@ -2,6 +2,21 @@ from edgarito.config.providers import (
     MarketProviderConfiguration,
     ProviderConfiguration,
 )
+from edgarito.config.red_flags import (
+    DEFAULT_RED_FLAGS_PROFILE_PATH,
+    AccountingQualityConfiguration,
+    AcquisitionsConfiguration,
+    CashConversionConfiguration,
+    ConcentrationConfiguration,
+    DebtConfiguration,
+    DilutionSbcConfiguration,
+    FcfVsEarningsConfiguration,
+    MarginsGrowthConfiguration,
+    RedFlagsConfiguration,
+    RedFlagsConfigurationLoader,
+    RedFlagsProfileLoader,
+    RoicConfiguration,
+)
 from edgarito.config.valuation import (
     CashFlowTiming,
     DecisionAnalysisConfiguration,
@@ -11,22 +26,8 @@ from edgarito.config.valuation import (
     MultistageValuationConfiguration,
     RelativeValuationConfiguration,
     ShareRepurchaseConfiguration,
+    TerminalRoicResolutionMetadata,
     ValuationProfileLoader,
-)
-from edgarito.config.red_flags import (
-    AccountingQualityConfiguration,
-    AcquisitionsConfiguration,
-    CashConversionConfiguration,
-    ConcentrationConfiguration,
-    DebtConfiguration,
-    DEFAULT_RED_FLAGS_PROFILE_PATH,
-    DilutionSbcConfiguration,
-    FcfVsEarningsConfiguration,
-    MarginsGrowthConfiguration,
-    RedFlagsConfiguration,
-    RedFlagsConfigurationLoader,
-    RedFlagsProfileLoader,
-    RoicConfiguration,
 )
 
 __all__ = [
@@ -53,5 +54,6 @@ __all__ = [
     "RelativeValuationConfiguration",
     "RoicConfiguration",
     "ShareRepurchaseConfiguration",
+    "TerminalRoicResolutionMetadata",
     "ValuationProfileLoader",
 ]
