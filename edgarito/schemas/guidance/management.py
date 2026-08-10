@@ -75,6 +75,59 @@ class GuidanceQualifier(str, Enum):
     UNKNOWN = "unknown"
 
 
+class MonetaryForecastConstraint(BaseModel):
+    """An absolute monetary forecast target or bound with its provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    point: Decimal | None = None
+    minimum: Decimal | None = None
+    maximum: Decimal | None = None
+    source: str = "management_guidance"
+
+    @field_validator("point", "minimum", "maximum")
+    @classmethod
+    def require_finite_value(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None:
+            if not value.is_finite():
+                raise ValueError("Monetary forecast constraints must be finite")
+            if value < 0:
+                raise ValueError("Monetary forecast constraints cannot be negative")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def require_source(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Monetary forecast constraint source cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "MonetaryForecastConstraint":
+        if self.point is None and self.minimum is None and self.maximum is None:
+            raise ValueError("Monetary forecast constraint requires point or bounds")
+        if self.minimum is not None and self.maximum is not None:
+            if self.minimum > self.maximum:
+                raise ValueError("Monetary forecast minimum cannot exceed maximum")
+        if self.point is not None:
+            if self.minimum is not None and self.point < self.minimum:
+                raise ValueError("Monetary forecast point cannot be below minimum")
+            if self.maximum is not None and self.point > self.maximum:
+                raise ValueError("Monetary forecast point cannot exceed maximum")
+        return self
+
+    @property
+    def methodology(self) -> str:
+        if self.minimum is not None and self.maximum is not None:
+            return "range"
+        if self.minimum is not None:
+            return "floor"
+        if self.maximum is not None:
+            return "ceiling"
+        return "point"
+
+
 class GuidanceStatus(str, Enum):
     ISSUED = "issued"
     RAISED = "raised"
@@ -161,7 +214,9 @@ class ManagementGuidance(BaseModel):
 
     @model_validator(mode="after")
     def validate_values(self) -> "ManagementGuidance":
-        values = [value for value in (self.point, self.low, self.high) if value is not None]
+        values = [
+            value for value in (self.point, self.low, self.high) if value is not None
+        ]
         if not values:
             raise ValueError("Numerical guidance requires point or range values")
         if any(not value.is_finite() for value in values):
@@ -224,6 +279,7 @@ class GuidanceApplication(BaseModel):
     value: Decimal
     guidance: ManagementGuidance
     methodology: str
+    source: str = "management_guidance"
 
 
 class GuidanceOverlayResult(BaseModel):

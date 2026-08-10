@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.identifiers import SecurityIdentifiers
 
 
@@ -170,7 +171,8 @@ class FcffForecastParameters(BaseModel):
 
     Every value uses percentage points. A one-value path is repeated for each
     forecast year. A shorter explicit path is extended with its final value;
-    omitted paths are inferred from complete annual historical periods.
+    omitted paths are inferred from complete annual historical periods. Absolute
+    CAPEX constraints are keyed by fiscal year and applied after revenue is known.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -181,6 +183,9 @@ class FcffForecastParameters(BaseModel):
     tax_rate: Optional[tuple[Decimal, ...]] = None
     depreciation_to_revenue: Optional[tuple[Decimal, ...]] = None
     capex_to_revenue: Optional[tuple[Decimal, ...]] = None
+    capex_constraints: dict[int, MonetaryForecastConstraint] = Field(
+        default_factory=dict
+    )
     operating_working_capital_to_revenue: Optional[tuple[Decimal, ...]] = None
     revenue_anchors: dict[int, Decimal] = Field(default_factory=dict)
     revenue_anchor_sources: dict[int, ForecastAssumptionSource] = Field(
@@ -291,6 +296,15 @@ class FcffForecastParameters(BaseModel):
             raise ValueError("Revenue anchors must be finite and positive")
         return value
 
+    @field_validator("capex_constraints")
+    @classmethod
+    def validate_capex_constraints(
+        cls, value: dict[int, MonetaryForecastConstraint]
+    ) -> dict[int, MonetaryForecastConstraint]:
+        if any(year < 1900 or year > 2200 for year in value):
+            raise ValueError("CAPEX constraint fiscal years are invalid")
+        return value
+
 
 class FcffForecastObservation(BaseModel):
     forecast_year: int
@@ -391,6 +405,7 @@ class FcffForecast(BaseModel):
     observations: list[FcffForecastObservation] = Field(default_factory=list)
     warnings: tuple[str, ...] = ()
     ytd_anchor: Optional[FcffForecastYtdAnchor] = None
+    capex_constraints_applied: tuple[int, ...] = ()
 
 
 class AdaptiveMultistagePlan(BaseModel):

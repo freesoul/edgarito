@@ -6,11 +6,22 @@ from pathlib import Path
 from edgarito.cli import main
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.guidance.management import (
+    GuidanceBasis,
+    GuidanceMetric,
+    GuidancePeriodType,
+    GuidanceQualifier,
+    GuidanceScope,
+    GuidanceValueKind,
+    ManagementGuidance,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     ObservationDerivationKind,
 )
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts
+from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
+from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
@@ -203,6 +214,47 @@ def test_normalizes_tesla_current_and_total_debt_fallback_tags():
     assert current.source_concept == "DebtCurrent"
     assert long_term.value == Decimal("5609000000")
     assert long_term.source_concept == "LongTermDebt"
+
+
+def test_tesla_fy2026_capex_guidance_blocks_old_adaptive_capex_forecast():
+    facts = CompanyFacts.model_validate_json(TSLA_FIXTURE.read_text(encoding="utf-8"))
+    financials = SecUsGaapNormalizer().normalize(
+        facts,
+        ticker="TSLA",
+        granularity=Granularity.ANNUAL,
+        concepts=FcffForecastService.required_concepts(),
+    )
+    parameters = FcffForecastParameters(forecast_years=2)
+    provisional = FcffForecastService().forecast(financials, parameters)
+    guidance = ManagementGuidance(
+        metric=GuidanceMetric.CAPEX,
+        fiscal_year=2026,
+        period_type=GuidancePeriodType.FISCAL_YEAR,
+        point=Decimal("25100000000"),
+        value_kind=GuidanceValueKind.MONETARY,
+        currency="USD",
+        unit="USD",
+        basis=GuidanceBasis.REPORTED,
+        scope=GuidanceScope.CONSOLIDATED,
+        qualifier=GuidanceQualifier.MORE_THAN,
+        filing_date=datetime.date(2026, 1, 1),
+        accession_number="tesla-guidance",
+        filing_form="8-K",
+        source_document="ex991.htm",
+        source_document_type="EX-99.1",
+        supporting_text="FY2026 capital expenditures in excess of $25 billion.",
+        evidence_verified=True,
+        extraction_model="test",
+    )
+
+    overlaid_parameters, result = GuidanceForecastOverlay().apply(
+        [guidance], baseline=provisional, parameters=parameters
+    )
+    forecast = FcffForecastService().forecast(financials, overlaid_parameters)
+
+    assert provisional.observations[1].capital_expenditures < Decimal("12e9")
+    assert forecast.observations[1].capital_expenditures >= Decimal("25100000000")
+    assert result.applications[0].guidance is guidance
 
 
 def test_normalizes_interest_goodwill_and_intangibles_with_fallback_tags():

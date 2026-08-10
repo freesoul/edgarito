@@ -24,6 +24,7 @@ from edgarito.services.forecasting import (
     ForecastValue,
     ForwardGrowthEvidence,
     FreeCashFlowForecastService,
+    MonetaryForecastConstraint,
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
 )
@@ -38,17 +39,23 @@ FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"
 
 
 def _observation(
-    concept: FinancialConcept, value: str, fiscal_year: int
+    concept: FinancialConcept,
+    value: str,
+    fiscal_year: int,
+    *,
+    granularity: Granularity = Granularity.ANNUAL,
+    fiscal_period: FiscalPeriod = FiscalPeriod.FY,
+    period_end: datetime.date | None = None,
 ) -> FinancialObservation:
     return FinancialObservation(
         concept=concept,
         statement=concept.statement,
         value=Decimal(value),
         unit="USD",
-        granularity=Granularity.ANNUAL,
+        granularity=granularity,
         fiscal_year=fiscal_year,
-        fiscal_period=FiscalPeriod.FY,
-        period_end=datetime.date(fiscal_year, 12, 31),
+        fiscal_period=fiscal_period,
+        period_end=period_end or datetime.date(fiscal_year, 12, 31),
         provider="test",
         taxonomy="test",
         source_concept=concept.value,
@@ -343,6 +350,131 @@ def test_driver_based_fcff_forecasts_the_full_operating_bridge():
     assert "revenue × operating margin" in first.cell_audits["operating_income"].method
     assert "NOPAT + depreciation" in first.cell_audits["fcff"].method
     assert FcffForecast.model_validate_json(forecast.model_dump_json()) == forecast
+
+
+@pytest.mark.parametrize(
+    ("constraint", "expected_capex"),
+    [
+        (MonetaryForecastConstraint(point=Decimal("15")), Decimal("15")),
+        (MonetaryForecastConstraint(minimum=Decimal("10")), Decimal("10")),
+        (MonetaryForecastConstraint(maximum=Decimal("6")), Decimal("6")),
+        (
+            MonetaryForecastConstraint(
+                point=Decimal("9"), minimum=Decimal("8"), maximum=Decimal("10")
+            ),
+            Decimal("9"),
+        ),
+    ],
+)
+def test_absolute_capex_constraints_recalculate_ratio_and_preserve_fcff_identity(
+    constraint, expected_capex
+):
+    parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("10"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        operating_working_capital_to_revenue=Decimal("15"),
+        capex_constraints={2025: constraint},
+    )
+
+    forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
+    observation = forecast.observations[0]
+
+    assert observation.capital_expenditures == expected_capex
+    assert observation.capex_to_revenue == expected_capex / observation.revenue * 100
+    assert forecast.capex_constraints_applied == (2025,)
+    assert (
+        forecast.assumption_sources[FcffForecastDriver.CAPEX_TO_REVENUE]
+        == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+    )
+    assert (
+        "management_guidance" in observation.cell_audits["capital_expenditures"].source
+    )
+    assert "capex constraint" in observation.cell_audits["capital_expenditures"].method
+    assert "management_guidance" in observation.cell_audits["fcff"].source
+    assert not FcffForecastService().economic_identity_issues(forecast)
+
+
+def test_ytd_absolute_capex_constraint_targets_annual_total_and_recalculates_remainder_ratio():
+    annual_values = {
+        FinancialConcept.REVENUE: "100",
+        FinancialConcept.OPERATING_INCOME: "20",
+        FinancialConcept.PRETAX_INCOME: "18",
+        FinancialConcept.INCOME_TAX_EXPENSE: "4.5",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "4",
+        FinancialConcept.CAPITAL_EXPENDITURES: "8",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "15",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "5",
+        FinancialConcept.ACCOUNTS_PAYABLE: "8",
+        FinancialConcept.ACCRUED_LIABILITIES: "4",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "3",
+    }
+    quarterly_values = {
+        FinancialConcept.REVENUE: "25",
+        FinancialConcept.OPERATING_INCOME: "5",
+        FinancialConcept.PRETAX_INCOME: "4.5",
+        FinancialConcept.INCOME_TAX_EXPENSE: "1.125",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "1",
+        FinancialConcept.CAPITAL_EXPENDITURES: "2",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "8",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "3",
+        FinancialConcept.ACCOUNTS_PAYABLE: "4",
+        FinancialConcept.ACCRUED_LIABILITIES: "2",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "1",
+    }
+    observations = [
+        _observation(concept, value, 2024) for concept, value in annual_values.items()
+    ]
+    for quarter, period_end in (
+        (FiscalPeriod.Q1, datetime.date(2025, 3, 31)),
+        (FiscalPeriod.Q2, datetime.date(2025, 6, 30)),
+    ):
+        observations.extend(
+            _observation(
+                concept,
+                value,
+                2025,
+                granularity=Granularity.QUARTERLY,
+                fiscal_period=quarter,
+                period_end=period_end,
+            )
+            for concept, value in quarterly_values.items()
+        )
+    financials = NormalizedCompanyFinancials(
+        provider="test",
+        company_id="ytd",
+        company_name="YTD Test",
+        observations=observations,
+    )
+    parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("10"),
+        operating_margin=Decimal("20"),
+        tax_rate=Decimal("25"),
+        depreciation_to_revenue=Decimal("4"),
+        operating_working_capital_to_revenue=Decimal("5"),
+        capex_constraints={
+            2025: MonetaryForecastConstraint(point=Decimal("30")),
+        },
+    )
+
+    forecast = FcffForecastService().forecast(financials, parameters)
+    observation = forecast.observations[0]
+
+    assert forecast.seed_type.value == "YTD+forecast"
+    assert observation.revenue == Decimal("110")
+    assert observation.capital_expenditures == Decimal("30")
+    assert observation.capex_to_revenue == Decimal("27.27272727272727272727272727")
+    assert forecast.ytd_anchor is not None
+    assert forecast.ytd_anchor.capex_to_revenue == Decimal(
+        "43.33333333333333333333333333"
+    )
+    assert (
+        "management_guidance" in observation.cell_audits["capital_expenditures"].source
+    )
+    assert not FcffForecastService().economic_identity_issues(forecast)
 
 
 def test_driver_based_fcff_extends_a_short_driver_path_with_its_final_value():

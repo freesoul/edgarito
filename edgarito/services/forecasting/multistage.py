@@ -147,6 +147,23 @@ class AdaptiveMultistageFcffForecastService:
                 if ForecastAssumptionSource.ADAPTIVE_MULTISTAGE in source_path
                 else source_path[0]
             )
+        if forecast.capex_constraints_applied:
+            capex_path = forecast.assumption_source_paths.get(
+                FcffForecastDriver.CAPEX_TO_REVENUE,
+                (ForecastAssumptionSource.ADAPTIVE_MULTISTAGE,)
+                * len(forecast.observations),
+            )
+            forecast.assumption_source_paths[FcffForecastDriver.CAPEX_TO_REVENUE] = (
+                tuple(
+                    ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                    if observation.fiscal_year in forecast.capex_constraints_applied
+                    else capex_path[index]
+                    for index, observation in enumerate(forecast.observations)
+                )
+            )
+            forecast.assumption_sources[FcffForecastDriver.CAPEX_TO_REVENUE] = (
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            )
         forecast.adaptive_stages = self._stage_path(plan)
         return self._base_service.regenerate_cell_audits(forecast), plan
 

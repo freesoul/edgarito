@@ -2,17 +2,21 @@ import asyncio
 import datetime
 from decimal import Decimal
 
+import pytest
+
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
     GuidanceBasis,
     GuidanceMetric,
     GuidancePeriodType,
+    GuidanceQualifier,
     GuidanceScope,
     GuidanceStatus,
     GuidanceUnit,
     GuidanceValueKind,
     ManagementGuidance,
+    MonetaryForecastConstraint,
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
@@ -89,6 +93,7 @@ def _guidance(
     point=None,
     kind=GuidanceValueKind.MONETARY,
     currency="USD",
+    qualifier=GuidanceQualifier.UNKNOWN,
     basis=GuidanceBasis.GAAP,
     status=GuidanceStatus.ISSUED,
     filed=datetime.date(2025, 2, 1),
@@ -104,6 +109,7 @@ def _guidance(
         value_kind=kind,
         currency=currency,
         unit=currency or kind.value,
+        qualifier=qualifier,
         basis=basis,
         scope=GuidanceScope.CONSOLIDATED,
         status=status,
@@ -208,9 +214,12 @@ def test_reported_total_revenue_wins_over_unknown_basis_regardless_of_order():
         )
 
 
-def test_capex_uses_guided_revenue_but_gross_margin_never_maps_to_operating_margin():
-    revenue = _guidance(GuidanceMetric.REVENUE, low="120", high="130")
-    capex = _guidance(GuidanceMetric.CAPEX, point="15")
+def test_absolute_capex_guidance_maps_without_revenue_guidance():
+    capex = _guidance(
+        GuidanceMetric.CAPEX,
+        point="15",
+        qualifier=GuidanceQualifier.POINT,
+    )
     gross = _guidance(
         GuidanceMetric.GROSS_MARGIN,
         point="55",
@@ -219,14 +228,124 @@ def test_capex_uses_guided_revenue_but_gross_margin_never_maps_to_operating_marg
     )
 
     parameters, result = GuidanceForecastOverlay().apply(
-        [revenue, capex, gross],
+        [capex, gross],
         baseline=_baseline(),
         parameters=FcffForecastParameters(forecast_years=2),
     )
 
-    assert parameters.capex_to_revenue[0] == Decimal("12")
+    assert parameters.capex_to_revenue is None
+    assert parameters.capex_constraints == {
+        2025: MonetaryForecastConstraint(
+            point=Decimal("15"), source="management_guidance"
+        )
+    }
+    capex_application = next(
+        application
+        for application in result.applications
+        if application.guidance is capex
+    )
+    assert capex_application.methodology == (
+        "management guidance point capex constraint"
+    )
+    assert capex_application.source == "management_guidance"
     assert parameters.operating_margin is None
     assert gross in result.evidence_only
+
+
+def test_capex_constraint_qualifiers_preserve_points_and_bounds():
+    records = [
+        _guidance(GuidanceMetric.CAPEX, point="15", qualifier=GuidanceQualifier.POINT),
+        _guidance(
+            GuidanceMetric.CAPEX,
+            year=2026,
+            point="12",
+            qualifier=GuidanceQualifier.AT_LEAST,
+        ),
+        _guidance(
+            GuidanceMetric.CAPEX,
+            year=2027,
+            point="8",
+            qualifier=GuidanceQualifier.AT_MOST,
+        ),
+        _guidance(
+            GuidanceMetric.CAPEX,
+            year=2028,
+            low="10",
+            high="20",
+            qualifier=GuidanceQualifier.RANGE,
+        ),
+    ]
+    baseline = _baseline().model_copy(
+        update={
+            "observations": [_observation(year, "115") for year in range(2025, 2029)]
+        }
+    )
+    parameters, result = GuidanceForecastOverlay().apply(
+        records,
+        baseline=baseline,
+        parameters=FcffForecastParameters(forecast_years=4),
+    )
+
+    assert parameters.capex_constraints == {
+        2025: MonetaryForecastConstraint(point=Decimal("15")),
+        2026: MonetaryForecastConstraint(minimum=Decimal("12")),
+        2027: MonetaryForecastConstraint(maximum=Decimal("8")),
+        2028: MonetaryForecastConstraint(
+            point=Decimal("15"), minimum=Decimal("10"), maximum=Decimal("20")
+        ),
+    }
+    assert [application.methodology for application in result.applications] == [
+        "management guidance point capex constraint",
+        "management guidance floor capex constraint",
+        "management guidance ceiling capex constraint",
+        "management guidance range capex constraint",
+    ]
+
+
+def test_absolute_capex_guidance_does_not_cross_currency_boundary():
+    capex = _guidance(GuidanceMetric.CAPEX, point="15", currency="EUR")
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [capex],
+        baseline=_baseline(),
+        parameters=FcffForecastParameters(forecast_years=2),
+    )
+
+    assert parameters.capex_constraints == {}
+    assert result.applications == ()
+    assert capex in result.evidence_only
+    assert any(
+        "does not match forecast unit" in reason for reason in result.rejected_reasons
+    )
+
+
+def test_explicit_capex_ratio_path_wins_and_records_guidance_evidence():
+    requested = FcffForecastParameters(forecast_years=2, capex_to_revenue=Decimal("6"))
+    capex = _guidance(GuidanceMetric.CAPEX, point="15")
+
+    parameters, result = GuidanceForecastOverlay().apply(
+        [capex], baseline=_baseline(), parameters=requested
+    )
+
+    assert parameters == requested
+    assert result.applications == ()
+    assert capex in result.evidence_only
+    assert any(
+        "explicit CLI/profile capex_to_revenue wins" in reason
+        for reason in result.rejected_reasons
+    )
+
+
+def test_monetary_forecast_constraint_validates_bounds_and_point():
+    with pytest.raises(ValueError, match="minimum cannot exceed maximum"):
+        MonetaryForecastConstraint(minimum=Decimal("10"), maximum=Decimal("9"))
+    with pytest.raises(ValueError, match="point cannot exceed maximum"):
+        MonetaryForecastConstraint(point=Decimal("11"), maximum=Decimal("10"))
+    with pytest.raises(ValueError, match="fiscal years are invalid"):
+        FcffForecastParameters(
+            forecast_years=1,
+            capex_constraints={1800: MonetaryForecastConstraint(point=Decimal("1"))},
+        )
 
 
 def test_explicit_cli_or_profile_driver_has_precedence_over_guidance():
