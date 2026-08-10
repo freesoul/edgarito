@@ -15,6 +15,40 @@ class ForecastAssumptionSource(str, Enum):
     ADAPTIVE_MULTISTAGE = "adaptive_multistage"
 
 
+class ForecastValue(BaseModel):
+    """A numeric forecast cell together with its audit provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    value: Decimal
+    source: str
+    method: str
+    confidence: str
+
+    @field_validator("value")
+    @classmethod
+    def require_finite_value(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("Forecast values must be finite")
+        return value
+
+    @field_validator("source", "method")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forecast value provenance cannot be blank")
+        return normalized
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"high", "medium", "low"}:
+            raise ValueError("Forecast value confidence must be high, medium, or low")
+        return normalized
+
+
 class ForecastSeedType(str, Enum):
     FISCAL_YEAR = "FY"
     TTM = "TTM"
@@ -149,6 +183,9 @@ class FcffForecastParameters(BaseModel):
     capex_to_revenue: Optional[tuple[Decimal, ...]] = None
     operating_working_capital_to_revenue: Optional[tuple[Decimal, ...]] = None
     revenue_anchors: dict[int, Decimal] = Field(default_factory=dict)
+    revenue_anchor_sources: dict[int, ForecastAssumptionSource] = Field(
+        default_factory=dict
+    )
     assumption_source_overrides: dict[FcffForecastDriver, ForecastAssumptionSource] = (
         Field(default_factory=dict)
     )
@@ -274,6 +311,7 @@ class FcffForecastObservation(BaseModel):
     change_in_operating_working_capital: Decimal
     fcff: Decimal
     unit: str
+    cell_audits: dict[str, ForecastValue] = Field(default_factory=dict)
     formula: str = (
         "NOPAT + depreciation and amortization - capital expenditures - "
         "change in operating working capital"
@@ -346,6 +384,10 @@ class FcffForecast(BaseModel):
     parameters: FcffForecastParameters
     historical_fiscal_years: tuple[int, ...]
     assumption_sources: dict[FcffForecastDriver, ForecastAssumptionSource]
+    assumption_source_paths: dict[
+        FcffForecastDriver, tuple[ForecastAssumptionSource, ...]
+    ] = Field(default_factory=dict)
+    adaptive_stages: tuple[str, ...] = ()
     observations: list[FcffForecastObservation] = Field(default_factory=list)
     warnings: tuple[str, ...] = ()
     ytd_anchor: Optional[FcffForecastYtdAnchor] = None

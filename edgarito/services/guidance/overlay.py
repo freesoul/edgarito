@@ -70,7 +70,9 @@ class GuidanceForecastOverlay:
             reason = self._eligibility_reason(record, years)
             if reason:
                 evidence_only.append(record)
-                rejected.append(f"{record.period_label} {record.metric.value}: {reason}")
+                rejected.append(
+                    f"{record.period_label} {record.metric.value}: {reason}"
+                )
             else:
                 eligible.append(record)
 
@@ -83,6 +85,7 @@ class GuidanceForecastOverlay:
         updates: dict = {}
         source_overrides = dict(parameters.assumption_source_overrides)
         revenue_anchors = dict(parameters.revenue_anchors)
+        revenue_anchor_sources = dict(parameters.revenue_anchor_sources)
 
         revenue_guidance = {
             year: record
@@ -116,6 +119,9 @@ class GuidanceForecastOverlay:
                     )
                     continue
                 revenue_anchors[year] = value
+                revenue_anchor_sources[year] = (
+                    ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+                )
                 applications.append(
                     GuidanceApplication(
                         driver=FcffForecastDriver.REVENUE_GROWTH.value,
@@ -130,6 +136,8 @@ class GuidanceForecastOverlay:
                 source_overrides[FcffForecastDriver.REVENUE_GROWTH] = (
                     ForecastAssumptionSource.MANAGEMENT_GUIDANCE
                 )
+            if revenue_anchor_sources != parameters.revenue_anchor_sources:
+                updates["revenue_anchor_sources"] = revenue_anchor_sources
 
             growth_path = [item.revenue_growth for item in baseline.observations]
             growth_changed = False
@@ -199,12 +207,9 @@ class GuidanceForecastOverlay:
                 revenue = revenue_guidance.get(observation.fiscal_year)
                 if capex is None:
                     continue
-                if (
-                    capex.value_kind != GuidanceValueKind.MONETARY
-                    or (
-                        revenue is not None
-                        and revenue.value_kind != GuidanceValueKind.MONETARY
-                    )
+                if capex.value_kind != GuidanceValueKind.MONETARY or (
+                    revenue is not None
+                    and revenue.value_kind != GuidanceValueKind.MONETARY
                 ):
                     evidence_only.append(capex)
                     rejected.append(
@@ -288,9 +293,7 @@ class GuidanceForecastOverlay:
     def _is_named_revenue_component(record: ManagementGuidance) -> bool:
         if not record.metric_name:
             return False
-        normalized = re.sub(
-            r"[^a-z0-9]+", " ", record.metric_name.casefold()
-        ).strip()
+        normalized = re.sub(r"[^a-z0-9]+", " ", record.metric_name.casefold()).strip()
         allowed = (
             _CONSOLIDATED_REVENUE_NAMES
             if record.metric == GuidanceMetric.REVENUE
@@ -306,15 +309,11 @@ class GuidanceForecastOverlay:
         evidence_only: list[ManagementGuidance],
         rejected: list[str],
     ) -> dict[tuple[GuidanceMetric, int | None], ManagementGuidance]:
-        grouped: dict[
-            tuple[GuidanceMetric, int | None], list[ManagementGuidance]
-        ] = {}
+        grouped: dict[tuple[GuidanceMetric, int | None], list[ManagementGuidance]] = {}
         for record in records:
             grouped.setdefault((record.metric, record.fiscal_year), []).append(record)
 
-        selected: dict[
-            tuple[GuidanceMetric, int | None], ManagementGuidance
-        ] = {}
+        selected: dict[tuple[GuidanceMetric, int | None], ManagementGuidance] = {}
         for key, candidates in grouped.items():
             best_priority = max(cls._selection_priority(item) for item in candidates)
             strongest = [

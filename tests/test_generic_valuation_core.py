@@ -345,6 +345,21 @@ def test_current_ytd_and_ttm_context_seed_the_current_fiscal_year_without_overla
     assert forecast.ytd_anchor.latest_annual_revenue == Decimal("100")
     assert forecast.ytd_anchor.actual_tax_rate == Decimal("25")
     assert forecast.ytd_anchor.revenue_growth == Decimal("10")
+    first_audits = forecast.observations[0].cell_audits
+    for field in ("revenue_growth", "operating_margin", "tax_rate"):
+        assert first_audits[field].source.startswith("derived[")
+        assert "ytd_actual" in first_audits[field].source
+        assert "projected_remainder" in first_audits[field].source
+        assert first_audits[field].confidence == "high"
+    assert (
+        "ytd_actual_depreciation=reported"
+        in first_audits["depreciation_and_amortization"].source
+    )
+    assert "ytd_actual_capex=reported" in first_audits["capital_expenditures"].source
+    assert (
+        "projected_remainder=prior_forecast"
+        in first_audits["change_in_operating_working_capital"].source
+    )
 
     annual_only = financials.model_copy(
         update={

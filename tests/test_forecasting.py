@@ -20,8 +20,9 @@ from edgarito.services.forecasting import (
     FcffForecastDriver,
     FcffForecastParameters,
     FcffForecastService,
-    ForwardGrowthEvidence,
     ForecastAssumptionSource,
+    ForecastValue,
+    ForwardGrowthEvidence,
     FreeCashFlowForecastService,
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
@@ -141,6 +142,34 @@ def test_infers_trailing_average_growth_and_fcf_margin():
     assert observation.free_cash_flow == Decimal("14.400")
 
 
+def test_forecast_value_is_validated_and_frozen():
+    value = ForecastValue(
+        value="12.5",
+        source="explicit",
+        method="explicit forecast driver",
+        confidence="HIGH",
+    )
+
+    assert value.value == Decimal("12.5")
+    assert value.confidence == "high"
+    with pytest.raises(ValueError, match="finite"):
+        ForecastValue(
+            value="NaN",
+            source="explicit",
+            method="test",
+            confidence="high",
+        )
+    with pytest.raises(ValueError, match="high, medium, or low"):
+        ForecastValue(
+            value="1",
+            source="explicit",
+            method="test",
+            confidence="certain",
+        )
+    with pytest.raises(ValueError):
+        value.value = Decimal("13")
+
+
 def test_fcff_absolute_revenue_anchor_replaces_historical_growth_for_that_year():
     parameters = FcffForecastParameters(
         forecast_years=1,
@@ -161,11 +190,34 @@ def test_fcff_absolute_revenue_anchor_replaces_historical_growth_for_that_year()
     forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
 
     assert forecast.observations[0].revenue == Decimal("125")
-    assert forecast.observations[0].revenue_growth == Decimal("4.166666666666666666666666700")
+    assert forecast.observations[0].revenue_growth == Decimal(
+        "4.166666666666666666666666700"
+    )
     assert (
         forecast.assumption_sources[FcffForecastDriver.REVENUE_GROWTH]
         == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
     )
+
+
+def test_revenue_anchor_audit_preserves_management_guidance_source():
+    parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_growth=Decimal("5"),
+        operating_margin=Decimal("25"),
+        tax_rate=Decimal("20"),
+        depreciation_to_revenue=Decimal("4"),
+        capex_to_revenue=Decimal("6"),
+        operating_working_capital_to_revenue=Decimal("15"),
+        revenue_anchors={2025: Decimal("125")},
+        revenue_anchor_sources={2025: ForecastAssumptionSource.MANAGEMENT_GUIDANCE},
+    )
+
+    forecast = FcffForecastService().forecast(_fcff_financials(), parameters)
+    revenue_audit = forecast.observations[0].cell_audits["revenue"]
+
+    assert "revenue_anchor=management_guidance" in revenue_audit.source
+    assert "management guidance revenue anchor" in revenue_audit.method
+    assert revenue_audit.confidence == "high"
 
 
 def test_parameters_reject_an_incomplete_year_specific_path():
@@ -261,6 +313,35 @@ def test_driver_based_fcff_forecasts_the_full_operating_bridge():
     assert first.fcff == Decimal("23.9600")
     assert second.fcff == Decimal("23.95800")
     assert first.formula.startswith("NOPAT + depreciation")
+    expected_cells = {
+        "revenue_growth",
+        "revenue",
+        "operating_margin",
+        "operating_income",
+        "tax_rate",
+        "nopat",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "change_in_operating_working_capital",
+        "fcff",
+    }
+    assert set(first.cell_audits) == expected_cells
+    direct_driver_cells = {
+        "revenue_growth",
+        "operating_margin",
+        "tax_rate",
+    }
+    for key in expected_cells:
+        audit = first.cell_audits[key]
+        assert audit.value == getattr(first, key)
+        assert audit.confidence == "high"
+        if key in direct_driver_cells:
+            assert audit.source == "explicit"
+        else:
+            assert audit.source.startswith("derived[")
+    assert "operating_margin=explicit" in first.cell_audits["operating_income"].source
+    assert "revenue × operating margin" in first.cell_audits["operating_income"].method
+    assert "NOPAT + depreciation" in first.cell_audits["fcff"].method
     assert FcffForecast.model_validate_json(forecast.model_dump_json()) == forecast
 
 
@@ -304,6 +385,10 @@ def test_fcff_infers_each_omitted_driver_from_trailing_history():
         - observation.capital_expenditures
         - observation.change_in_operating_working_capital
     )
+    assert observation.cell_audits["revenue_growth"].source == "trailing_average"
+    assert observation.cell_audits["revenue_growth"].confidence == "medium"
+    assert observation.cell_audits["revenue"].source.startswith("derived[")
+    assert observation.cell_audits["fcff"].confidence == "medium"
 
 
 def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
@@ -352,6 +437,20 @@ def test_adaptive_multistage_projection_is_invariant_after_stable_stage():
     )
     assert plans[0].terminal_return_on_invested_capital == Decimal("15")
     assert plans[0].terminal_reinvestment_rate == Decimal("20")
+    for forecast in forecasts:
+        assert len(forecast.observations) == len(forecast.parameters.revenue_growth)
+        assert all(
+            item.cell_audits["revenue_growth"].source == "adaptive_multistage"
+            for item in forecast.observations
+        )
+        assert all(
+            item.cell_audits["revenue_growth"].confidence == "medium"
+            for item in forecast.observations
+        )
+        assert all(
+            "revenue_growth=adaptive_multistage" in item.cell_audits["fcff"].source
+            for item in forecast.observations
+        )
 
     bridge = FcffDcfCapitalBridge(
         fiscal_year=2024,
@@ -407,6 +506,42 @@ def test_forward_evidence_delays_growth_fade_without_exceeding_stage_caps():
     assert evidence_plan.effective_years <= 30
     assert evidence_plan.forward_evidence_score > 0
     assert evidence_plan.forward_evidence_summary
+
+
+def test_adaptive_multistage_preserves_guidance_prefix_sources_by_year():
+    financials = _fcff_financials()
+    base_service = FcffForecastService()
+    parameters = FcffForecastParameters(
+        forecast_years=5,
+        revenue_growth=(Decimal("10"), Decimal("8")),
+        assumption_source_overrides={
+            FcffForecastDriver.REVENUE_GROWTH: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+        },
+    )
+    seed = base_service.forecast(financials, parameters)
+    configuration = MultistageValuationConfiguration(
+        terminal_return_on_invested_capital=Decimal("15")
+    )
+    forecast, plan = AdaptiveMultistageFcffForecastService(base_service).forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        configuration,
+    )
+
+    assert plan.explicit_growth_prefix_years == 2
+    assert [
+        item.cell_audits["revenue_growth"].source for item in forecast.observations[:2]
+    ] == ["management_guidance", "management_guidance"]
+    assert forecast.observations[2].cell_audits["revenue_growth"].source == (
+        "adaptive_multistage"
+    )
+    assert (
+        "transition" in forecast.observations[2].cell_audits["revenue_growth"].method
+        or "stable" in forecast.observations[2].cell_audits["revenue_growth"].method
+    )
+
 
 def test_generic_forecast_service_is_the_fcff_default():
     assert FreeCashFlowForecastService is FcffForecastService

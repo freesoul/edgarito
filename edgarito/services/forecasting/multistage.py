@@ -10,8 +10,8 @@ from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastDriver,
     FcffForecastParameters,
-    ForwardGrowthEvidence,
     ForecastAssumptionSource,
+    ForwardGrowthEvidence,
 )
 
 
@@ -128,7 +128,133 @@ class AdaptiveMultistageFcffForecastService:
             forecast.assumption_sources[FcffForecastDriver.DEPRECIATION_TO_REVENUE] = (
                 ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
             )
-        return forecast, plan
+        forecast.assumption_source_paths = self._source_paths(
+            seed_forecast=seed_forecast,
+            requested_parameters=requested_parameters,
+            plan=plan,
+            tax_is_adaptive=tax_is_adaptive,
+            reinvestment_is_adaptive=configuration.fade_reinvestment_to_terminal,
+            depreciation_is_adaptive=(
+                configuration.depreciable_asset_life_years is not None
+                and requested_parameters.depreciation_to_revenue is None
+            ),
+        )
+        for driver, source_path in forecast.assumption_source_paths.items():
+            if not source_path:
+                continue
+            forecast.assumption_sources[driver] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE
+                if ForecastAssumptionSource.ADAPTIVE_MULTISTAGE in source_path
+                else source_path[0]
+            )
+        forecast.adaptive_stages = self._stage_path(plan)
+        return self._base_service.regenerate_cell_audits(forecast), plan
+
+    @classmethod
+    def _source_paths(
+        cls,
+        *,
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        plan: AdaptiveMultistagePlan,
+        tax_is_adaptive: bool,
+        reinvestment_is_adaptive: bool,
+        depreciation_is_adaptive: bool,
+    ) -> dict[FcffForecastDriver, tuple[ForecastAssumptionSource, ...]]:
+        years = plan.effective_years
+        paths = {
+            driver: tuple(
+                cls._base_source(seed_forecast, requested_parameters, driver)
+                for _ in range(years)
+            )
+            for driver in FcffForecastDriver
+        }
+
+        growth_base = cls._base_source(
+            seed_forecast, requested_parameters, FcffForecastDriver.REVENUE_GROWTH
+        )
+        growth_prefix = 0
+        if requested_parameters.revenue_growth is not None:
+            if len(requested_parameters.revenue_growth) > 1:
+                growth_prefix = plan.explicit_growth_prefix_years
+            elif growth_base in {
+                ForecastAssumptionSource.EXPLICIT,
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
+            }:
+                growth_prefix = 1
+        paths[FcffForecastDriver.REVENUE_GROWTH] = cls._prefix_adaptive_path(
+            growth_base, growth_prefix, years
+        )
+
+        if tax_is_adaptive:
+            paths[FcffForecastDriver.TAX_RATE] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE,
+            ) * years
+        if reinvestment_is_adaptive:
+            capex_base = cls._base_source(
+                seed_forecast,
+                requested_parameters,
+                FcffForecastDriver.CAPEX_TO_REVENUE,
+            )
+            capex_path = requested_parameters.capex_to_revenue
+            convergence_year = plan.effective_years - plan.stable_years
+            if capex_path is not None and len(capex_path) > 1:
+                capex_prefix = min(len(capex_path), convergence_year)
+            elif capex_path is not None and capex_base in {
+                ForecastAssumptionSource.EXPLICIT,
+                ForecastAssumptionSource.MANAGEMENT_GUIDANCE,
+            }:
+                capex_prefix = min(
+                    plan.explicit_growth_prefix_years + plan.high_growth_years,
+                    years,
+                )
+            else:
+                capex_prefix = 0
+            paths[FcffForecastDriver.CAPEX_TO_REVENUE] = cls._prefix_adaptive_path(
+                capex_base, capex_prefix, years
+            )
+        if depreciation_is_adaptive:
+            paths[FcffForecastDriver.DEPRECIATION_TO_REVENUE] = (
+                ForecastAssumptionSource.ADAPTIVE_MULTISTAGE,
+            ) * years
+        return paths
+
+    @staticmethod
+    def _base_source(
+        seed_forecast: FcffForecast,
+        requested_parameters: FcffForecastParameters,
+        driver: FcffForecastDriver,
+    ) -> ForecastAssumptionSource:
+        override = requested_parameters.assumption_source_overrides.get(driver)
+        if override is not None:
+            return override
+        if getattr(requested_parameters, driver.value) is not None:
+            return ForecastAssumptionSource.EXPLICIT
+        source_path = seed_forecast.assumption_source_paths.get(driver)
+        if source_path:
+            return source_path[0]
+        return seed_forecast.assumption_sources.get(
+            driver, ForecastAssumptionSource.TRAILING_AVERAGE
+        )
+
+    @staticmethod
+    def _prefix_adaptive_path(
+        source: ForecastAssumptionSource,
+        prefix_years: int,
+        years: int,
+    ) -> tuple[ForecastAssumptionSource, ...]:
+        return (source,) * min(prefix_years, years) + (
+            ForecastAssumptionSource.ADAPTIVE_MULTISTAGE,
+        ) * max(0, years - prefix_years)
+
+    @staticmethod
+    def _stage_path(plan: AdaptiveMultistagePlan) -> tuple[str, ...]:
+        return (
+            ("explicit",) * plan.explicit_growth_prefix_years
+            + ("high_growth",) * plan.high_growth_years
+            + ("transition",) * plan.transition_years
+            + ("stable",) * plan.stable_years
+        )
 
     def _apply_sustainable_reinvestment(
         self,

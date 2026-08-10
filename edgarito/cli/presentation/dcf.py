@@ -61,7 +61,14 @@ class FcffDcfConsolePresenter:
             *self._compact_assumptions(result),
         ]
         if verbose:
-            lines.extend(["", *self._audit_details(result)])
+            lines.extend(
+                [
+                    "",
+                    *self._economic_model_details(result),
+                    "",
+                    *self._audit_details(result),
+                ]
+            )
 
         lines.extend(
             [
@@ -115,6 +122,112 @@ class FcffDcfConsolePresenter:
             lines.extend(f"- {warning}" for warning in result.warnings)
         return "\n".join(lines)
 
+    def _economic_model_details(self, result: FcffDcfResult) -> list[str]:
+        lines = [*section("ECONOMIC FCFF MODEL")]
+        if not result.forecast_cell_audits:
+            lines.append("No economic FCFF cell audit metadata is available.")
+            return lines
+
+        years = sorted(result.forecast_cell_audits)
+        amount_values = [
+            audit.value
+            for cells in result.forecast_cell_audits.values()
+            for key, audit in cells.items()
+            if key
+            in {
+                "revenue",
+                "operating_income",
+                "nopat",
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "change_in_operating_working_capital",
+                "fcff",
+            }
+        ]
+        scale, suffix = self._scale_values(amount_values)
+        amount_unit = f"{result.unit} {suffix}".rstrip()
+        rows = (
+            ("revenue_growth", "Revenue growth (%) [driver path]", True),
+            (
+                "revenue",
+                f"Revenue ({amount_unit}) [prior revenue × (1 + growth / 100)]",
+                False,
+            ),
+            ("operating_margin", "Operating margin (%) [driver path]", True),
+            (
+                "operating_income",
+                f"EBIT / operating income ({amount_unit}) [revenue × margin / 100]",
+                False,
+            ),
+            ("tax_rate", "Tax rate (%) [driver path]", True),
+            (
+                "nopat",
+                f"NOPAT ({amount_unit}) [EBIT × (1 - tax rate / 100)]",
+                False,
+            ),
+            (
+                "depreciation_and_amortization",
+                f"D&A ({amount_unit}) [revenue × D&A/revenue / 100]",
+                False,
+            ),
+            (
+                "capital_expenditures",
+                f"Capex ({amount_unit}) [revenue × capex/revenue / 100]",
+                False,
+            ),
+            (
+                "change_in_operating_working_capital",
+                f"Change in operating WC ({amount_unit}) [ending WC - prior WC]",
+                False,
+            ),
+            (
+                "fcff",
+                f"FCFF ({amount_unit}) [NOPAT + D&A - capex - Δ NWC]",
+                False,
+            ),
+        )
+        label_width = max(56, max(len(label) for _, label, _ in rows) + 2)
+        lines.extend(
+            [
+                f"{'Economic cell / formula':<{label_width}}"
+                + "".join(f"{'FY' + str(year) + 'E':>14}" for year in years),
+                "-" * (label_width + 14 * len(years)),
+            ]
+        )
+        for key, label, is_percent in rows:
+            values = []
+            for year in years:
+                audit = result.forecast_cell_audits[year].get(key)
+                values.append(self._format_economic_value(audit, scale, is_percent))
+            lines.append(
+                f"{label:<{label_width}}" + "".join(f"{value:>14}" for value in values)
+            )
+
+        lines.extend(["", *subsection("ECONOMIC CELL PROVENANCE")])
+        for year in years:
+            lines.append(f"FY{year}E:")
+            for key, _label, _is_percent in rows:
+                audit = result.forecast_cell_audits[year].get(key)
+                if audit is None:
+                    lines.append(
+                        f"  {key}: source=unknown/legacy | "
+                        "method=legacy forecast observation | confidence=low"
+                    )
+                    continue
+                lines.append(
+                    f"  {key}: source={audit.source} | "
+                    f"method={audit.method} | confidence={audit.confidence}"
+                )
+        return lines
+
+    @staticmethod
+    def _format_economic_value(audit, scale: Decimal, is_percent: bool) -> str:
+        if audit is None:
+            return "n/a"
+        if is_percent:
+            return f"{audit.value:,.2f}%"
+        return f"{audit.value / scale:,.1f}"
+
     def _compact_assumptions(self, result: FcffDcfResult) -> list[str]:
         cost_of_equity = self._assumption_value(
             result, ValuationAssumptionKind.COST_OF_EQUITY
@@ -163,8 +276,7 @@ class FcffDcfConsolePresenter:
             lines.append("Forecast driver sources:")
             for driver, source in sorted(result.forecast_assumption_sources.items()):
                 lines.append(
-                    f"  {driver.replace('_', ' ').title()}: "
-                    f"{source.replace('_', '-')}"
+                    f"  {driver.replace('_', ' ').title()}: {source.replace('_', '-')}"
                 )
         if (
             result.provider.casefold() == "yahoo"

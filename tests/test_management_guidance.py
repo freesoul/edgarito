@@ -135,6 +135,9 @@ def test_revenue_guidance_midpoint_becomes_absolute_anchor():
     )
 
     assert parameters.revenue_anchors == {2025: Decimal("125")}
+    assert parameters.revenue_anchor_sources == {
+        2025: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+    }
     assert parameters.assumption_source_overrides == {
         FcffForecastDriver.REVENUE_GROWTH: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
     }
@@ -195,11 +198,13 @@ def test_reported_total_revenue_wins_over_unknown_basis_regardless_of_order():
         )
 
         assert parameters.revenue_anchors == {2025: Decimal("51200000000")}
+        assert parameters.revenue_anchor_sources == {
+            2025: ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+        }
         assert [item.guidance for item in result.applications] == [total_revenue]
         assert misleading_revenue in result.evidence_only
         assert any(
-            "lower-priority guidance" in reason
-            for reason in result.rejected_reasons
+            "lower-priority guidance" in reason for reason in result.rejected_reasons
         )
 
 
@@ -346,9 +351,7 @@ def test_refresh_with_unchanged_sec_content_reuses_normalized_extraction(tmp_pat
     )
 
     first = asyncio.run(
-        service.retrieve(
-            ticker="TEST", cik=None, as_of=datetime.date(2026, 2, 1)
-        )
+        service.retrieve(ticker="TEST", cik=None, as_of=datetime.date(2026, 2, 1))
     )
     second = asyncio.run(
         service.retrieve(

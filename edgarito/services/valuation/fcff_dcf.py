@@ -15,6 +15,7 @@ from edgarito.services.financial_observation_availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
+from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
     FcffForecast,
@@ -575,6 +576,24 @@ class FcffDcfService:
                     "fair-value path"
                 )
 
+        forecast_service = FcffForecastService()
+        identity_issues = forecast_service.economic_identity_issues(forecast)
+        if identity_issues:
+            if any(observation.cell_audits for observation in forecast.observations):
+                raise ValueError(
+                    "FCFF forecast economic identities are inconsistent: "
+                    + "; ".join(identity_issues)
+                )
+            generated_cell_audits = forecast_service.build_legacy_inconsistent_audits(
+                forecast, identity_issues
+            )
+        else:
+            generated_cell_audits = forecast_service.build_cell_audits(forecast)
+        forecast_cell_audits = {
+            observation.fiscal_year: generated_cell_audits[index]
+            for index, observation in enumerate(forecast.observations)
+        }
+
         return FcffDcfResult(
             provider=forecast.provider,
             company_id=forecast.company_id,
@@ -595,6 +614,7 @@ class FcffDcfService:
                 driver.value: source.value
                 for driver, source in forecast.assumption_sources.items()
             },
+            forecast_cell_audits=forecast_cell_audits,
             capital_bridge=capital_bridge,
             explicit_forecast_present_value=explicit_present_value,
             terminal_value=terminal_value,

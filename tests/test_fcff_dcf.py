@@ -9,6 +9,7 @@ import pytest
 
 from edgarito.cli.__main__ import main
 from edgarito.cli.parser import build_parser
+from edgarito.cli.presentation.dcf import FcffDcfConsolePresenter
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.schemas.normalization.financials import (
@@ -19,10 +20,13 @@ from edgarito.schemas.normalization.financials import (
 from edgarito.services.export import ValuationExcelRenderer
 from edgarito.services.forecasting import (
     FcffForecast,
+    FcffForecastDriver,
     FcffForecastObservation,
     FcffForecastParameters,
     FcffForecastYtdAnchor,
+    ForecastAssumptionSource,
     ForecastSeedType,
+    ForecastValue,
 )
 from edgarito.services.valuation import (
     CashFlowTiming,
@@ -69,7 +73,90 @@ def test_fcff_dcf_discounts_forecast_terminal_value_and_equity_bridge():
     assert result.terminal_value_percentage is not None
     assert result.terminal_value_percentage > Decimal(75)
     assert "highly sensitive" in result.warnings[0]
+    assert result.forecast_cell_audits[2026]["fcff"].value == Decimal("100")
+    assert (
+        result.forecast_cell_audits[2026]["fcff"].source
+        == "unknown/legacy/inconsistent"
+    )
+    assert result.forecast_cell_audits[2026]["fcff"].confidence == "low"
     assert FcffDcfResult.model_validate_json(result.model_dump_json()) == result
+
+
+def test_fcff_dcf_verbose_output_includes_economic_model_and_cell_provenance():
+    forecast = _consistent_forecast()
+    forecast.assumption_sources = {
+        driver: ForecastAssumptionSource.EXPLICIT for driver in FcffForecastDriver
+    }
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+
+    output = FcffDcfConsolePresenter().render(result, verbose=True)
+
+    assert "ECONOMIC FCFF MODEL" in output
+    assert output.index("ECONOMIC FCFF MODEL") < output.index("INTRINSIC VALUATION")
+    assert f"Revenue ({result.unit}" in output
+    assert f"FCFF ({result.unit}" in output
+    assert "ECONOMIC CELL PROVENANCE" in output
+    assert "revenue: source=" in output
+    assert "revenue: value=" not in output
+    assert "source=explicit" in output
+    assert "confidence=high" in output
+
+
+def test_fcff_dcf_regenerates_authoritative_cell_audits_from_current_observations():
+    forecast = _consistent_forecast()
+    forecast.assumption_sources = {
+        driver: ForecastAssumptionSource.EXPLICIT for driver in FcffForecastDriver
+    }
+    forecast.observations[0] = forecast.observations[0].model_copy(
+        update={
+            "cell_audits": {
+                "fcff": ForecastValue(
+                    value=Decimal("-999"),
+                    source="stale",
+                    method="stale metadata",
+                    confidence="low",
+                )
+            }
+        }
+    )
+
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+
+    audit = result.forecast_cell_audits[2026]["fcff"]
+    assert audit.value == Decimal("109.45")
+    assert audit.source.startswith("derived[")
+    assert audit.source != "stale"
+
+
+def test_fcff_dcf_rejects_inconsistent_forecast_with_audit_metadata():
+    forecast = _forecast()
+    forecast.observations[0] = forecast.observations[0].model_copy(
+        update={
+            "cell_audits": {
+                "fcff": ForecastValue(
+                    value=Decimal("100"),
+                    source="explicit",
+                    method="test",
+                    confidence="high",
+                )
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="economic identities are inconsistent"):
+        FcffDcfService().value(
+            forecast,
+            FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+            _capital_bridge(),
+        )
 
 
 def test_fcff_dcf_adds_non_operating_investments_to_equity_value():
@@ -324,6 +411,40 @@ def test_valuation_excel_export_contains_linked_formulas_yellow_inputs_and_cache
         assert float(summary_value.text) == pytest.approx(
             float(result.enterprise_value)
         )
+
+
+def test_valuation_excel_export_contains_economic_cell_audit_section(tmp_path):
+    forecast = _consistent_forecast()
+    forecast.assumption_sources = {
+        driver: ForecastAssumptionSource.EXPLICIT for driver in FcffForecastDriver
+    }
+    forecast.observations[0] = forecast.observations[0].model_copy(
+        update={
+            "cell_audits": {
+                "fcff": ForecastValue(
+                    value=forecast.observations[0].fcff,
+                    source="stale-observation",
+                    method="stale observation metadata",
+                    confidence="low",
+                )
+            }
+        }
+    )
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        _capital_bridge(),
+    )
+    output = tmp_path / "economic-audit.xlsx"
+
+    ValuationExcelRenderer().render(forecast, result, output)
+
+    with ZipFile(output) as archive:
+        shared_strings = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+        strings = "".join(shared_strings.itertext())
+        assert "Economic FCFF Cell Audit" in strings
+        assert "derived[" in strings
+        assert "stale-observation" not in strings
 
 
 def test_valuation_excel_export_includes_requested_relative_multiple_evidence(tmp_path):

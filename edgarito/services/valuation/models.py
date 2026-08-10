@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.valuation.assumptions import ValuationAssumptionSet
-from edgarito.services.forecasting.models import AdaptiveMultistagePlan
+from edgarito.services.forecasting.models import AdaptiveMultistagePlan, ForecastValue
 
 
 def _decimal_close(left: Decimal, right: Decimal) -> bool:
@@ -1189,6 +1189,9 @@ class FcffDcfResult(BaseModel):
     financial_snapshot_retrieved_at: Optional[datetime.datetime] = None
     observation_availability_mode: Optional[str] = None
     forecast_assumption_sources: dict[str, str] = Field(default_factory=dict)
+    forecast_cell_audits: dict[int, dict[str, ForecastValue]] = Field(
+        default_factory=dict
+    )
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult

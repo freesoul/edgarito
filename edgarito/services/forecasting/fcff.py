@@ -22,6 +22,7 @@ from edgarito.services.forecasting.models import (
     FcffForecastYtdAnchor,
     ForecastAssumptionSource,
     ForecastSeedType,
+    ForecastValue,
 )
 from edgarito.services.metrics.calculator import (
     OPERATING_WORKING_CAPITAL_CONCEPTS,
@@ -63,6 +64,20 @@ class _ForecastContext:
 class FcffForecastService:
     """Forecast annual unlevered FCFF from explicit operating drivers."""
 
+    _ECONOMIC_AUDIT_FIELDS = (
+        "revenue_growth",
+        "revenue",
+        "operating_margin",
+        "operating_income",
+        "tax_rate",
+        "nopat",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "change_in_operating_working_capital",
+        "fcff",
+    )
+    _AUDIT_TOLERANCE = Decimal("1e-18")
+
     _CORE_REQUIRED_CONCEPTS = frozenset(
         {
             FinancialConcept.REVENUE,
@@ -86,6 +101,102 @@ class FcffForecastService:
     @classmethod
     def required_concepts(cls) -> set[FinancialConcept]:
         return set(cls._REQUIRED_CONCEPTS)
+
+    def build_cell_audits(
+        self, forecast: FcffForecast
+    ) -> tuple[dict[str, ForecastValue], ...]:
+        """Build audit metadata from the forecast's current drivers and cells.
+
+        Keeping this derivation separate from forecast arithmetic lets adaptive
+        forecasting refresh provenance after it changes driver sources or extends
+        the projection horizon.
+        """
+
+        return tuple(
+            self._build_observation_audits(forecast, index, observation)
+            for index, observation in enumerate(forecast.observations)
+        )
+
+    def regenerate_cell_audits(self, forecast: FcffForecast) -> FcffForecast:
+        """Refresh every observation's economic-cell provenance in place."""
+
+        audits = self.build_cell_audits(forecast)
+        forecast.observations = [
+            observation.model_copy(update={"cell_audits": cell_audits})
+            for observation, cell_audits in zip(
+                forecast.observations, audits, strict=True
+            )
+        ]
+        return forecast
+
+    def economic_identity_issues(self, forecast: FcffForecast) -> tuple[str, ...]:
+        """Return material FCFF identity mismatches in supplied observations."""
+
+        issues: list[str] = []
+        previous_working_capital = forecast.base_operating_working_capital
+        for observation in forecast.observations:
+            expected = {
+                "operating_income": (
+                    observation.revenue * observation.operating_margin / PERCENT
+                ),
+                "nopat": observation.operating_income
+                * (Decimal(1) - observation.tax_rate / PERCENT),
+                "depreciation_and_amortization": (
+                    observation.revenue * observation.depreciation_to_revenue / PERCENT
+                ),
+                "capital_expenditures": (
+                    observation.revenue * observation.capex_to_revenue / PERCENT
+                ),
+                "operating_working_capital": (
+                    observation.revenue
+                    * observation.operating_working_capital_to_revenue
+                    / PERCENT
+                ),
+                "change_in_operating_working_capital": (
+                    observation.operating_working_capital - previous_working_capital
+                ),
+                "fcff": (
+                    observation.nopat
+                    + observation.depreciation_and_amortization
+                    - observation.capital_expenditures
+                    - observation.change_in_operating_working_capital
+                ),
+            }
+            for field, expected_value in expected.items():
+                actual_value = getattr(observation, field)
+                if not self._audit_close(actual_value, expected_value):
+                    issues.append(
+                        f"FY{observation.fiscal_year}E {field}: expected "
+                        f"{expected_value}, got {actual_value}"
+                    )
+            previous_working_capital = observation.operating_working_capital
+        return tuple(issues)
+
+    def build_legacy_inconsistent_audits(
+        self,
+        forecast: FcffForecast,
+        issues: tuple[str, ...],
+    ) -> tuple[dict[str, ForecastValue], ...]:
+        """Represent legacy inconsistent observations without changing arithmetic."""
+
+        method = "legacy/inconsistent economic identities: " + "; ".join(issues)
+        return tuple(
+            {
+                field: ForecastValue(
+                    value=getattr(observation, field),
+                    source="unknown/legacy/inconsistent",
+                    method=method,
+                    confidence="low",
+                )
+                for field in self._ECONOMIC_AUDIT_FIELDS
+            }
+            for observation in forecast.observations
+        )
+
+    @classmethod
+    def _audit_close(cls, actual: Decimal, expected: Decimal) -> bool:
+        scale = max(abs(actual), abs(expected), Decimal(1))
+        return abs(actual - expected) <= scale * cls._AUDIT_TOLERANCE
 
     def forecast(
         self,
@@ -287,7 +398,7 @@ class FcffForecastService:
                 ][0],
             )
 
-        return FcffForecast(
+        forecast = FcffForecast(
             provider=financials.provider,
             company_id=financials.company_id,
             company_name=financials.company_name,
@@ -322,6 +433,434 @@ class FcffForecastService:
             ),
             ytd_anchor=ytd_anchor,
         )
+        return self.regenerate_cell_audits(forecast)
+
+    def _build_observation_audits(
+        self,
+        forecast: FcffForecast,
+        index: int,
+        observation: FcffForecastObservation,
+    ) -> dict[str, ForecastValue]:
+        growth_source = self._driver_source(
+            forecast, FcffForecastDriver.REVENUE_GROWTH, index
+        )
+        margin_source = self._driver_source(
+            forecast, FcffForecastDriver.OPERATING_MARGIN, index
+        )
+        tax_source = self._driver_source(forecast, FcffForecastDriver.TAX_RATE, index)
+        is_ytd_seed = (
+            forecast.ytd_anchor is not None
+            and observation.forecast_year == 1
+            and forecast.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+        )
+        is_revenue_anchor = (
+            observation.fiscal_year in forecast.parameters.revenue_anchors
+        )
+        anchor_source = (
+            self._revenue_anchor_source(forecast, observation.fiscal_year)
+            if is_revenue_anchor
+            else None
+        )
+        anchor_method = (
+            f"{anchor_source.replace('_', ' ')} revenue anchor"
+            if anchor_source is not None
+            else "explicit revenue anchor"
+        )
+        revenue_components = self._revenue_components(forecast, index)
+        if forecast.ytd_anchor is not None:
+            revenue_components = (
+                *revenue_components,
+                ("projected_remainder", "prior_forecast"),
+            )
+        growth_components = (
+            (
+                *revenue_components,
+                ("projected_remainder", "prior_forecast"),
+            )
+            if is_ytd_seed
+            else (
+                (
+                    *self._revenue_components(forecast, index - 1),
+                    (
+                        "revenue_anchor",
+                        self._revenue_anchor_source(forecast, observation.fiscal_year),
+                    ),
+                )
+                if is_revenue_anchor
+                else (("revenue_growth", growth_source),)
+            )
+        )
+        stage = (
+            forecast.adaptive_stages[index]
+            if index < len(forecast.adaptive_stages)
+            else None
+        )
+        effective_margin_components = (
+            (
+                ("ytd_actual_operating_income", "reported"),
+                *revenue_components,
+                ("projected_remainder", "prior_forecast"),
+                ("operating_margin", margin_source),
+            )
+            if is_ytd_seed
+            else (("operating_margin", margin_source),)
+        )
+        effective_tax_components = (
+            (
+                ("ytd_actual_nopat", "reported"),
+                ("ytd_actual_tax", "reported"),
+                *revenue_components,
+                ("projected_remainder", "prior_forecast"),
+                ("operating_margin", margin_source),
+                ("tax_rate", tax_source),
+            )
+            if is_ytd_seed
+            else (("tax_rate", tax_source),)
+        )
+        depreciation_components = self._driver_components(
+            forecast, FcffForecastDriver.DEPRECIATION_TO_REVENUE, index
+        )
+        capex_components = self._driver_components(
+            forecast, FcffForecastDriver.CAPEX_TO_REVENUE, index
+        )
+        working_capital_components = self._driver_components(
+            forecast,
+            FcffForecastDriver.OPERATING_WORKING_CAPITAL_TO_REVENUE,
+            index,
+        )
+        prior_working_capital = "historical_seed" if index == 0 else "prior_forecast"
+        ytd_projection_components = (
+            (("projected_remainder", "prior_forecast"),) if is_ytd_seed else ()
+        )
+        ytd_depreciation_components = (
+            (("ytd_actual_depreciation", "reported"),) if is_ytd_seed else ()
+        )
+        ytd_capex_components = (
+            (("ytd_actual_capex", "reported"),) if is_ytd_seed else ()
+        )
+
+        return {
+            "revenue_growth": self._audit_value(
+                observation.revenue_growth,
+                growth_components,
+                (
+                    self._stage_method(
+                        "effective growth from reported YTD revenue and "
+                        "projected remainder",
+                        stage,
+                    )
+                    if is_ytd_seed
+                    else self._stage_method(
+                        f"effective growth from {anchor_method} and prior revenue",
+                        stage,
+                    )
+                    if is_revenue_anchor
+                    else self._driver_method(growth_source, "revenue growth", stage)
+                ),
+                derived=is_revenue_anchor or is_ytd_seed,
+            ),
+            "revenue": self._audit_value(
+                observation.revenue,
+                revenue_components,
+                self._stage_method(
+                    (
+                        "actual YTD revenue plus explicit revenue anchor"
+                        if is_ytd_seed and is_revenue_anchor
+                        else anchor_method
+                        if is_revenue_anchor
+                        else (
+                            "actual YTD revenue + forecast remaining revenue"
+                            if is_ytd_seed
+                            else (
+                                "seed revenue × (1 + revenue growth / 100)"
+                                if observation.forecast_year == 1
+                                else "prior revenue × (1 + revenue growth / 100)"
+                            )
+                        )
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+            "operating_margin": self._audit_value(
+                observation.operating_margin,
+                effective_margin_components,
+                (
+                    "blended YTD actual and remaining forecast operating margin"
+                    if is_ytd_seed
+                    else self._driver_method(margin_source, "operating margin", stage)
+                ),
+                derived=is_ytd_seed,
+            ),
+            "operating_income": self._audit_value(
+                observation.operating_income,
+                (*revenue_components, *effective_margin_components),
+                self._stage_method(
+                    (
+                        "actual YTD operating income + remaining revenue × operating "
+                        "margin / 100"
+                        if is_ytd_seed
+                        else "revenue × operating margin / 100"
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+            "tax_rate": self._audit_value(
+                observation.tax_rate,
+                effective_tax_components,
+                (
+                    "blended YTD actual and remaining forecast tax rate"
+                    if is_ytd_seed
+                    else self._driver_method(tax_source, "tax rate", stage)
+                ),
+                derived=is_ytd_seed,
+            ),
+            "nopat": self._audit_value(
+                observation.nopat,
+                (
+                    *revenue_components,
+                    *effective_margin_components,
+                    *effective_tax_components,
+                ),
+                self._stage_method(
+                    (
+                        "actual YTD NOPAT + remaining-period NOPAT"
+                        if is_ytd_seed
+                        else "operating income × (1 - tax rate / 100)"
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+            "depreciation_and_amortization": self._audit_value(
+                observation.depreciation_and_amortization,
+                (
+                    *revenue_components,
+                    *ytd_depreciation_components,
+                    *ytd_projection_components,
+                    *depreciation_components,
+                ),
+                self._stage_method(
+                    (
+                        "actual YTD D&A + remaining revenue × depreciation-to-revenue / 100"
+                        if is_ytd_seed
+                        else "revenue × depreciation-to-revenue / 100"
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+            "capital_expenditures": self._audit_value(
+                observation.capital_expenditures,
+                (
+                    *revenue_components,
+                    *ytd_capex_components,
+                    *ytd_projection_components,
+                    *capex_components,
+                ),
+                self._stage_method(
+                    (
+                        "actual YTD capex + remaining revenue × capex-to-revenue / 100"
+                        if is_ytd_seed
+                        else "revenue × capex-to-revenue / 100"
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+            "change_in_operating_working_capital": self._audit_value(
+                observation.change_in_operating_working_capital,
+                (
+                    *revenue_components,
+                    *ytd_projection_components,
+                    *working_capital_components,
+                    ("prior_working_capital", prior_working_capital),
+                ),
+                self._stage_method(
+                    "operating working capital - prior operating working capital",
+                    stage,
+                ),
+                derived=True,
+            ),
+            "fcff": self._audit_value(
+                observation.fcff,
+                (
+                    *revenue_components,
+                    *effective_margin_components,
+                    *effective_tax_components,
+                    *ytd_projection_components,
+                    *depreciation_components,
+                    *capex_components,
+                    *working_capital_components,
+                    ("prior_working_capital", prior_working_capital),
+                ),
+                self._stage_method(
+                    (
+                        "NOPAT + depreciation and amortization - capital expenditures - "
+                        "change in operating working capital"
+                    ),
+                    stage,
+                ),
+                derived=True,
+            ),
+        }
+
+    @classmethod
+    def _driver_source(
+        cls,
+        forecast: FcffForecast,
+        driver: FcffForecastDriver,
+        index: int,
+    ) -> str:
+        path = forecast.assumption_source_paths.get(driver)
+        source = path[index] if path is not None and index < len(path) else None
+        if source is None:
+            source = forecast.assumption_sources.get(driver)
+        return source.value if source is not None else "unknown/legacy"
+
+    @classmethod
+    def _driver_components(
+        cls,
+        forecast: FcffForecast,
+        driver: FcffForecastDriver,
+        index: int,
+    ) -> tuple[tuple[str, str], ...]:
+        components = []
+        for source_index in range(index + 1):
+            source = cls._driver_source(forecast, driver, source_index)
+            label = driver.value
+            if source_index < index:
+                label += f"_fy{forecast.observations[source_index].fiscal_year}"
+            components.append((label, source))
+        return tuple(components)
+
+    @classmethod
+    def _revenue_components(
+        cls, forecast: FcffForecast, index: int
+    ) -> tuple[tuple[str, str], ...]:
+        components: list[tuple[str, str]] = [("seed", "historical_seed")]
+        if forecast.ytd_anchor is not None:
+            components.append(("ytd_actual", "reported"))
+        for source_index in range(index + 1):
+            fiscal_year = forecast.observations[source_index].fiscal_year
+            if fiscal_year in forecast.parameters.revenue_anchors:
+                label = (
+                    "revenue_anchor"
+                    if source_index == index
+                    else f"prior_revenue_anchor_fy{fiscal_year}"
+                )
+                components.append(
+                    (
+                        label,
+                        cls._revenue_anchor_source(forecast, fiscal_year),
+                    )
+                )
+            else:
+                label = (
+                    "revenue_growth"
+                    if source_index == index
+                    else f"prior_revenue_growth_fy{fiscal_year}"
+                )
+                components.append(
+                    (
+                        label,
+                        cls._driver_source(
+                            forecast, FcffForecastDriver.REVENUE_GROWTH, source_index
+                        ),
+                    )
+                )
+        return tuple(components)
+
+    @staticmethod
+    def _revenue_anchor_source(forecast: FcffForecast, fiscal_year: int) -> str:
+        source = forecast.parameters.revenue_anchor_sources.get(
+            fiscal_year, ForecastAssumptionSource.EXPLICIT
+        )
+        return source.value
+
+    @staticmethod
+    def _driver_method(source: str, driver_label: str, stage: str | None = None) -> str:
+        method_by_source = {
+            ForecastAssumptionSource.EXPLICIT.value: "explicit forecast driver",
+            ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value: (
+                "management guidance forecast driver"
+            ),
+            ForecastAssumptionSource.TRAILING_AVERAGE.value: (
+                "trailing historical average forecast driver"
+            ),
+            ForecastAssumptionSource.ADAPTIVE_MULTISTAGE.value: (
+                "adaptive multistage forecast driver path"
+            ),
+        }
+        stage_label = f" ({stage})" if stage else ""
+        return (
+            f"{driver_label}{stage_label}: "
+            f"{method_by_source.get(source, 'legacy/unknown driver')}"
+        )
+
+    @staticmethod
+    def _stage_method(method: str, stage: str | None) -> str:
+        if stage in {"high_growth", "transition", "stable"}:
+            return f"{stage} stage: {method}"
+        return method
+
+    @classmethod
+    def _audit_value(
+        cls,
+        value: Decimal,
+        sources: tuple[tuple[str, str], ...],
+        method: str,
+        *,
+        derived: bool = False,
+    ) -> ForecastValue:
+        unique_sources = tuple(dict.fromkeys(sources))
+        source = (
+            "derived["
+            + ",".join(f"{name}={source}" for name, source in unique_sources)
+            + "]"
+            if derived
+            else " + ".join(source for _, source in unique_sources)
+        )
+        return ForecastValue(
+            value=value,
+            source=source,
+            method=method,
+            confidence=cls._confidence(tuple(source for _, source in unique_sources)),
+        )
+
+    @staticmethod
+    def _confidence(sources: tuple[str, ...]) -> str:
+        if not sources or any(source == "unknown/legacy" for source in sources):
+            return "low"
+        if all(
+            FcffForecastService._source_confidence(source) == "high"
+            for source in sources
+        ):
+            return "high"
+        if all(
+            FcffForecastService._source_confidence(source) in {"high", "medium"}
+            for source in sources
+        ):
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _source_confidence(source: str) -> str:
+        if source in {
+            ForecastAssumptionSource.EXPLICIT.value,
+            ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+            "historical_seed",
+            "reported",
+            "prior_forecast",
+        }:
+            return "high"
+        if source in {
+            ForecastAssumptionSource.TRAILING_AVERAGE.value,
+            ForecastAssumptionSource.ADAPTIVE_MULTISTAGE.value,
+        }:
+            return "medium"
+        return "low"
 
     @classmethod
     def _incomplete_quarter_warnings(

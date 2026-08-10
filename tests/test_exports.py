@@ -57,6 +57,7 @@ from edgarito.services.forecasting import (
     FcffForecastParameters,
     FcffForecastYtdAnchor,
     ForecastAssumptionSource,
+    ForecastValue,
     SimplifiedFcfForecast,
     SimplifiedFcfForecastObservation,
     SimplifiedFcfForecastParameters,
@@ -300,6 +301,14 @@ def test_metrics_and_forecasts_copy_formulas_inputs_and_adaptive_plan():
                 change_in_operating_working_capital=Decimal(".5"),
                 fcff=Decimal("15.25"),
                 unit="USD",
+                cell_audits={
+                    "fcff": ForecastValue(
+                        value=Decimal("15.25"),
+                        source="explicit",
+                        method="FCFF arithmetic",
+                        confidence="high",
+                    )
+                },
             )
         ],
     )
@@ -309,6 +318,9 @@ def test_metrics_and_forecasts_copy_formulas_inputs_and_adaptive_plan():
     assert fcff_export.forecast.ytd_anchor.actual_revenue == Decimal("50")
     assert fcff_export.forecast.assumption_sources[0][1] == (
         ForecastAssumptionSource.TRAILING_AVERAGE
+    )
+    assert fcff_export.forecast.observations[0].cell_audits["fcff"].value == (
+        Decimal("15.25")
     )
 
 

@@ -129,7 +129,11 @@ class ValuationExcelRenderer:
             summary_worksheet = workbook.add_worksheet(self._SUMMARY)
             input_refs = self._write_inputs(workbook, forecast, result, formats)
             forecast_refs = self._write_forecast(
-                workbook, forecast, input_refs, formats
+                workbook,
+                forecast,
+                input_refs,
+                formats,
+                audit_by_year=result.forecast_cell_audits,
             )
             dcf_refs = self._write_dcf(
                 workbook,
@@ -1542,6 +1546,8 @@ class ValuationExcelRenderer:
         forecast: FcffForecast,
         input_refs: dict[str, Any],
         formats: dict[str, Any],
+        *,
+        audit_by_year: dict[int, dict[str, Any]],
     ) -> dict[str, Any]:
         worksheet = workbook.add_worksheet(self._FORECAST)
         worksheet.freeze_panes(3, 2)
@@ -1866,9 +1872,76 @@ class ValuationExcelRenderer:
                     formats["formula"],
                 )
 
+        self._write_forecast_audit_section(
+            worksheet,
+            forecast,
+            formats,
+            audit_by_year=audit_by_year,
+            start_row=max(rows.values()) + 3,
+        )
         worksheet.set_column("A:A", 36)
         worksheet.set_column(1, 1 + len(forecast.observations), 18)
         return {"rows": rows, "columns": forecast_columns}
+
+    @staticmethod
+    def _write_forecast_audit_section(
+        worksheet,
+        forecast: FcffForecast,
+        formats: dict[str, Any],
+        *,
+        audit_by_year: dict[int, dict[str, Any]],
+        start_row: int,
+    ) -> None:
+        worksheet.write(start_row, 0, "Economic FCFF Cell Audit", formats["title"])
+        headers = (
+            "Fiscal year",
+            "Cell",
+            "Value",
+            "Unit",
+            "Source",
+            "Method",
+            "Confidence",
+        )
+        for column, header in enumerate(headers):
+            worksheet.write(start_row + 1, column, header, formats["header"])
+
+        row = start_row + 2
+        for observation in forecast.observations:
+            for cell, audit in audit_by_year.get(observation.fiscal_year, {}).items():
+                worksheet.write(
+                    row, 0, f"FY{observation.fiscal_year}E", formats["label"]
+                )
+                worksheet.write(row, 1, cell, formats["label"])
+                worksheet.write_number(
+                    row,
+                    2,
+                    ValuationExcelRenderer._number(audit.value),
+                    formats["number"],
+                )
+                worksheet.write(
+                    row,
+                    3,
+                    "%"
+                    if cell
+                    in {
+                        "revenue_growth",
+                        "operating_margin",
+                        "tax_rate",
+                    }
+                    else forecast.unit,
+                    formats["source"],
+                )
+                worksheet.write(row, 4, audit.source, formats["source"])
+                worksheet.write(row, 5, audit.method, formats["source"])
+                worksheet.write(row, 6, audit.confidence, formats["source"])
+                row += 1
+        if row == start_row + 2:
+            worksheet.write(
+                row,
+                0,
+                "No economic FCFF cell audit metadata available",
+                formats["source"],
+            )
 
     @staticmethod
     def _invalid_driver_formula(name: str, reference: str) -> str:

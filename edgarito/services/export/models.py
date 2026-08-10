@@ -36,6 +36,7 @@ from edgarito.services.forecasting.models import (
     FcffForecastDriver,
     ForecastAssumptionSource,
     ForecastSeedType,
+    ForecastValue,
 )
 from edgarito.services.metrics.models import FinancialMetric
 from edgarito.services.valuation.models import (
@@ -247,6 +248,7 @@ class FcffForecastParametersExport(BaseModel):
     capex_to_revenue: tuple[Decimal, ...] | None = None
     operating_working_capital_to_revenue: tuple[Decimal, ...] | None = None
     revenue_anchors: tuple[tuple[int, Decimal], ...] = ()
+    revenue_anchor_sources: tuple[tuple[int, ForecastAssumptionSource], ...] = ()
     assumption_source_overrides: tuple[
         tuple[FcffForecastDriver, ForecastAssumptionSource], ...
     ] = ()
@@ -274,6 +276,7 @@ class FcffForecastObservationExport(BaseModel):
     change_in_operating_working_capital: Decimal
     fcff: Decimal
     unit: str
+    cell_audits: dict[str, ForecastValue] = Field(default_factory=dict)
     formula: str
 
 

@@ -248,6 +248,7 @@ def _fcff_parameters(source):
         capex_to_revenue=source.capex_to_revenue,
         operating_working_capital_to_revenue=source.operating_working_capital_to_revenue,
         revenue_anchors=tuple(sorted(source.revenue_anchors.items())),
+        revenue_anchor_sources=tuple(sorted(source.revenue_anchor_sources.items())),
         assumption_source_overrides=tuple(
             sorted(
                 source.assumption_source_overrides.items(),
