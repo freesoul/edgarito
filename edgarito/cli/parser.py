@@ -13,6 +13,7 @@ from edgarito.services.valuation import (
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    PeerEvidenceGroup,
     ValuationInput,
 )
 from edgarito.settings import (
@@ -585,6 +586,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--minimum-score",
         type=int,
         help="Minimum comparability score from 0 to 100",
+    )
+    comparables.add_argument(
+        "--minimum-economic-similarity",
+        type=int,
+        help=(
+            "Minimum observable economic similarity for candidates without an "
+            "industry/product-economics match (0 to 100)"
+        ),
+    )
+    comparables.add_argument(
+        "--evidence-group",
+        choices=[item.value for item in PeerEvidenceGroup],
+        help="Override the target's deterministic peer evidence group",
     )
     sector_requirement = comparables.add_mutually_exclusive_group()
     sector_requirement.add_argument(

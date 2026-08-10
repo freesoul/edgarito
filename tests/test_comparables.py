@@ -44,6 +44,7 @@ from edgarito.services.valuation import (
     MultipleResolver,
     MultipleStatus,
     PeerDiscoveryResult,
+    PeerEvidenceGroup,
     PeerMultipleSummary,
     PeerSelectionParameters,
     PeerUniverseSelector,
@@ -59,6 +60,8 @@ def _profile(
     industry: str = "Software Infrastructure",
     archetype: BusinessArchetype = BusinessArchetype.GENERAL_OPERATING,
     revenue: str = "1000",
+    lifecycle: CompanyLifecycle = CompanyLifecycle.MATURE,
+    evidence_group: str | None = None,
 ) -> ValuationProfile:
     return ValuationProfile(
         provider="test",
@@ -72,8 +75,9 @@ def _profile(
         reporting_currency="USD",
         latest_revenue=Decimal(revenue),
         business_archetype=archetype,
-        lifecycle=CompanyLifecycle.MATURE,
+        lifecycle=lifecycle,
         cyclicality=Cyclicality.LOW,
+        evidence_group=evidence_group,
     )
 
 
@@ -104,6 +108,249 @@ def test_peer_selector_ranks_economic_fit_and_excludes_sector_mismatch():
         item for item in universe.candidates if item.ticker == "BANK"
     )
     assert "Sector differs from the target" in bank_assessment.exclusions
+
+
+def test_peer_selector_requires_product_or_observable_economic_evidence_gate():
+    target = _profile("TARGET")
+    unrelated = _profile("UNRELATED", industry="Telecommunications Equipment")
+
+    universe = PeerUniverseSelector().select(
+        target,
+        [unrelated],
+        PeerSelectionParameters(
+            max_peers=1,
+            preferred_minimum=1,
+            minimum_score=0,
+            require_same_sector=False,
+        ),
+    )
+
+    assert universe.selected_tickers == ()
+    assessment = universe.candidates[0]
+    assert assessment.economic_similarity is None
+    assert not assessment.economic_gate_passed
+    assert any(
+        "No industry/product-economics match" in exclusion
+        for exclusion in assessment.exclusions
+    )
+
+
+def test_peer_selector_allows_unmatched_industry_when_similarity_clears_threshold():
+    target_profile = _profile(
+        "TARGET",
+        industry="Software Infrastructure",
+        evidence_group=PeerEvidenceGroup.GENERAL_OPERATING.value,
+    )
+    candidate_profile = _profile(
+        "CANDIDATE",
+        industry="Telecommunications Equipment",
+        evidence_group=PeerEvidenceGroup.GENERAL_OPERATING.value,
+    )
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    candidate = target.model_copy(
+        update={
+            "ticker": "CANDIDATE",
+            "company_id": "CANDIDATE",
+            "company_name": "Candidate Inc.",
+        }
+    )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        [candidate_profile],
+        PeerSelectionParameters(
+            max_peers=1,
+            preferred_minimum=1,
+            minimum_score=0,
+            minimum_economic_similarity=55,
+        ),
+        target_multiples=target,
+        candidate_multiples={"CANDIDATE": candidate},
+    )
+
+    assert universe.selected_tickers == ("CANDIDATE",)
+    assessment = universe.candidates[0]
+    assert assessment.economic_similarity == 100
+    assert assessment.economic_gate_passed
+    assert any("configured 55/100 gate" in reason for reason in assessment.reasons)
+
+
+def test_peer_selector_does_not_score_sparse_economic_observations():
+    target_profile = _profile(
+        "TARGET",
+        evidence_group=PeerEvidenceGroup.GENERAL_OPERATING.value,
+    )
+    candidate_profile = _profile(
+        "CANDIDATE",
+        industry="Telecommunications Equipment",
+        evidence_group=PeerEvidenceGroup.GENERAL_OPERATING.value,
+    )
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    candidate = target.model_copy(
+        update={
+            "ticker": "CANDIDATE",
+            "company_id": "CANDIDATE",
+            "company_name": "Candidate Inc.",
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "free_cash_flow": None,
+                    "gross_debt": None,
+                    "capital_expenditures": None,
+                    "revenue_growth": None,
+                    "return_on_invested_capital": None,
+                }
+            ),
+        }
+    )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        [candidate_profile],
+        PeerSelectionParameters(
+            max_peers=1,
+            preferred_minimum=1,
+            minimum_score=0,
+            minimum_economic_similarity=0,
+        ),
+        target_multiples=target,
+        candidate_multiples={"CANDIDATE": candidate},
+    )
+
+    assert universe.selected_tickers == ()
+    assessment = universe.candidates[0]
+    assert assessment.economic_similarity is None
+    assert not assessment.economic_gate_passed
+    assert any(
+        "observable economic similarity is unavailable" in item
+        for item in assessment.exclusions
+    )
+
+
+def test_size_relaxation_cannot_waive_the_economic_gate():
+    target_profile = _profile(
+        "TARGET",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Automobile Manufacturers",
+    )
+    unrelated_profile = _profile(
+        "UNRELATED",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Telecommunications Equipment",
+    )
+    target = LtmMultiplesService().compute(_financials(), _market_data())
+    candidate = target.model_copy(
+        update={
+            "ticker": "UNRELATED",
+            "company_id": "UNRELATED",
+            "company_name": "Unrelated Inc.",
+            "market_capitalization": target.market_capitalization * Decimal("0.10"),
+            "fundamentals": target.fundamentals.model_copy(
+                update={
+                    "revenue_growth": Decimal("-30"),
+                    "operating_income": Decimal("4"),
+                    "ebitda": Decimal("5"),
+                    "free_cash_flow": Decimal("2"),
+                    "gross_debt": Decimal("400"),
+                    "capital_expenditures": Decimal("200"),
+                    "return_on_invested_capital": Decimal("2"),
+                }
+            ),
+        }
+    )
+
+    universe = PeerUniverseSelector().select(
+        target_profile,
+        [unrelated_profile],
+        PeerSelectionParameters(
+            max_peers=1,
+            preferred_minimum=1,
+            minimum_score=0,
+        ),
+        target_multiples=target,
+        candidate_multiples={"UNRELATED": candidate},
+    )
+
+    assert universe.selected_tickers == ()
+    assessment = universe.candidates[0]
+    assert not assessment.economic_gate_passed
+    assert any(
+        "No industry/product-economics match" in item for item in assessment.exclusions
+    )
+    assert any(
+        "Market capitalization is outside" in item for item in assessment.exclusions
+    )
+
+
+@pytest.mark.parametrize(
+    ("industry", "lifecycle", "expected"),
+    (
+        (
+            "Automobile Manufacturers",
+            CompanyLifecycle.MATURE,
+            PeerEvidenceGroup.AUTO_OEM.value,
+        ),
+        (
+            "Automobile Manufacturers",
+            CompanyLifecycle.GROWTH,
+            PeerEvidenceGroup.EV_GROWTH.value,
+        ),
+        (
+            "Electric Vehicle Manufacturers",
+            CompanyLifecycle.UNPROFITABLE_GROWTH,
+            PeerEvidenceGroup.EV_GROWTH.value,
+        ),
+        (
+            "Energy Storage Systems",
+            CompanyLifecycle.GROWTH,
+            PeerEvidenceGroup.ENERGY_STORAGE.value,
+        ),
+        (
+            "Software Infrastructure",
+            CompanyLifecycle.MATURE,
+            PeerEvidenceGroup.TECHNOLOGY_PLATFORM.value,
+        ),
+    ),
+)
+def test_peer_evidence_groups_are_deterministic(industry, lifecycle, expected):
+    profile = _profile("TARGET", industry=industry, lifecycle=lifecycle)
+
+    assert PeerUniverseSelector._evidence_group(profile) == expected
+
+
+def test_peer_selector_keeps_unrelated_evidence_groups_contextual_only():
+    target = _profile(
+        "TARGET",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Auto Manufacturers",
+        lifecycle=CompanyLifecycle.MATURE,
+    )
+    primary = _profile(
+        "PRIMARY",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Auto Manufacturers",
+        lifecycle=CompanyLifecycle.MATURE,
+    )
+    ev_growth = _profile(
+        "EVGROWTH",
+        sector=Sector.CONSUMER_DISCRETIONARY,
+        industry="Auto Manufacturers",
+        lifecycle=CompanyLifecycle.GROWTH,
+    )
+
+    universe = PeerUniverseSelector().select(
+        target,
+        [ev_growth, primary],
+        PeerSelectionParameters(max_peers=2, preferred_minimum=2, minimum_score=0),
+    )
+
+    assert universe.evidence_group == PeerEvidenceGroup.AUTO_OEM.value
+    assert universe.selected_tickers == ("PRIMARY",)
+    contextual = next(item for item in universe.candidates if item.ticker == "EVGROWTH")
+    assert contextual.evidence_group == PeerEvidenceGroup.EV_GROWTH.value
+    assert contextual.contextual
+    assert not contextual.selected
+    assert any("contextual/non-selected" in reason for reason in contextual.exclusions)
+    assert any("primary evidence group" in warning for warning in universe.warnings)
 
 
 def test_peer_selector_excludes_target_cross_listings_at_issuer_level():

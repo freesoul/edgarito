@@ -100,6 +100,7 @@
     "max_peers": 8,
     "preferred_minimum": 5,
     "minimum_score": 50,
+    "minimum_economic_similarity": 55,
     "require_same_sector": false
   },
   "relative_valuation": {

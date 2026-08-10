@@ -33,6 +33,7 @@ from edgarito.services.valuation.models import (
     TerminalValueMethod,
     ValuationInput,
     ValuationProfile,
+    _normalize_peer_evidence_group,
 )
 
 DEFAULT_VALUATION_PROFILE_PATH = Path("configs/valuation/default.json")
@@ -476,7 +477,9 @@ class ComparableSelectionConfiguration(_ProfileModel):
     max_peers: int = Field(default=8, ge=1, le=50)
     preferred_minimum: int = Field(default=5, ge=1, le=50)
     minimum_score: int = Field(default=50, ge=0, le=100)
+    minimum_economic_similarity: int = Field(default=55, ge=0, le=100)
     require_same_sector: bool = True
+    evidence_group: Optional[str] = None
 
     @field_validator("peers", mode="before")
     @classmethod
@@ -495,6 +498,11 @@ class ComparableSelectionConfiguration(_ProfileModel):
                 seen.add(symbol)
                 peers.append(symbol)
         return tuple(peers)
+
+    @field_validator("evidence_group", mode="before")
+    @classmethod
+    def normalize_evidence_group(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_peer_evidence_group(value)
 
     @model_validator(mode="after")
     def validate_peer_counts(self) -> "ComparableSelectionConfiguration":

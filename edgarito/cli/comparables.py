@@ -142,19 +142,33 @@ async def _build_comparable_report(
             if getattr(args, "minimum_score", None) is not None
             else configuration.minimum_score
         ),
+        minimum_economic_similarity=(
+            getattr(args, "minimum_economic_similarity", None)
+            if getattr(args, "minimum_economic_similarity", None) is not None
+            else configuration.minimum_economic_similarity
+        ),
         require_same_sector=(
             getattr(args, "require_same_sector", None)
             if getattr(args, "require_same_sector", None) is not None
             else configuration.require_same_sector
         ),
+        evidence_group=(
+            getattr(args, "evidence_group", None)
+            if getattr(args, "evidence_group", None) is not None
+            else configuration.evidence_group
+        ),
     )
+    target_evidence_group = parameters.evidence_group
     discovery = (
         PeerDiscoveryResult(
             provider="valuation-profile",
             target_ticker=target_symbol,
             candidate_tickers=tuple(peer_symbols),
             methodology=(
-                f"Saved comparable peers from valuation profile {valuation_profile.name!r}"
+                f"Saved candidate symbols from valuation profile "
+                f"{valuation_profile.name!r}; discovery inputs only, subject to "
+                "the industry/product-economics or observable-similarity gate and "
+                "primary evidence-group selection"
             ),
             confidence="high",
         )
@@ -204,7 +218,10 @@ async def _build_comparable_report(
                 discovery = PeerDiscoveryResult(
                     provider="yahoo-screener",
                     target_ticker=target_symbol,
-                    methodology="Provider-backed discovery failed",
+                    methodology=(
+                        "Provider-backed discovery support failed; no provider "
+                        "relationship is comparable evidence"
+                    ),
                     confidence="low",
                     warnings=(f"Automatic peer discovery failed: {exc}",),
                 )
@@ -250,6 +267,7 @@ async def _build_comparable_report(
                 ValuationProfileOverrides(
                     sector=selection_configuration.sector,
                     industry=selection_configuration.industry,
+                    evidence_group=target_evidence_group,
                 )
                 if symbol == target_symbol
                 else None

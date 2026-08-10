@@ -204,6 +204,7 @@ class ValuationProfileBuilder:
             lifecycle=lifecycle,
             cyclicality=cyclicality,
             economic_traits=traits,
+            evidence_group=overrides.evidence_group,
             annual_fiscal_years=years,
             revenue_growth_rates=growth_rates,
             positive_fcf_periods=sum(value > 0 for value in fcf_by_year.values()),
