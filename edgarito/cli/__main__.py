@@ -2077,6 +2077,12 @@ async def _management_guidance_overlay(
                 ),
                 "cache_hits": discovery.cache_hits,
                 "cache_misses": discovery.cache_misses,
+                "filings_inspected": discovery.filings_inspected,
+                "documents_inspected": discovery.documents_inspected,
+                "extracted_guidance_records": discovery.extracted_guidance_records,
+                "rejected_records": (
+                    discovery.rejected_records + len(overlay.rejected_reasons)
+                ),
             }
         )
     finally:

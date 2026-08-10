@@ -161,7 +161,9 @@ class ManagementGuidance(BaseModel):
 
     @model_validator(mode="after")
     def validate_values(self) -> "ManagementGuidance":
-        values = [value for value in (self.point, self.low, self.high) if value is not None]
+        values = [
+            value for value in (self.point, self.low, self.high) if value is not None
+        ]
         if not values:
             raise ValueError("Numerical guidance requires point or range values")
         if any(not value.is_finite() for value in values):
@@ -235,3 +237,7 @@ class GuidanceOverlayResult(BaseModel):
     warnings: tuple[str, ...] = ()
     cache_hits: int = 0
     cache_misses: int = 0
+    filings_inspected: int = 0
+    documents_inspected: int = 0
+    extracted_guidance_records: int = 0
+    rejected_records: int = 0

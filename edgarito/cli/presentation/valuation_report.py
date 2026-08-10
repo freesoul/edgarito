@@ -59,11 +59,14 @@ class ValuationReportConsolePresenter:
                     include_warnings=False,
                 )
             )
-        if management_guidance is not None and management_guidance.applications:
+        if management_guidance is not None and (
+            management_guidance.applications
+            or management_guidance.evidence_only
+            or management_guidance.rejected_reasons
+            or verbose
+        ):
             blocks.append(
-                self._render_management_guidance(
-                    management_guidance, verbose=verbose
-                )
+                self._render_management_guidance(management_guidance, verbose=verbose)
             )
         if peer_report is not None:
             blocks.append(
@@ -125,6 +128,16 @@ class ValuationReportConsolePresenter:
         cls, result: GuidanceOverlayResult, *, verbose: bool
     ) -> str:
         lines = [*section("MANAGEMENT GUIDANCE")]
+        lines.extend(
+            (
+                f"Filings inspected: {result.filings_inspected}",
+                f"Documents inspected: {result.documents_inspected}",
+                f"Extracted guidance records: {result.extracted_guidance_records}",
+                f"Applied: {len(result.applications)}",
+                f"Evidence only: {len(result.evidence_only)}",
+                f"Rejected: {result.rejected_records}",
+            )
+        )
         for application in result.applications:
             record = application.guidance
             lines.append(
@@ -141,20 +154,21 @@ class ValuationReportConsolePresenter:
             *(item.guidance for item in result.applications),
             *result.evidence_only,
         ]
-        first = source_records[0]
-        source_labels = tuple(
-            dict.fromkeys(
-                f"SEC {record.filing_form} filed {record.filing_date.isoformat()}"
-                for record in source_records
+        if source_records:
+            first = source_records[0]
+            source_labels = tuple(
+                dict.fromkeys(
+                    f"SEC {record.filing_form} filed {record.filing_date.isoformat()}"
+                    for record in source_records
+                )
             )
-        )
-        lines.extend(
-            (
-                "",
-                f"Source: {', '.join(source_labels)}",
-                f"Extraction: OpenAI / {first.extraction_model}",
+            lines.extend(
+                (
+                    "",
+                    f"Source: {', '.join(source_labels)}",
+                    f"Extraction: OpenAI / {first.extraction_model}",
+                )
             )
-        )
         if verbose:
             lines.append(
                 f"Extraction cache: {result.cache_hits} hit(s), "

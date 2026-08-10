@@ -25,6 +25,10 @@ class GuidanceDiscoveryResult:
     warnings: tuple[str, ...] = ()
     cache_hits: int = 0
     cache_misses: int = 0
+    filings_inspected: int = 0
+    documents_inspected: int = 0
+    extracted_guidance_records: int = 0
+    rejected_records: int = 0
 
 
 class ManagementGuidanceService:
@@ -73,14 +77,16 @@ class ManagementGuidanceService:
             make_cache=True,
         )
         filings = self._selector.select_filings(filings, limit=self.max_filings)
+        filings_inspected = len(filings)
         records: list[ManagementGuidance] = []
         rejected: list[GuidanceRejection] = []
         warnings: list[str] = []
         hits = 0
         misses = 0
-        processed_documents = 0
+        documents_inspected = 0
+        extracted_guidance_records = 0
         for filing in filings:
-            if processed_documents >= self.max_documents:
+            if documents_inspected >= self.max_documents:
                 break
             populated = await self._edgar.get_filing_documents(
                 filing, use_cache=not refresh_sec, make_cache=True
@@ -96,9 +102,9 @@ class ManagementGuidanceService:
                     "HTML/text guidance exhibit; PDF extraction is unsupported"
                 )
             for document in documents:
-                if processed_documents >= self.max_documents:
+                if documents_inspected >= self.max_documents:
                     break
-                processed_documents += 1
+                documents_inspected += 1
                 clean_text = clean_document_text(document.content)
                 if not clean_text:
                     continue
@@ -123,6 +129,7 @@ class ManagementGuidanceService:
                 misses += int(not cache_hit)
                 records.extend(entry.accepted)
                 rejected.extend(entry.rejected)
+                extracted_guidance_records += len(entry.accepted)
         resolved = ManagementGuidanceResolver().resolve(records, as_of=as_of)
         warnings.extend(resolved.warnings)
         return GuidanceDiscoveryResult(
@@ -131,4 +138,8 @@ class ManagementGuidanceService:
             warnings=tuple(dict.fromkeys(warnings)),
             cache_hits=hits,
             cache_misses=misses,
+            filings_inspected=filings_inspected,
+            documents_inspected=documents_inspected,
+            extracted_guidance_records=extracted_guidance_records,
+            rejected_records=len(rejected),
         )
