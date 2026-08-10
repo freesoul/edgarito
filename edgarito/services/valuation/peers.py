@@ -11,6 +11,7 @@ from edgarito.services.valuation.models import (
     CompanyTradingMultiples,
     PeerCandidateAssessment,
     PeerDiscoveryResult,
+    PeerEvidenceGroup,
     PeerSelectionParameters,
     PeerUniverse,
     ValuationProfile,
@@ -20,6 +21,7 @@ from edgarito.services.valuation.models import (
 class PeerUniverseSelector:
     """Rank an explicit candidate universe by economic comparability."""
 
+    _MIN_ECONOMIC_SIMILARITY_DIMENSIONS = 3
     _SPECIALIZED_ARCHETYPES = {
         BusinessArchetype.FINANCIAL_INTERMEDIARY,
         BusinessArchetype.ASSET_MANAGER,
@@ -28,6 +30,39 @@ class PeerUniverseSelector:
         BusinessArchetype.PROJECT_PIPELINE,
         BusinessArchetype.HOLDING_COMPANY,
         BusinessArchetype.CONGLOMERATE,
+    }
+    _GENERAL_EVIDENCE_GROUP = PeerEvidenceGroup.GENERAL_OPERATING.value
+    _GROWTH_LIFECYCLES = {
+        "pre_revenue",
+        "unprofitable_growth",
+        "growth",
+    }
+    _ENERGY_STORAGE = re.compile(
+        r"\b(energy storage|batter(?:y|ies)|battery storage|lithium[- ]ion|"
+        r"fuel cell)\b"
+    )
+    _ELECTRIC_VEHICLE = re.compile(
+        r"\b(electric vehicles?|electric cars?|evs?|ev manufacturers?|"
+        r"electric mobility)\b"
+    )
+    _AUTO_OEM = re.compile(
+        r"\b(auto(?:mobile)? manufacturers?|automotive manufacturers?|"
+        r"motor vehicles?|vehicle manufacturers?|car manufacturers?|"
+        r"automobiles?|"
+        r"auto makers?|automotive)\b"
+    )
+    _TECHNOLOGY_PLATFORM = re.compile(
+        r"\b(software|cloud computing|cloud services?|technology platform|"
+        r"technology services?|information technology services?|"
+        r"internet services?|online platforms?|application software|"
+        r"infrastructure software)\b"
+    )
+    _STRUCTURAL_PRODUCT_TRAITS = {
+        "regulated_capital",
+        "lease_intensive",
+        "backlog_driven",
+        "book_value_unreliable",
+        "financing_subsidiary",
     }
 
     def select(
@@ -44,6 +79,9 @@ class PeerUniverseSelector:
             raise ValueError("Peer selection requires a target ticker")
 
         candidate_multiples = candidate_multiples or {}
+        target_evidence_group = self._evidence_group(
+            target, override=parameters.evidence_group
+        )
         candidates_by_ticker = {
             candidate.ticker or candidate.company_id: candidate
             for candidate in candidates
@@ -55,6 +93,7 @@ class PeerUniverseSelector:
                 parameters,
                 target_multiples,
                 candidate_multiples.get(candidate.ticker or candidate.company_id),
+                target_evidence_group=target_evidence_group,
             )
             for candidate in candidates
         ]
@@ -88,18 +127,37 @@ class PeerUniverseSelector:
                     seen_entities[entity_key] = item.ticker
             deduplicated.append(item)
         assessments = deduplicated
-        eligible = [
-            item
-            for item in assessments
-            if not item.exclusions and item.score >= parameters.minimum_score
-        ]
+
+        # A candidate can satisfy the score and economic gate while still being
+        # outside the target's evidence group. Keep that candidate visible for
+        # audit/context, but never let it enter the primary peer pool.
+        contextual_count = 0
+        for index, item in enumerate(assessments):
+            if (
+                not item.exclusions
+                and item.score >= parameters.minimum_score
+                and item.evidence_group != target_evidence_group
+            ):
+                contextual_count += 1
+                assessments[index] = item.model_copy(
+                    update={
+                        "contextual": True,
+                        "exclusions": [
+                            *item.exclusions,
+                            "Evidence group "
+                            f"{item.evidence_group!r} differs from target primary "
+                            f"group {target_evidence_group!r}; retained as "
+                            "contextual/non-selected evidence",
+                        ],
+                    }
+                )
+
+        eligible = self._eligible(assessments, parameters, target_evidence_group)
         if len(eligible) < parameters.preferred_minimum:
             relaxed = []
             for item in assessments:
                 candidate = candidates_by_ticker.get(item.ticker)
-                market_cap_only = len(item.exclusions) == 1 and item.exclusions[
-                    0
-                ].startswith("Market capitalization is outside")
+                market_cap_only = self._market_cap_only(item)
                 same_industry = (
                     candidate is not None
                     and self._industry_score(target.industry, candidate.industry) == 30
@@ -109,25 +167,27 @@ class PeerUniverseSelector:
                     and target.sector is not None
                     and candidate.sector == target.sector
                 )
-                if market_cap_only and same_industry and same_sector:
+                if (
+                    market_cap_only
+                    and item.economic_gate_passed
+                    and item.evidence_group == target_evidence_group
+                ):
+                    fallback_reason = (
+                        "Exact-industry fallback retained despite market-cap "
+                        "difference because strict selection produced too few peers"
+                        if same_industry and same_sector
+                        else "Evidence-gated fallback retained despite market-cap "
+                        "difference because strict selection produced too few peers"
+                    )
                     item = item.model_copy(
                         update={
-                            "reasons": [
-                                *item.reasons,
-                                "Exact-industry fallback retained despite market-cap "
-                                "difference because strict selection produced too few "
-                                "peers",
-                            ],
+                            "reasons": [*item.reasons, fallback_reason],
                             "exclusions": [],
                         }
                     )
                 relaxed.append(item)
             assessments = relaxed
-            eligible = [
-                item
-                for item in assessments
-                if not item.exclusions and item.score >= parameters.minimum_score
-            ]
+            eligible = self._eligible(assessments, parameters, target_evidence_group)
         selected_assessments = eligible[: parameters.max_peers]
         selected_tickers = tuple(item.ticker for item in selected_assessments)
         selected = set(selected_tickers)
@@ -144,6 +204,20 @@ class PeerUniverseSelector:
             )
         if not candidates:
             warnings.append("No provider-supported candidate universe was available")
+        if contextual_count:
+            warnings.append(
+                f"{contextual_count} otherwise eligible candidate(s) fell outside "
+                f"the target primary evidence group {target_evidence_group!r}; "
+                "they were retained as contextual evidence and excluded from peer "
+                "aggregation"
+            )
+        elif candidates and not any(
+            item.evidence_group == target_evidence_group for item in assessments
+        ):
+            warnings.append(
+                f"No candidates matched the target primary evidence group "
+                f"{target_evidence_group!r}"
+            )
         if discovery is not None:
             warnings.extend(discovery.warnings)
         economic_scores = [
@@ -170,6 +244,7 @@ class PeerUniverseSelector:
             target_ticker=target.ticker,
             target_company_id=target.company_id,
             parameters=parameters,
+            evidence_group=target_evidence_group,
             candidates=assessments,
             selected_tickers=selected_tickers,
             discovery_source=(
@@ -178,11 +253,36 @@ class PeerUniverseSelector:
             discovery_methodology=(
                 discovery.methodology
                 if discovery is not None
-                else "Explicit --peer candidate symbols override automatic discovery"
+                else "Explicit --peer candidate symbols are discovery inputs only; "
+                "industry/product-economics or observable-similarity gating and "
+                "primary evidence-group selection remain required"
             ),
             discovery_confidence=confidence,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _market_cap_only(item: PeerCandidateAssessment) -> bool:
+        return len(item.exclusions) == 1 and item.exclusions[0].startswith(
+            "Market capitalization is outside"
+        )
+
+    @staticmethod
+    def _eligible(
+        assessments: list[PeerCandidateAssessment],
+        parameters: PeerSelectionParameters,
+        target_evidence_group: str,
+    ) -> list[PeerCandidateAssessment]:
+        return [
+            item
+            for item in assessments
+            if (
+                not item.exclusions
+                and item.economic_gate_passed
+                and item.evidence_group == target_evidence_group
+                and item.score >= parameters.minimum_score
+            )
+        ]
 
     def _assess(
         self,
@@ -191,10 +291,14 @@ class PeerUniverseSelector:
         parameters: PeerSelectionParameters,
         target_multiples: CompanyTradingMultiples | None = None,
         candidate_multiples: CompanyTradingMultiples | None = None,
+        *,
+        target_evidence_group: str | None = None,
     ) -> PeerCandidateAssessment:
         ticker = candidate.ticker or candidate.company_id
         exclusions = []
         reasons = []
+        target_evidence_group = target_evidence_group or self._evidence_group(target)
+        candidate_evidence_group = self._evidence_group(candidate)
         if self._same_company(target, candidate):
             exclusions.append(
                 "Candidate is the target company/issuer (cross-listing or ADR excluded)"
@@ -211,6 +315,48 @@ class PeerUniverseSelector:
             and candidate.business_archetype != target.business_archetype
         ):
             exclusions.append("Specialized business economics differ from the target")
+
+        industry_score = self._industry_score(target.industry, candidate.industry)
+        industry_match = industry_score == 30
+        product_economics_match = self._product_economics_match(
+            target,
+            candidate,
+            target_evidence_group,
+            candidate_evidence_group,
+            industry_match=industry_match,
+        )
+        economic_score = self._economic_similarity(
+            target,
+            candidate,
+            target_multiples,
+            candidate_multiples,
+        )
+        economic_match = (
+            economic_score is not None
+            and economic_score >= parameters.minimum_economic_similarity
+        )
+        economic_gate_passed = (
+            industry_match or product_economics_match or economic_match
+        )
+        if not economic_gate_passed:
+            if economic_score is None:
+                detail = "observable economic similarity is unavailable"
+            else:
+                detail = (
+                    "observable economic similarity is "
+                    f"{economic_score}/100, below the configured "
+                    f"{parameters.minimum_economic_similarity}/100 threshold"
+                )
+            exclusions.append("No industry/product-economics match and " + detail)
+        if industry_match:
+            reasons.append("Same normalized industry")
+        elif product_economics_match:
+            reasons.append("Product-economics match")
+        if economic_match:
+            reasons.append(
+                "Observable economic similarity meets the configured "
+                f"{parameters.minimum_economic_similarity}/100 gate"
+            )
 
         market_cap_score, market_cap_reason, market_cap_exclusion = (
             self._market_cap_comparability(
@@ -229,11 +375,8 @@ class PeerUniverseSelector:
             score += 20
             reasons.append("Same sector")
 
-        industry_score = self._industry_score(target.industry, candidate.industry)
         score += industry_score
-        if industry_score == 30:
-            reasons.append("Same normalized industry")
-        elif industry_score:
+        if industry_score and not industry_match:
             reasons.append("Industry descriptions substantially overlap")
 
         if candidate.business_archetype == target.business_archetype:
@@ -279,12 +422,6 @@ class PeerUniverseSelector:
         ):
             reasons.append("Different reporting currency; multiples need FX alignment")
 
-        economic_score = self._economic_similarity(
-            target,
-            candidate,
-            target_multiples,
-            candidate_multiples,
-        )
         if economic_score is not None:
             score = round(score * 0.75 + economic_score * 0.25)
             reasons.append(
@@ -297,9 +434,91 @@ class PeerUniverseSelector:
             company_id=candidate.company_id,
             company_name=candidate.company_name,
             score=max(0, min(100, score)),
+            evidence_group=candidate_evidence_group,
+            economic_gate_passed=economic_gate_passed,
             economic_similarity=economic_score,
             reasons=reasons,
             exclusions=exclusions,
+        )
+
+    @classmethod
+    def _evidence_group(
+        cls,
+        profile: ValuationProfile,
+        *,
+        override: str | None = None,
+    ) -> str:
+        explicit = override or profile.evidence_group
+        if explicit:
+            return (
+                explicit.value
+                if isinstance(explicit, PeerEvidenceGroup)
+                else str(explicit).strip().casefold()
+            )
+
+        industry = (profile.industry or "").casefold()
+        lifecycle = getattr(profile.lifecycle, "value", profile.lifecycle)
+        archetype = profile.business_archetype
+        traits = {getattr(trait, "value", trait) for trait in profile.economic_traits}
+
+        if cls._ENERGY_STORAGE.search(industry):
+            return PeerEvidenceGroup.ENERGY_STORAGE.value
+        if cls._ELECTRIC_VEHICLE.search(industry):
+            return (
+                PeerEvidenceGroup.EV_GROWTH.value
+                if lifecycle in cls._GROWTH_LIFECYCLES
+                else PeerEvidenceGroup.AUTO_OEM.value
+            )
+        if cls._AUTO_OEM.search(industry):
+            if lifecycle in cls._GROWTH_LIFECYCLES:
+                return PeerEvidenceGroup.EV_GROWTH.value
+            return PeerEvidenceGroup.AUTO_OEM.value
+        if (
+            archetype == BusinessArchetype.GENERAL_OPERATING
+            and cls._TECHNOLOGY_PLATFORM.search(industry)
+        ):
+            return PeerEvidenceGroup.TECHNOLOGY_PLATFORM.value
+
+        if archetype in cls._SPECIALIZED_ARCHETYPES:
+            return archetype.value
+        if "regulated_capital" in traits:
+            return "regulated_operating"
+        if "lease_intensive" in traits:
+            return "lease_intensive_operating"
+        if "backlog_driven" in traits:
+            return "backlog_driven_operating"
+        return cls._GENERAL_EVIDENCE_GROUP
+
+    @classmethod
+    def _product_economics_match(
+        cls,
+        target: ValuationProfile,
+        candidate: ValuationProfile,
+        target_group: str,
+        candidate_group: str,
+        *,
+        industry_match: bool,
+    ) -> bool:
+        if industry_match:
+            return True
+        if (
+            target_group == candidate_group
+            and target_group != cls._GENERAL_EVIDENCE_GROUP
+        ):
+            return True
+        if (
+            target.business_archetype == candidate.business_archetype
+            and target.business_archetype in cls._SPECIALIZED_ARCHETYPES
+        ):
+            return True
+        shared_traits = {
+            getattr(trait, "value", trait)
+            for trait in target.economic_traits & candidate.economic_traits
+        }
+        return bool(
+            shared_traits & cls._STRUCTURAL_PRODUCT_TRAITS
+            and target.lifecycle == candidate.lifecycle
+            and target.business_archetype == candidate.business_archetype
         )
 
     @staticmethod
@@ -338,9 +557,9 @@ class PeerUniverseSelector:
         )
         return ("low", "medium", "high")[selected_level]
 
-    @staticmethod
+    @classmethod
     def _economic_similarity(
-        target_profile, candidate_profile, target, candidate
+        cls, target_profile, candidate_profile, target, candidate
     ) -> int | None:
         if target is None or candidate is None:
             return None
@@ -405,7 +624,7 @@ class PeerUniverseSelector:
                     Decimal(1) - abs(target_value - candidate_value) / scale,
                 )
             )
-        if not similarities:
+        if len(similarities) < cls._MIN_ECONOMIC_SIMILARITY_DIMENSIONS:
             return None
         average = sum(similarities, Decimal(0)) / Decimal(len(similarities))
         return round(float(average * Decimal(100)))

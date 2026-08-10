@@ -67,7 +67,7 @@ def _result(provider, target, candidates, confidence="high"):
     )
 
 
-def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_path):
+def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path):
     payload = json.loads(
         (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
     )
@@ -95,8 +95,9 @@ def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_pa
         MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
     )
 
-    assert primary.provider == "massive-related"
+    assert primary.provider == "massive-related+yahoo-screener"
     assert primary.candidate_tickers == (
+        "ORCL",
         "MSFT",
         "GOOGL",
         "AMZN",
@@ -105,9 +106,11 @@ def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_pa
         "ADBE",
     )
     assert "AAPL" not in primary.candidate_tickers
-    assert yahoo.calls == 0
+    assert yahoo.calls == 1
     assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
     assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
+    assert "not comparable evidence" in primary.methodology
+    assert any("discovery hints only" in warning for warning in primary.warnings)
 
     sparse_massive = _StaticProvider(
         _result("massive-related", "AAPL", ("MSFT", "GOOGL"), "low")
@@ -127,12 +130,12 @@ def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_pa
 
     assert fallback.provider == "massive-related+yahoo-screener"
     assert fallback.candidate_tickers == (
-        "MSFT",
         "GOOGL",
         "AMZN",
         "META",
         "NVDA",
         "ADBE",
+        "MSFT",
     )
     assert any("too few" in warning for warning in fallback.warnings)
     assert fallback_yahoo.calls == 1
@@ -186,15 +189,19 @@ def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_p
     assert result.candidate_tickers == (
         "STLAM.MI",
         "MONC.MI",
+        "TINY.MI",
         "P911.DE",
         "CFR.SW",
         "RMS.PA",
     )
     assert "RACE.MI" not in result.candidate_tickers
-    assert "TINY.MI" not in result.candidate_tickers
+    assert "TINY.MI" in result.candidate_tickers
     assert massive.calls == 0
     assert len(screen_calls) == 1
     assert "Non-U.S. issuer bypassed" in result.methodology
+    assert "discovery support" in result.methodology
+    assert any("not comparable evidence" in warning for warning in result.warnings)
+    assert any("fell outside" in warning for warning in result.warnings)
 
 
 def test_yahoo_discovery_excludes_target_cross_listing_by_issuer_identity(tmp_path):

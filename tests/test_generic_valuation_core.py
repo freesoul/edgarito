@@ -627,10 +627,12 @@ def test_provider_peer_discovery_is_deterministic_and_manual_override_remains_ex
         first.candidate_tickers
         == second.candidate_tickers
         == (
+            "FAR",
             "NEAR2",
             "NEAR1",
         )
     )
+    assert any("fell outside" in warning for warning in first.warnings)
     auto = PeerUniverseSelector().select(
         _valuation_profile("TARGET"),
         [_valuation_profile(symbol) for symbol in first.candidate_tickers],
@@ -659,7 +661,7 @@ def test_provider_peer_discovery_is_deterministic_and_manual_override_remains_ex
         ),
     )
 
-    assert auto.selected_tickers == ("NEAR1", "NEAR2")
+    assert auto.selected_tickers == ("FAR", "NEAR1", "NEAR2")
     assert auto.discovery_source == "yahoo-screener"
     assert manual.selected_tickers == ("HAND",)
     assert manual.discovery_source == "manual override"

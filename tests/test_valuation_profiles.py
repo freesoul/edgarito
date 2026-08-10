@@ -12,16 +12,23 @@ from edgarito.cli.__main__ import (
     main,
 )
 from edgarito.config import ForecastMethod, ValuationProfileLoader
-from edgarito.config.valuation import CashFlowTiming, ForecastValuationProfile
+from edgarito.config.valuation import (
+    CashFlowTiming,
+    ComparableSelectionConfiguration,
+    ForecastValuationProfile,
+)
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.services.valuation import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
+    PeerEvidenceGroup,
+    PeerSelectionParameters,
     RelativeValuationBasis,
     ValuationInput,
     ValuationProfile,
+    ValuationProfileOverrides,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -51,6 +58,7 @@ def test_default_profile_fixture_is_valid_and_complete():
     assert profile.model_selection.sector is None
     assert profile.model_selection.industry is None
     assert profile.comparables.max_peers == 8
+    assert profile.comparables.minimum_economic_similarity == 55
     assert profile.relative_valuation.enabled
     assert profile.relative_valuation.multiple_resolution.use_fundamental_anchor
     assert (
@@ -260,6 +268,41 @@ def test_profile_validation_rejects_unknown_or_invalid_parameters(tmp_path):
         )
 
 
+def test_evidence_group_overrides_are_limited_to_supported_values():
+    assert (
+        ValuationProfileOverrides(evidence_group=" AUTO_OEM ").evidence_group
+        == PeerEvidenceGroup.AUTO_OEM.value
+    )
+    assert (
+        PeerSelectionParameters(evidence_group=" EV_GROWTH ").evidence_group
+        == PeerEvidenceGroup.EV_GROWTH.value
+    )
+    assert (
+        ComparableSelectionConfiguration(evidence_group="ENERGY_STORAGE").evidence_group
+        == PeerEvidenceGroup.ENERGY_STORAGE.value
+    )
+
+    for factory in (
+        ValuationProfileOverrides,
+        PeerSelectionParameters,
+        ComparableSelectionConfiguration,
+    ):
+        with pytest.raises(ValueError, match="evidence_group"):
+            factory(evidence_group="unsupported_group")
+
+
+def test_comparables_cli_limits_evidence_group_to_supported_values():
+    args = build_parser().parse_args(
+        ["comparables", "--ticker", "AAPL", "--evidence-group", "auto_oem"]
+    )
+    assert args.evidence_group == PeerEvidenceGroup.AUTO_OEM.value
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["comparables", "--ticker", "AAPL", "--evidence-group", "unsupported"]
+        )
+
+
 def test_configured_rates_are_exposed_as_ready_selector_inputs():
     profile = ForecastValuationProfile.model_validate(
         {
@@ -355,6 +398,8 @@ def test_profile_cli_options_are_unset_until_profile_resolution():
     assert forecast.historical_window is None
     assert comparables.profile is None
     assert comparables.max_peers is None
+    assert comparables.minimum_economic_similarity is None
+    assert comparables.evidence_group is None
     assert comparables.require_same_sector is None
     assert valuation.scenarios
     assert valuation.sensitivity

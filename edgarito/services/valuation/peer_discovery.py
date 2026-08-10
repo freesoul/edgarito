@@ -22,7 +22,7 @@ class PeerCandidateDiscoveryProvider(Protocol):
 
 
 class MassiveRelatedCompaniesPeerDiscoveryProvider:
-    """Discover U.S. candidates from Massive's related-companies endpoint."""
+    """Return U.S. discovery hints from Massive's related-companies endpoint."""
 
     _BASE_URL = "https://api.massive.com/v1/related-companies"
     _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9._^-]*$")
@@ -86,10 +86,7 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
                 company_id=candidate,
                 ticker=candidate,
             )
-            if (
-                not self._SYMBOL.fullmatch(candidate)
-                or candidate_keys & seen
-            ):
+            if not self._SYMBOL.fullmatch(candidate) or candidate_keys & seen:
                 continue
             seen.update(candidate_keys)
             candidates.append(candidate)
@@ -102,9 +99,15 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
             if len(candidates) >= 5
             else "low"
         )
-        warnings = ()
+        warnings = (
+            "Massive related-company results reflect news co-mentions and return "
+            "relationships; they are discovery hints only, not comparable evidence. "
+            "Industry/product-economics and observable-similarity gates remain "
+            "required",
+        )
         if confidence == "low":
             warnings = (
+                *warnings,
                 f"Massive returned only {len(candidates)} unique related tickers",
             )
         return PeerDiscoveryResult(
@@ -112,8 +115,10 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
             target_ticker=symbol,
             candidate_tickers=tuple(candidates),
             methodology=(
-                "Massive Related Tickers candidates derived from news co-mentions "
-                "and returns relationships; downstream economic scoring remains required"
+                "Massive Related Tickers supplies discovery hints derived from news "
+                "co-mentions and return relationships; it is not comparable evidence. "
+                "Downstream industry/product-economics or observable-similarity "
+                "gating and primary evidence-group selection are required"
             ),
             confidence=confidence,
             warnings=warnings,
@@ -282,7 +287,11 @@ class YahooScreenerPeerDiscoveryProvider:
         query = self._regional_query(base_query, target_region)
         scope = region_group or target_region or "global"
         cache_path = f"providers/yahoo/screeners/{field}-{cache_key}-{scope}.json"
-        warnings = []
+        warnings = [
+            "Yahoo peer-group/sector screening supplies discovery support only, not "
+            "comparable evidence; downstream industry/product-economics or "
+            "observable-similarity gates remain required"
+        ]
         try:
             response = await self._response(query, cache_path)
         except Exception as exc:
@@ -320,7 +329,7 @@ class YahooScreenerPeerDiscoveryProvider:
                 quotes = [*quotes, *global_quotes]
                 warnings.append(
                     f"Yahoo {scope} screen returned fewer than {minimum_regional} "
-                    "quotes; economically comparable global candidates were added"
+                    "quotes; global discovery candidates were added for coverage"
                 )
             except Exception as exc:
                 warnings.append(f"Yahoo global fallback screen failed: {exc}")
@@ -334,6 +343,7 @@ class YahooScreenerPeerDiscoveryProvider:
             identifiers=target.identifiers,
         )
         ranked_candidates = []
+        out_of_band_market_caps = 0
         primary_names = {
             str(quote.get("symbol") or "").strip().upper(): quote.get("longName")
             for quote in quotes
@@ -359,9 +369,9 @@ class YahooScreenerPeerDiscoveryProvider:
                 and candidate_cap > 0
             ):
                 cap_ratio = candidate_cap / float(target_cap)
-                if cap_ratio < 0.25 or cap_ratio > 4:
-                    continue
                 distance = abs(math.log10(cap_ratio))
+                if cap_ratio < 0.25 or cap_ratio > 4:
+                    out_of_band_market_caps += 1
             else:
                 distance = math.inf
             exchange = str(quote.get("exchange") or "").upper()
@@ -413,16 +423,23 @@ class YahooScreenerPeerDiscoveryProvider:
             warnings.append(
                 f"Only {len(symbols)} provider-supported sector candidates were discovered",
             )
+        if out_of_band_market_caps:
+            warnings.append(
+                f"{out_of_band_market_caps} Yahoo discovery candidate(s) fell outside "
+                "the default 0.25x-4x market-cap proximity band; they were retained "
+                "for the selector's configured market-cap range and relaxation policy"
+            )
         return PeerDiscoveryResult(
             provider="yahoo-screener",
             target_ticker=target.symbol,
             candidate_tickers=symbols,
             methodology=(
                 f"Yahoo {scope} {field.replace('_', ' ')} {filter_value!r} equity "
-                "screener with global fallback when regional coverage is sparse; "
-                "candidates ordered deterministically "
-                "by geography, 0.25x-4x market-cap proximity and ticker before "
-                "economic scoring"
+                "screen used as discovery support with global fallback when regional "
+                "coverage is sparse; candidates ordered deterministically "
+                "by geography, market-cap log-distance and ticker before "
+                "downstream economic/evidence-group gating; Massive network hints "
+                "are not comparable evidence"
             ),
             confidence=confidence,
             warnings=tuple(warnings),
@@ -456,7 +473,7 @@ class YahooScreenerPeerDiscoveryProvider:
         return PeerDiscoveryResult(
             provider="yahoo-screener",
             target_ticker=symbol,
-            methodology="Provider-backed sector screening unavailable",
+            methodology="Provider-backed sector/peer-group discovery support unavailable",
             confidence="low",
             warnings=(warning,),
         )
@@ -539,7 +556,7 @@ class YahooScreenerPeerDiscoveryProvider:
 
 
 class MarketAwarePeerDiscoveryProvider:
-    """Use Massive for U.S. issuers and Yahoo for fallback/global discovery."""
+    """Combine provider discovery hints without treating either as peer evidence."""
 
     def __init__(
         self,
@@ -570,7 +587,7 @@ class MarketAwarePeerDiscoveryProvider:
         massive = None
         if self._massive is None:
             fallback_warnings.append(
-                "Massive API key is not configured; Yahoo fallback used"
+                "Massive API key is not configured; Yahoo peer-group discovery used"
             )
         else:
             try:
@@ -579,15 +596,21 @@ class MarketAwarePeerDiscoveryProvider:
                 )
             except (RuntimeError, ValueError) as exc:
                 fallback_warnings.append(f"Massive discovery failed: {exc}")
-            if massive is not None and len(massive.candidate_tickers) >= min(
-                self._minimum_candidates, max_candidates
-            ):
-                return massive
             if massive is not None:
                 fallback_warnings.extend(massive.warnings)
-                fallback_warnings.append(
-                    "Massive returned too few candidates; Yahoo fallback supplemented it"
-                )
+                if len(massive.candidate_tickers) < min(
+                    self._minimum_candidates, max_candidates
+                ):
+                    fallback_warnings.append(
+                        "Massive returned too few candidates; Yahoo peer-group "
+                        "discovery supplemented its hints"
+                    )
+                else:
+                    fallback_warnings.append(
+                        "Massive supplied enough network hints for coverage, but Yahoo "
+                        "peer-group discovery was still retrieved for supplementation; "
+                        "Massive hints are not comparable evidence"
+                    )
 
         try:
             yahoo = await self._yahoo.discover(target, max_candidates=max_candidates)
@@ -596,13 +619,13 @@ class MarketAwarePeerDiscoveryProvider:
             yahoo = PeerDiscoveryResult(
                 provider="yahoo-screener",
                 target_ticker=target.symbol,
-                methodology="Yahoo fallback unavailable",
+                methodology="Yahoo fallback discovery support unavailable",
                 confidence="low",
             )
         combined = self._deduplicate(
             (
-                *(massive.candidate_tickers if massive is not None else ()),
                 *yahoo.candidate_tickers,
+                *(massive.candidate_tickers if massive is not None else ()),
             ),
             target,
             max_candidates,
@@ -620,9 +643,13 @@ class MarketAwarePeerDiscoveryProvider:
             target_ticker=target.symbol,
             candidate_tickers=combined,
             methodology=(
-                "U.S. discovery uses Massive Related Tickers first, with Yahoo "
-                "industry/region screening on failure or sparse coverage; candidates "
-                "are de-duplicated before downstream valuation-comparability ranking"
+                "U.S. discovery combines Yahoo peer-group/region screening with "
+                "Massive Related Tickers network hints; Yahoo candidates are retained "
+                "before non-evidentiary network hints, both sources are discovery "
+                "support only (Massive hints are not comparable evidence), and "
+                "candidates are de-duplicated before required "
+                "industry/product-economics or observable-similarity and primary "
+                "evidence-group gating"
             ),
             confidence=confidence,
             warnings=tuple(dict.fromkeys(fallback_warnings)),

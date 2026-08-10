@@ -83,6 +83,33 @@ class EconomicTrait(str, Enum):
     PRICING_POWER = "pricing_power"
 
 
+class PeerEvidenceGroup(str, Enum):
+    """Deterministic product-economics buckets used for peer evidence."""
+
+    AUTO_OEM = "auto_oem"
+    EV_GROWTH = "ev_growth"
+    ENERGY_STORAGE = "energy_storage"
+    TECHNOLOGY_PLATFORM = "technology_platform"
+    GENERAL_OPERATING = "general_operating"
+
+
+def _normalize_peer_evidence_group(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = (
+        (value.value if isinstance(value, PeerEvidenceGroup) else str(value))
+        .strip()
+        .casefold()
+    )
+    if not normalized:
+        raise ValueError("evidence_group cannot be blank")
+    try:
+        return PeerEvidenceGroup(normalized).value
+    except ValueError as exc:
+        supported = ", ".join(item.value for item in PeerEvidenceGroup)
+        raise ValueError(f"evidence_group must be one of: {supported}") from exc
+
+
 class ForecastProfile(str, Enum):
     STANDARD = "standard"
     REVENUE_TO_MARGIN = "revenue_to_margin"
@@ -215,8 +242,14 @@ class ValuationProfileOverrides(BaseModel):
     lifecycle: Optional[CompanyLifecycle] = None
     cyclicality: Optional[Cyclicality] = None
     economic_traits: set[EconomicTrait] = Field(default_factory=set)
+    evidence_group: Optional[str] = None
     available_inputs: set[ValuationInput] = Field(default_factory=set)
     peer_count: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("evidence_group", mode="before")
+    @classmethod
+    def normalize_evidence_group(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_peer_evidence_group(value)
 
 
 class ValuationProfile(BaseModel):
@@ -241,6 +274,7 @@ class ValuationProfile(BaseModel):
     lifecycle: CompanyLifecycle
     cyclicality: Cyclicality
     economic_traits: set[EconomicTrait] = Field(default_factory=set)
+    evidence_group: Optional[str] = None
 
     annual_fiscal_years: tuple[int, ...] = ()
     revenue_growth_rates: tuple[Decimal, ...] = ()
@@ -250,6 +284,11 @@ class ValuationProfile(BaseModel):
     available_inputs: set[ValuationInput] = Field(default_factory=set)
     peer_count: Optional[int] = None
     inference_notes: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence_group", mode="before")
+    @classmethod
+    def normalize_evidence_group(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_peer_evidence_group(value)
 
 
 class ModelSuitability(BaseModel):
@@ -283,9 +322,16 @@ class PeerSelectionParameters(BaseModel):
     max_peers: int = Field(default=8, ge=1, le=50)
     preferred_minimum: int = Field(default=5, ge=1, le=50)
     minimum_score: int = Field(default=50, ge=0, le=100)
+    minimum_economic_similarity: int = Field(default=55, ge=0, le=100)
     require_same_sector: bool = True
     minimum_market_cap_ratio: Decimal = Field(default=Decimal("0.25"), gt=0, le=1)
     maximum_market_cap_ratio: Decimal = Field(default=Decimal(4), ge=1)
+    evidence_group: Optional[str] = None
+
+    @field_validator("evidence_group", mode="before")
+    @classmethod
+    def normalize_evidence_group(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_peer_evidence_group(value)
 
 
 class PeerCandidateAssessment(BaseModel):
@@ -293,7 +339,10 @@ class PeerCandidateAssessment(BaseModel):
     company_id: str
     company_name: str
     score: int = Field(ge=0, le=100)
+    evidence_group: str = PeerEvidenceGroup.GENERAL_OPERATING.value
     selected: bool = False
+    contextual: bool = False
+    economic_gate_passed: bool = False
     economic_similarity: Optional[int] = Field(default=None, ge=0, le=100)
     reasons: list[str] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
@@ -303,6 +352,7 @@ class PeerUniverse(BaseModel):
     target_ticker: str
     target_company_id: str
     parameters: PeerSelectionParameters
+    evidence_group: str = PeerEvidenceGroup.GENERAL_OPERATING.value
     candidates: list[PeerCandidateAssessment] = Field(default_factory=list)
     selected_tickers: tuple[str, ...] = ()
     discovery_source: str = "manual override"
