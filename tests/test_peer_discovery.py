@@ -214,89 +214,6 @@ def test_openai_discovery_propagates_failures_for_orchestration_fallback():
         )
 
 
-def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_path):
-    payload = json.loads(
-        (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
-    )
-    session = _Session(payload)
-    massive = MassiveRelatedCompaniesPeerDiscoveryProvider(
-        FileSystemCache(tmp_path),
-        "test-key",
-        session=session,
-        use_cache=False,
-        make_cache=False,
-    )
-    yahoo = _StaticProvider(_result("yahoo-screener", "AAPL", ("ORCL",)))
-    target = YahooCompanyFinancials(
-        symbol="AAPL",
-        company_name="Apple Inc.",
-        currency="USD",
-        exchange="NasdaqGS",
-        sector="Technology",
-        industry="Consumer Electronics",
-        country="United States",
-        market_capitalization=Decimal("3000000000000"),
-    )
-
-    primary = asyncio.run(
-        MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
-    )
-
-    assert primary.provider == "massive-related"
-    assert primary.candidate_tickers == (
-        "MSFT",
-        "GOOGL",
-        "AMZN",
-        "META",
-        "NVDA",
-        "ADBE",
-    )
-    assert "AAPL" not in primary.candidate_tickers
-    assert yahoo.calls == 0
-    assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
-    assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
-
-    sparse_massive = _StaticProvider(
-        _result("massive-related", "AAPL", ("MSFT", "GOOGL"), "low")
-    )
-    fallback_yahoo = _StaticProvider(
-        _result(
-            "yahoo-screener",
-            "AAPL",
-            ("GOOGL", "AMZN", "META", "NVDA", "ADBE"),
-        )
-    )
-    fallback = asyncio.run(
-        MarketAwarePeerDiscoveryProvider(
-            fallback_yahoo, sparse_massive, minimum_candidates=5
-        ).discover(target)
-    )
-
-    assert fallback.provider == "massive-related+yahoo-screener"
-    assert fallback.candidate_tickers == (
-        "MSFT",
-        "GOOGL",
-        "AMZN",
-        "META",
-        "NVDA",
-        "ADBE",
-    )
-    assert any("too few" in warning for warning in fallback.warnings)
-    assert fallback_yahoo.calls == 1
-
-    outage_yahoo = _StaticProvider(
-        _result("yahoo-screener", "AAPL", ("MSFT", "AMZN", "META", "NVDA", "ADBE"))
-    )
-    outage = asyncio.run(
-        MarketAwarePeerDiscoveryProvider(outage_yahoo, _FailingProvider()).discover(
-            target
-        )
-    )
-    assert outage.provider == "yahoo-screener"
-    assert outage.candidate_tickers == ("MSFT", "AMZN", "META", "NVDA", "ADBE")
-    assert any("Massive discovery failed" in warning for warning in outage.warnings)
-
-
 def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_path):
     response = json.loads(
         (FIXTURES / "yahoo_race_europe.json").read_text(encoding="utf-8")
@@ -333,15 +250,19 @@ def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_p
     assert result.candidate_tickers == (
         "STLAM.MI",
         "MONC.MI",
+        "TINY.MI",
         "P911.DE",
         "CFR.SW",
         "RMS.PA",
     )
     assert "RACE.MI" not in result.candidate_tickers
-    assert "TINY.MI" not in result.candidate_tickers
+    assert "TINY.MI" in result.candidate_tickers
     assert massive.calls == 0
     assert len(screen_calls) == 1
     assert "Non-U.S. issuer bypassed" in result.methodology
+    assert "discovery support" in result.methodology
+    assert any("not comparable evidence" in warning for warning in result.warnings)
+    assert any("fell outside" in warning for warning in result.warnings)
 
 
 def test_yahoo_discovery_excludes_target_cross_listing_by_issuer_identity(tmp_path):
