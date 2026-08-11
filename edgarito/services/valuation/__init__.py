@@ -38,6 +38,10 @@ from edgarito.services.valuation.decision_models import (
     ValuationAssessment,
     ValuationAssessmentBand,
 )
+from edgarito.services.valuation.depreciable_asset_life import (
+    DepreciableAssetLifeResolution,
+    DepreciableAssetLifeResolver,
+)
 from edgarito.services.valuation.discounting import (
     DiscountRateService,
     PresentValueService,
@@ -150,6 +154,8 @@ __all__ = [
     "DecisionScenarioPolicy",
     "DecisionValuationResult",
     "DecisionValuationService",
+    "DepreciableAssetLifeResolution",
+    "DepreciableAssetLifeResolver",
     "EconomicTrait",
     "EcbMarketDataCurrencyConverter",
     "ForecastProfile",
