@@ -85,6 +85,71 @@ def _result(provider, target, candidates, confidence="high"):
     )
 
 
+def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path):
+    payload = json.loads(
+        (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
+    )
+    session = _Session(payload)
+    massive = MassiveRelatedCompaniesPeerDiscoveryProvider(
+        FileSystemCache(tmp_path),
+        "test-key",
+        session=session,
+        use_cache=False,
+        make_cache=False,
+    )
+    yahoo = _StaticProvider(_result("yahoo-screener", "AAPL", ("ORCL",)))
+    target = _target()
+
+    primary = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
+    )
+
+    assert primary.provider == "massive-related+yahoo-screener"
+    assert primary.candidate_tickers == (
+        "ORCL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "ADBE",
+    )
+    assert "AAPL" not in primary.candidate_tickers
+    assert yahoo.calls == 1
+    assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
+    assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
+    assert "not comparable evidence" in primary.methodology
+    assert any("discovery hints only" in warning for warning in primary.warnings)
+
+    sparse_massive = _StaticProvider(
+        _result("massive-related", "AAPL", ("MSFT", "GOOGL"), "low")
+    )
+    fallback_yahoo = _StaticProvider(
+        _result("yahoo-screener", "AAPL", ("GOOGL", "AMZN", "META", "NVDA", "ADBE"))
+    )
+    fallback = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(
+            fallback_yahoo, sparse_massive, minimum_candidates=5
+        ).discover(target)
+    )
+    assert fallback.provider == "massive-related+yahoo-screener"
+    assert fallback.candidate_tickers == (
+        "GOOGL", "AMZN", "META", "NVDA", "ADBE", "MSFT"
+    )
+    assert any("too few" in warning for warning in fallback.warnings)
+    assert fallback_yahoo.calls == 1
+
+    outage_yahoo = _StaticProvider(
+        _result("yahoo-screener", "AAPL", ("MSFT", "AMZN", "META", "NVDA", "ADBE"))
+    )
+    outage = asyncio.run(
+        MarketAwarePeerDiscoveryProvider(outage_yahoo, _FailingProvider()).discover(target)
+    )
+    assert outage.provider == "yahoo-screener"
+    assert outage.candidate_tickers == ("MSFT", "AMZN", "META", "NVDA", "ADBE")
+    assert any("Massive discovery failed" in warning for warning in outage.warnings)
+
+
 def _target(symbol="AAPL", company_name="Apple Inc."):
     return YahooCompanyFinancials(
         symbol=symbol,
