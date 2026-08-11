@@ -4,21 +4,164 @@ import asyncio
 import json
 import math
 import re
-from typing import Callable, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
 import aiohttp
 import yfinance as yf
+from pydantic import BaseModel, ConfigDict, Field
 
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.valuation.issuer_identity import issuer_identity_keys
 from edgarito.services.valuation.models import PeerDiscoveryResult
 
+if TYPE_CHECKING:
+    from edgarito.services.openai import OpenAIClient
+
 
 class PeerCandidateDiscoveryProvider(Protocol):
     async def discover(
         self, target: YahooCompanyFinancials, *, max_candidates: int = 30
     ) -> PeerDiscoveryResult: ...
+
+
+class OpenAIPeerDiscoveryResponse(BaseModel):
+    """Structured ticker suggestions returned by the OpenAI peer finder."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tickers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Public equity ticker symbols for economically comparable companies"
+        ),
+    )
+
+
+class OpenAIPeerDiscoveryProvider:
+    """Use OpenAI to suggest a bounded, unverified peer ticker universe."""
+
+    _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9._^-]*$")
+    _INSTRUCTIONS = """
+Suggest publicly traded companies that are economically comparable to the target
+company. Prefer the same business model, industry, geography, and scale when that
+information is available. Return only equity ticker symbols, not company names,
+explanations, indices, funds, or analyst recommendations. Do not return the target
+company or another listing, ADR, or depositary receipt of the same issuer. Ticker
+suggestions are unverified candidates and will be validated against Yahoo Finance
+and ranked by deterministic downstream valuation logic.
+""".strip()
+
+    def __init__(self, openai_client: OpenAIClient):
+        self._openai = openai_client
+
+    async def discover(
+        self, target: YahooCompanyFinancials, *, max_candidates: int = 30
+    ) -> PeerDiscoveryResult:
+        symbol = target.symbol.strip().upper()
+        if not self._SYMBOL.fullmatch(symbol):
+            raise ValueError(f"Invalid OpenAI peer-discovery ticker: {target.symbol!r}")
+
+        response = await self._openai.extract_structured(
+            instructions=self._INSTRUCTIONS,
+            content=self._content(target, symbol, max_candidates),
+            response_model=OpenAIPeerDiscoveryResponse,
+        )
+
+        limit = max(0, max_candidates)
+        target_keys = set(
+            issuer_identity_keys(
+                company_id=target.symbol,
+                company_name=target.company_name,
+                ticker=target.symbol,
+                identifiers=target.identifiers,
+            )
+        )
+        seen_issuer_keys = set(target_keys)
+        candidates: list[str] = []
+        invalid_count = 0
+        duplicate_count = 0
+        target_listing_count = 0
+
+        for value in response.tickers:
+            if not isinstance(value, str):
+                invalid_count += 1
+                continue
+            candidate = value.strip().upper()
+            if not self._SYMBOL.fullmatch(candidate):
+                invalid_count += 1
+                continue
+            candidate_keys = issuer_identity_keys(
+                company_id=candidate,
+                ticker=candidate,
+            )
+            if candidate_keys & seen_issuer_keys:
+                if candidate_keys & target_keys:
+                    target_listing_count += 1
+                else:
+                    duplicate_count += 1
+                continue
+            if len(candidates) >= limit:
+                break
+            seen_issuer_keys.update(candidate_keys)
+            candidates.append(candidate)
+
+        confidence = (
+            "high"
+            if len(candidates) >= 8
+            else "medium"
+            if len(candidates) >= 5
+            else "low"
+        )
+        warnings = []
+        if invalid_count:
+            warnings.append(
+                f"OpenAI returned {invalid_count} invalid ticker symbol(s); "
+                "they were skipped"
+            )
+        if target_listing_count:
+            warnings.append(
+                "OpenAI returned "
+                f"{target_listing_count} target or cross-listing ticker(s); they were skipped"
+            )
+        if duplicate_count:
+            warnings.append(
+                f"OpenAI returned {duplicate_count} duplicate issuer ticker(s); "
+                "they were skipped"
+            )
+        if confidence == "low":
+            warnings.append(
+                f"OpenAI returned only {len(candidates)} unique peer ticker(s)"
+            )
+        return PeerDiscoveryResult(
+            provider="openai",
+            target_ticker=symbol,
+            candidate_tickers=tuple(candidates),
+            methodology=(
+                "OpenAI structured peer suggestions normalized and de-duplicated by "
+                "issuer identity; Yahoo validation and downstream economic scoring "
+                "remain required"
+            ),
+            confidence=confidence,
+            warnings=tuple(warnings),
+        )
+
+    @staticmethod
+    def _content(
+        target: YahooCompanyFinancials, symbol: str, max_candidates: int
+    ) -> str:
+        return "\n".join(
+            (
+                f"Target ticker: {symbol}",
+                f"Target company: {target.company_name.strip()}",
+                f"Sector: {(target.sector or 'unknown').strip()}",
+                f"Industry: {(target.industry or 'unknown').strip()}",
+                f"Country: {(target.country or 'unknown').strip()}",
+                f"Exchange: {(target.exchange or 'unknown').strip()}",
+                f"Currency: {target.currency.strip().upper()}",
+                f"Return at most {max_candidates} candidate ticker symbols.",
+            )
+        )
 
 
 class MassiveRelatedCompaniesPeerDiscoveryProvider:
@@ -86,10 +229,7 @@ class MassiveRelatedCompaniesPeerDiscoveryProvider:
                 company_id=candidate,
                 ticker=candidate,
             )
-            if (
-                not self._SYMBOL.fullmatch(candidate)
-                or candidate_keys & seen
-            ):
+            if not self._SYMBOL.fullmatch(candidate) or candidate_keys & seen:
                 continue
             seen.update(candidate_keys)
             candidates.append(candidate)
@@ -683,6 +823,8 @@ class MarketAwarePeerDiscoveryProvider:
 __all__ = [
     "MarketAwarePeerDiscoveryProvider",
     "MassiveRelatedCompaniesPeerDiscoveryProvider",
+    "OpenAIPeerDiscoveryProvider",
+    "OpenAIPeerDiscoveryResponse",
     "PeerCandidateDiscoveryProvider",
     "YahooScreenerPeerDiscoveryProvider",
 ]

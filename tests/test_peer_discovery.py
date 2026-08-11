@@ -3,11 +3,14 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.valuation import (
     MarketAwarePeerDiscoveryProvider,
     MassiveRelatedCompaniesPeerDiscoveryProvider,
+    OpenAIPeerDiscoveryProvider,
     PeerDiscoveryResult,
     YahooScreenerPeerDiscoveryProvider,
 )
@@ -57,6 +60,21 @@ class _FailingProvider:
         raise RuntimeError("fixture outage")
 
 
+class _OpenAIProvider:
+    def __init__(self, tickers):
+        self.tickers = tickers
+        self.calls = []
+
+    async def extract_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        return kwargs["response_model"](tickers=self.tickers)
+
+
+class _FailingOpenAIProvider:
+    async def extract_structured(self, **kwargs):
+        raise RuntimeError("OpenAI fixture outage")
+
+
 def _result(provider, target, candidates, confidence="high"):
     return PeerDiscoveryResult(
         provider=provider,
@@ -65,6 +83,70 @@ def _result(provider, target, candidates, confidence="high"):
         methodology=f"{provider} fixture",
         confidence=confidence,
     )
+
+
+def _target(symbol="AAPL", company_name="Apple Inc."):
+    return YahooCompanyFinancials(
+        symbol=symbol,
+        company_name=company_name,
+        currency="USD",
+        exchange="NasdaqGS",
+        sector="Technology",
+        industry="Consumer Electronics",
+        country="United States",
+        market_capitalization=Decimal("3000000000000"),
+    )
+
+
+def test_openai_discovery_uses_injected_structured_client():
+    openai = _OpenAIProvider([" msft ", "GOOGL", "AMZN", "META"])
+
+    result = asyncio.run(
+        OpenAIPeerDiscoveryProvider(openai).discover(_target(), max_candidates=3)
+    )
+
+    assert result.provider == "openai"
+    assert result.target_ticker == "AAPL"
+    assert result.candidate_tickers == ("MSFT", "GOOGL", "AMZN")
+    assert len(openai.calls) == 1
+    call = openai.calls[0]
+    assert call["response_model"].__name__ == "OpenAIPeerDiscoveryResponse"
+    assert "Target ticker: AAPL" in call["content"]
+    assert "Return at most 3" in call["content"]
+    assert "economically comparable" in call["instructions"]
+
+
+def test_openai_discovery_normalizes_and_excludes_issuer_listings():
+    openai = _OpenAIProvider(
+        [
+            " aapl ",
+            "AAPL.L",
+            "msft",
+            "MSFT.US",
+            "MSFT",
+            "BRK.B",
+            "brk-b",
+            "bad ticker",
+            "$META",
+            "META",
+        ]
+    )
+
+    result = asyncio.run(OpenAIPeerDiscoveryProvider(openai).discover(_target()))
+
+    assert result.candidate_tickers == ("MSFT", "BRK.B", "META")
+    assert "AAPL" not in result.candidate_tickers
+    assert "AAPL.L" not in result.candidate_tickers
+    assert any("invalid ticker" in warning for warning in result.warnings)
+    assert any("cross-listing" in warning for warning in result.warnings)
+    assert any("duplicate issuer" in warning for warning in result.warnings)
+
+
+def test_openai_discovery_propagates_failures_for_orchestration_fallback():
+    with pytest.raises(RuntimeError, match="OpenAI fixture outage"):
+        asyncio.run(
+            OpenAIPeerDiscoveryProvider(_FailingOpenAIProvider()).discover(_target())
+        )
 
 
 def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_path):
