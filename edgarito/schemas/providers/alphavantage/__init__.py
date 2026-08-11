@@ -5,6 +5,8 @@ from edgarito.schemas.providers.alphavantage.fundamentals import (
     CashFlowReport,
     CashFlowResponse,
     CompanyOverview,
+    EarningsEstimateReport,
+    EarningsEstimatesResponse,
     IncomeStatementReport,
     IncomeStatementResponse,
 )
@@ -27,6 +29,8 @@ __all__ = [
     "CashFlowReport",
     "CashFlowResponse",
     "CompanyOverview",
+    "EarningsEstimateReport",
+    "EarningsEstimatesResponse",
     "DailyPrice",
     "DailyTimeSeriesMetadata",
     "DailyTimeSeriesResponse",

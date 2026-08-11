@@ -1,10 +1,12 @@
 import datetime
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
 from edgarito.enums.edgar.period import FISCAL_PERIOD_PRIORITY, FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forward import ForwardRevenueEstimate
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -13,6 +15,7 @@ from edgarito.schemas.normalization.financials import (
 from edgarito.schemas.providers.yahoo.fundamentals import (
     YahooCompanyFinancials,
     YahooFinancialReport,
+    YahooRevenueEstimateResponse,
 )
 
 
@@ -257,6 +260,107 @@ class YahooFinancialsNormalizer:
             observations=sorted(observations.values(), key=self._sort_key),
         )
 
+    def normalize_revenue_estimates(
+        self,
+        response: YahooRevenueEstimateResponse,
+        *,
+        current_fiscal_year: int | None = None,
+        forecast_years: tuple[int, ...] = (),
+        fiscal_end_month: int | None = None,
+    ) -> tuple[ForwardRevenueEstimate, ...]:
+        """Normalize Yahoo ``0y``/``+1y`` annual estimate rows.
+
+        Yahoo's relative labels do not carry an issuer fiscal year.  Callers
+        therefore provide the current fiscal year (normally the first year in
+        the FCFF forecast).  Literal dates/years remain supported for test
+        doubles and future yfinance representations.
+        """
+
+        if not isinstance(response, YahooRevenueEstimateResponse):
+            response = YahooRevenueEstimateResponse.model_validate(response)
+        estimates = []
+        for row in response.rows:
+            fiscal_year, period_end, mapping_method = self._map_estimate_period(
+                row.period,
+                current_fiscal_year=current_fiscal_year,
+                forecast_years=forecast_years,
+                fiscal_end_month=fiscal_end_month,
+            )
+            if fiscal_year is None:
+                continue
+            estimates.append(
+                ForwardRevenueEstimate(
+                    fiscal_year=fiscal_year,
+                    average=row.average,
+                    low=row.low,
+                    high=row.high,
+                    analyst_count=row.analyst_count,
+                    source="yahoo",
+                    currency=row.currency,
+                    observed_at=response.retrieved_at,
+                    period_end=period_end,
+                    source_period=row.period,
+                    mapping_method=mapping_method,
+                )
+            )
+        return tuple(sorted(estimates, key=lambda item: item.fiscal_year))
+
+    def normalize_forward_revenue_estimates(
+        self,
+        response: YahooRevenueEstimateResponse,
+        *,
+        current_fiscal_year: int | None = None,
+        forecast_years: tuple[int, ...] = (),
+        fiscal_end_month: int | None = None,
+    ) -> tuple[ForwardRevenueEstimate, ...]:
+        """Descriptive alias for :meth:`normalize_revenue_estimates`."""
+
+        return self.normalize_revenue_estimates(
+            response,
+            current_fiscal_year=current_fiscal_year,
+            forecast_years=forecast_years,
+            fiscal_end_month=fiscal_end_month,
+        )
+
+    @staticmethod
+    def _map_estimate_period(
+        period: str,
+        *,
+        current_fiscal_year: int | None,
+        forecast_years: tuple[int, ...],
+        fiscal_end_month: int | None,
+    ) -> tuple[int | None, datetime.date | None, str | None]:
+        normalized = str(period).strip()
+        relative = re.fullmatch(r"([+-]?\d+)\s*[yY]", normalized)
+        if relative:
+            if current_fiscal_year is None:
+                return None, None, "relative_period_without_fiscal_anchor"
+            offset = int(relative.group(1))
+            fiscal_year = current_fiscal_year + offset
+            if forecast_years and fiscal_year not in forecast_years:
+                return None, None, "relative_period_outside_forecast"
+            return fiscal_year, None, "relative_annual_period"
+        try:
+            parsed = datetime.date.fromisoformat(normalized[:10])
+        except ValueError:
+            try:
+                fiscal_year = int(normalized)
+            except ValueError:
+                return None, None, "ambiguous_period_label"
+            if forecast_years and fiscal_year not in forecast_years:
+                return None, None, "provider_year_outside_forecast"
+            return fiscal_year, None, "explicit_provider_year"
+        fiscal_year = parsed.year
+        if forecast_years and fiscal_year not in forecast_years:
+            return None, parsed, "explicit_date_outside_forecast"
+        if fiscal_end_month is not None and parsed.month != fiscal_end_month:
+            return (
+                fiscal_year,
+                parsed,
+                "explicit_fiscal_date_mismatched_fiscal_end",
+            )
+        return fiscal_year, parsed, "explicit_fiscal_date"
+
     def _add_reports(
         self,
         observations: dict,
@@ -365,4 +469,10 @@ class YahooFinancialsNormalizer:
         )
 
 
-__all__ = ["YahooFinancialsNormalizer"]
+YahooRevenueEstimateNormalizer = YahooFinancialsNormalizer
+
+
+__all__ = [
+    "YahooFinancialsNormalizer",
+    "YahooRevenueEstimateNormalizer",
+]

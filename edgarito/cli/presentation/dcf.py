@@ -364,6 +364,39 @@ class FcffDcfConsolePresenter:
                         f"{'yes' if plan.stable_state_supported else 'no'}",
                     ]
                 )
+                if plan.forward_estimate_diagnostics:
+                    lines.extend(
+                        [
+                            "FORWARD ESTIMATE RETRIEVAL",
+                            *self._forward_estimate_diagnostics(plan),
+                        ]
+                    )
+                if plan.forward_revenue_estimates:
+                    estimate_years = plan.forward_estimate_years or tuple(
+                        estimate.fiscal_year
+                        for estimate in plan.forward_revenue_estimates
+                    )
+                    years = ", ".join(
+                        f"FY{year}" for year in estimate_years
+                    )
+                    lines.extend(
+                        [
+                            "Selected provider: "
+                            f"{self._forward_provider_label(plan.forward_estimate_provider)}",
+                            f"Years: {years or 'unavailable'}",
+                        ]
+                    )
+                    growth_by_year = dict(plan.forward_growth_path_by_year)
+                    for estimate in plan.forward_revenue_estimates:
+                        value = estimate.midpoint
+                        lines.append(
+                            f"FY{estimate.fiscal_year} revenue estimate: "
+                            f"{self._format_revenue_estimate(value, result.unit)} | "
+                            f"source={estimate.source} | "
+                            f"implied growth={self._format_growth(growth_by_year.get(estimate.fiscal_year))} | "
+                            f"analysts={estimate.analyst_count or 'unavailable'} | "
+                            f"confidence={estimate.confidence or 'unavailable'}"
+                        )
             if plan.terminal_roic_source:
                 lines.append(
                     f"Terminal ROIC: {plan.terminal_roic_source} | confidence "
@@ -437,6 +470,48 @@ class FcffDcfConsolePresenter:
         if not values:
             return "unavailable"
         return "[" + ", ".join(cls._format_growth(value) for value in values) + "]"
+
+    @classmethod
+    def _forward_estimate_diagnostics(cls, plan) -> list[str]:
+        lines = []
+        for diagnostic in plan.forward_estimate_diagnostics:
+            status = getattr(diagnostic.status, "value", diagnostic.status)
+            status = str(status).replace("_", " ")
+            provider = {
+                "alphavantage": "Alpha Vantage",
+                "alpha_vantage": "Alpha Vantage",
+                "yahoo": "Yahoo",
+            }.get(diagnostic.provider.casefold(), diagnostic.provider)
+            detail = f"{provider}: {status}"
+            if diagnostic.estimate_count:
+                detail += f" — {diagnostic.estimate_count} annual estimate(s)"
+            if diagnostic.years:
+                detail += " (" + ", ".join(f"FY{year}" for year in diagnostic.years) + ")"
+            if diagnostic.reason:
+                detail += f" — {diagnostic.reason}"
+            lines.append(detail)
+        return lines
+
+    @staticmethod
+    def _forward_provider_label(provider: str | None) -> str:
+        if provider is None:
+            return "unavailable"
+        return {
+            "alphavantage": "Alpha Vantage",
+            "alpha_vantage": "Alpha Vantage",
+            "yahoo": "Yahoo",
+        }.get(provider.casefold(), provider)
+
+    @staticmethod
+    def _format_revenue_estimate(value: Decimal | None, unit: str) -> str:
+        if value is None:
+            return "unavailable"
+        absolute = abs(value)
+        if absolute >= Decimal("1e9"):
+            return f"{unit} {value / Decimal('1e9'):,.1f}B"
+        if absolute >= Decimal("1e6"):
+            return f"{unit} {value / Decimal('1e6'):,.1f}M"
+        return f"{unit} {value:,.0f}"
 
     def _repurchase_details(
         self,

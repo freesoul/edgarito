@@ -12,6 +12,10 @@ from pydantic import (
     model_validator,
 )
 
+from edgarito.schemas.forward import (
+    ForwardEstimateProviderDiagnostic,
+    ForwardRevenueEstimate,
+)
 from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.identifiers import SecurityIdentifiers
 
@@ -597,6 +601,12 @@ class AdaptiveMultistagePlan(BaseModel):
     historical_growth_path: tuple[Decimal, ...] = ()
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
+    forward_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    forward_revenue_estimates: tuple[ForwardRevenueEstimate, ...] = ()
+    forward_estimate_provider: Optional[str] = None
+    forward_estimate_years: tuple[int, ...] = ()
+    forward_estimate_growth_path: tuple[Decimal, ...] = ()
+    forward_estimate_diagnostics: tuple[ForwardEstimateProviderDiagnostic, ...] = ()
     forward_growth_source: Optional[str] = None
     forward_growth_confidence: Optional[str] = None
     stable_state_supported: bool = False
@@ -666,6 +676,13 @@ class ForwardGrowthEvidence(BaseModel):
         ),
     )
     guidance_growth_path: tuple[Decimal, ...] = ()
+    growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    source: Optional[str] = None
+    forward_revenue_estimates: tuple[ForwardRevenueEstimate, ...] = ()
+    forward_estimate_provider: Optional[str] = None
+    forward_estimate_years: tuple[int, ...] = ()
+    forward_estimate_growth_path: tuple[Decimal, ...] = ()
+    forward_estimate_diagnostics: tuple[ForwardEstimateProviderDiagnostic, ...] = ()
     growth_anchor: Optional[Decimal] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -700,6 +717,13 @@ class ForwardGrowthEvidence(BaseModel):
                 "Forward growth evidence must be finite and greater than -100%"
             )
         return value
+
+    @field_validator("growth_path_by_year", mode="before")
+    @classmethod
+    def normalize_year_path(cls, value):
+        if value is None:
+            return ()
+        return tuple((int(year), rate) for year, rate in value)
 
     @field_validator("growth_anchor")
     @classmethod
@@ -798,6 +822,12 @@ class ForwardGrowthOutlook(BaseModel):
     historical_growth_path: tuple[Decimal, ...] = ()
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
+    growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    forward_revenue_estimates: tuple[ForwardRevenueEstimate, ...] = ()
+    forward_estimate_provider: Optional[str] = None
+    forward_estimate_years: tuple[int, ...] = ()
+    forward_estimate_growth_path: tuple[Decimal, ...] = ()
+    forward_estimate_diagnostics: tuple[ForwardEstimateProviderDiagnostic, ...] = ()
     normalized_growth: Optional[Decimal] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -830,6 +860,13 @@ class ForwardGrowthOutlook(BaseModel):
         if isinstance(value, (str, int, float, Decimal)):
             return (value,)
         return tuple(value)
+
+    @field_validator("growth_path_by_year", mode="before")
+    @classmethod
+    def normalize_year_path(cls, value):
+        if value is None:
+            return ()
+        return tuple((int(year), rate) for year, rate in value)
 
     @field_validator(
         "growth_path",

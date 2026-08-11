@@ -37,6 +37,10 @@ from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
 from edgarito.logger import configure_logger
+from edgarito.schemas.forward import (
+    ForwardEstimateProviderDiagnostic,
+    ForwardRevenueEstimateResult,
+)
 from edgarito.schemas.guidance.management import GuidanceOverlayResult
 from edgarito.schemas.market import ReferenceSeriesKind, ReferenceValueUnit
 from edgarito.schemas.normalization.financials import (
@@ -76,6 +80,7 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
 )
+from edgarito.services.forward_estimates import ForwardRevenueEstimateService
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.guidance.service import ManagementGuidanceService
@@ -1455,6 +1460,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     tax_assumption = resolved.assumption_set.find(
         ValuationAssumptionKind.NORMALIZED_TAX_RATE
     )
+    forward_estimate_result = None
+    forward_evidence = None
     if use_multistage:
         stable_growth_rate = (
             resolved.perpetual_growth_rate
@@ -1466,6 +1473,48 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 "Adaptive multistage projection with an exit multiple requires "
                 "valuation.multistage.stable_growth_rate in the profile"
             )
+        forward_estimate_result = await _retrieve_forward_estimates(
+            args,
+            financials,
+            forecast,
+            use_cache=not args.refresh,
+            make_cache=True,
+        )
+        additional_warnings.extend(forward_estimate_result.warnings)
+        management_evidence = _forward_growth_evidence(
+            profile_context.lifecycle,
+            profile_context.economic_traits,
+            guidance_overlay,
+            tuple(item.fiscal_year for item in forecast.observations),
+        )
+        consensus_evidence = ForwardRevenueEstimateService.to_growth_evidence(
+            forward_estimate_result,
+            forecast_years=tuple(item.fiscal_year for item in forecast.observations),
+            base_revenue=forecast.base_revenue,
+            seed_revenues={
+                item.fiscal_year: item.revenue for item in forecast.observations
+            },
+            seed_growth_path=tuple(
+                item.revenue_growth for item in forecast.observations
+            ),
+            lifecycle=getattr(profile_context.lifecycle, "value", str(profile_context.lifecycle)),
+            backlog=management_evidence.backlog,
+            capacity=management_evidence.capacity,
+            growth_visibility=management_evidence.growth_visibility,
+        )
+        forward_evidence = _merge_forward_growth_evidence(
+            management_evidence,
+            consensus_evidence,
+            management_has_revenue_guidance=any(
+                item.driver == "revenue_growth"
+                and getattr(getattr(item.guidance, "metric", None), "value", "")
+                == "revenue"
+                for item in (
+                    guidance_overlay.applications if guidance_overlay is not None else ()
+                )
+            ),
+            forecast_years=tuple(item.fiscal_year for item in forecast.observations),
+        )
         forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
             forecast_service
         ).forecast(
@@ -1477,12 +1526,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             normalized_tax_rate=(
                 tax_assumption.value if tax_assumption is not None else None
             ),
-            forward_evidence=_forward_growth_evidence(
-                profile_context.lifecycle,
-                profile_context.economic_traits,
-                guidance_overlay,
-                tuple(item.fiscal_year for item in forecast.observations),
-            ),
+            forward_evidence=forward_evidence,
             as_of=valuation_date,
             availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
         )
@@ -1756,7 +1800,8 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 tax_assumption.value if tax_assumption is not None else None
             ),
             share_repurchase_parameters=share_repurchase_parameters,
-            forward_evidence=_forward_growth_evidence(
+            forward_evidence=forward_evidence
+            or _forward_growth_evidence(
                 profile_context.lifecycle,
                 profile_context.economic_traits,
                 guidance_overlay,
@@ -2000,6 +2045,111 @@ async def _retrieve_financials(
         )
 
 
+async def _retrieve_forward_estimates(
+    args: argparse.Namespace,
+    financials: NormalizedCompanyFinancials,
+    forecast,
+    *,
+    use_cache: bool,
+    make_cache: bool,
+) -> ForwardRevenueEstimateResult:
+    """Retrieve consensus independently of the selected historical provider."""
+
+    forecast_years = tuple(item.fiscal_year for item in forecast.observations)
+    try:
+        return await ForwardRevenueEstimateService(
+            cache=FileSystemCache(Path(args.cache_dir)),
+            alphavantage_api_key=ALPHAVANTAGE_API_KEY,
+        ).resolve(
+            financials.ticker or args.ticker,
+            financials=financials,
+            forecast_years=forecast_years,
+            current_fiscal_year=(
+                forecast.current_fiscal_year
+                or (forecast_years[0] if forecast_years else None)
+            ),
+            base_revenue=forecast.base_revenue,
+            currency=forecast.unit,
+            provider_symbols=_parse_provider_symbols(args.provider_symbol),
+            as_of=datetime.date.today(),
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
+    except Exception as exc:
+        # Retrieval is optional evidence.  Keep valuation alive and preserve a
+        # diagnostic-shaped result for the audit rather than turning a provider
+        # construction/cache failure into a DCF failure.
+        return ForwardRevenueEstimateResult(
+            diagnostics=(
+                ForwardEstimateProviderDiagnostic(
+                    provider="alphavantage",
+                    status="failed",
+                    reason=f"resolver failure: {exc}",
+                ),
+                ForwardEstimateProviderDiagnostic(
+                    provider="yahoo",
+                    status="failed",
+                    reason="not attempted because the resolver failed before provider fallback",
+                ),
+            ),
+            warnings=(f"Forward estimate retrieval failed: {exc}",),
+            fallback_reason=str(exc),
+        )
+
+
+def _merge_forward_growth_evidence(
+    management: ForwardGrowthEvidence,
+    consensus: ForwardGrowthEvidence,
+    *,
+    management_has_revenue_guidance: bool,
+    forecast_years: tuple[int, ...] = (),
+) -> ForwardGrowthEvidence:
+    """Keep management revenue evidence ahead of analyst consensus."""
+
+    consensus_metadata = {
+        "forward_revenue_estimates": consensus.forward_revenue_estimates,
+        "forward_estimate_provider": consensus.forward_estimate_provider,
+        "forward_estimate_years": consensus.forward_estimate_years,
+        "forward_estimate_growth_path": consensus.forward_estimate_growth_path,
+        "forward_estimate_diagnostics": consensus.forward_estimate_diagnostics,
+    }
+    management_is_quantitative = bool(
+        management.growth_path or management.guidance_growth_path
+    )
+    if management_is_quantitative:
+        management_by_year = dict(management.growth_path_by_year)
+        consensus_by_year = dict(consensus.growth_path_by_year)
+        if management_by_year and consensus_by_year:
+            years = forecast_years or tuple(
+                sorted(set(management_by_year) | set(consensus_by_year))
+            )
+            merged_by_year = tuple(
+                (year, management_by_year.get(year, consensus_by_year.get(year)))
+                for year in years
+                if management_by_year.get(year, consensus_by_year.get(year)) is not None
+            )
+            return management.model_copy(
+                update={
+                    **consensus_metadata,
+                    "growth_path": tuple(value for _year, value in merged_by_year),
+                    "growth_path_by_year": merged_by_year,
+                }
+            )
+        return management.model_copy(update=consensus_metadata)
+    if consensus.growth_path:
+        return consensus.model_copy(
+            update={
+                "backlog": management.backlog,
+                "capacity": management.capacity,
+                "growth_visibility": max(
+                    management.growth_visibility, consensus.growth_visibility
+                ),
+                "lifecycle": management.lifecycle,
+            }
+        )
+    return management.model_copy(update=consensus_metadata)
+
+
 def _financial_snapshot_warnings(
     financials: NormalizedCompanyFinancials,
     args: argparse.Namespace,
@@ -2229,6 +2379,7 @@ def _forward_growth_evidence(
         growth_visibility=growth_visibility,
         lifecycle=getattr(lifecycle, "value", str(lifecycle)),
         growth_path=tuple(value for _year, value in forward_growth_records),
+        growth_path_by_year=tuple(forward_growth_records),
         guidance_growth_path=tuple(
             growth_applications[year] for year in sorted(growth_applications)
         ),

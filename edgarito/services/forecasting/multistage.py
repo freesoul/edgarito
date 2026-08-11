@@ -344,7 +344,10 @@ class AdaptiveMultistageFcffForecastService:
             return self._make_outlook(
                 path=forward_evidence.growth_path,
                 anchor=forward_evidence.growth_anchor,
-                source=ForecastAssumptionSource.FORWARD_EVIDENCE.value,
+                source=(
+                    forward_evidence.source
+                    or ForecastAssumptionSource.FORWARD_EVIDENCE.value
+                ),
                 confidence=forward_evidence.confidence or "medium",
                 current_growth=current_growth,
                 history_path=history_path,
@@ -446,16 +449,55 @@ class AdaptiveMultistageFcffForecastService:
             management_guidance_path=(
                 (
                     forward_evidence.guidance_growth_path
-                    or forward_evidence.growth_path
+                    or (
+                        forward_evidence.growth_path
+                        if not forward_evidence.forward_revenue_estimates
+                        else ()
+                    )
                 )
                 if forward_evidence is not None and forward_evidence.guidance
                 else ()
             ),
             forward_estimates_path=(
-                forward_evidence.growth_path
+                (
+                    forward_evidence.forward_estimate_growth_path
+                    or (
+                        forward_evidence.growth_path
+                        if not forward_evidence.guidance
+                        else ()
+                    )
+                )
                 if forward_evidence is not None
-                and forward_evidence.growth_path
-                and not forward_evidence.guidance
+                else ()
+            ),
+            growth_path_by_year=(
+                forward_evidence.growth_path_by_year
+                if forward_evidence is not None
+                else ()
+            ),
+            forward_revenue_estimates=(
+                forward_evidence.forward_revenue_estimates
+                if forward_evidence is not None
+                else ()
+            ),
+            forward_estimate_provider=(
+                forward_evidence.forward_estimate_provider
+                if forward_evidence is not None
+                else None
+            ),
+            forward_estimate_years=(
+                forward_evidence.forward_estimate_years
+                if forward_evidence is not None
+                else ()
+            ),
+            forward_estimate_growth_path=(
+                forward_evidence.forward_estimate_growth_path
+                if forward_evidence is not None
+                else ()
+            ),
+            forward_estimate_diagnostics=(
+                forward_evidence.forward_estimate_diagnostics
+                if forward_evidence is not None
                 else ()
             ),
             normalized_growth=anchor,
@@ -751,6 +793,8 @@ class AdaptiveMultistageFcffForecastService:
                 "normalized_history": ForecastAssumptionSource.NORMALIZED_HISTORICAL,
                 "run_rate": ForecastAssumptionSource.CURRENT_RUN_RATE,
             }.get(forward_growth.source)
+            if source_alias is None and "analyst_consensus" in forward_growth.source:
+                source_alias = ForecastAssumptionSource.FORWARD_EVIDENCE
             if source_alias is not None:
                 return source_alias
             try:
@@ -1318,6 +1362,12 @@ class AdaptiveMultistageFcffForecastService:
             historical_growth_path=forward_growth.historical_growth_path,
             management_guidance_path=forward_growth.management_guidance_path,
             forward_estimates_path=forward_growth.forward_estimates_path,
+            forward_growth_path_by_year=forward_growth.growth_path_by_year,
+            forward_revenue_estimates=forward_growth.forward_revenue_estimates,
+            forward_estimate_provider=forward_growth.forward_estimate_provider,
+            forward_estimate_years=forward_growth.forward_estimate_years,
+            forward_estimate_growth_path=forward_growth.forward_estimate_growth_path,
+            forward_estimate_diagnostics=forward_growth.forward_estimate_diagnostics,
             forward_growth_source=forward_growth.source,
             forward_growth_confidence=forward_growth.confidence,
             stable_state_supported=forward_growth.stable_state_supported,

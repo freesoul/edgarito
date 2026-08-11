@@ -6,6 +6,7 @@ from typing import Optional
 
 from edgarito.enums.edgar.period import FISCAL_PERIOD_PRIORITY, FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forward import ForwardRevenueEstimate
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -13,6 +14,7 @@ from edgarito.schemas.normalization.financials import (
 )
 from edgarito.schemas.providers.alphavantage.fundamentals import (
     AlphaVantageCompanyFinancials,
+    EarningsEstimatesResponse,
     FinancialReport,
 )
 
@@ -120,6 +122,78 @@ class AlphaVantageNormalizer:
             company_name=overview.name,
             ticker=overview.symbol.upper(),
             observations=normalized,
+        )
+
+    def normalize_earnings_estimates(
+        self,
+        response: EarningsEstimatesResponse,
+        *,
+        observed_at: datetime.datetime | datetime.date | None = None,
+        fiscal_end_month: int | None = None,
+    ) -> tuple[ForwardRevenueEstimate, ...]:
+        """Normalize annual Alpha Vantage revenue estimates.
+
+        The endpoint's annual rows normally carry an explicit
+        ``fiscalDateEnding``.  We retain that date and use its year as the
+        fiscal-year label; the resolver performs the final issuer-calendar
+        compatibility check when actual company financials are available.
+        """
+
+        if not isinstance(response, EarningsEstimatesResponse):
+            response = EarningsEstimatesResponse.model_validate(response)
+        estimates = []
+        for row in response.annual_earnings:
+            if row.horizon and "quarter" in row.horizon.casefold():
+                continue
+            period_end = row.fiscal_date_ending
+            fiscal_year = row.fiscal_year
+            if fiscal_year is None and period_end is not None:
+                fiscal_year = period_end.year
+            if fiscal_year is None:
+                continue
+            if period_end is not None and fiscal_end_month is not None:
+                # Do not reinterpret a provider's explicit date here.  A
+                # mismatching month is intentionally left for the resolver to
+                # reject as an ambiguous fiscal mapping with a diagnostic.
+                mapping_method = (
+                    "explicit_fiscal_date"
+                    if period_end.month == fiscal_end_month
+                    else "explicit_fiscal_date_mismatched_fiscal_end"
+                )
+            else:
+                mapping_method = "explicit_fiscal_date" if period_end else "provider_year"
+            estimates.append(
+                ForwardRevenueEstimate(
+                    fiscal_year=fiscal_year,
+                    average=row.estimated_revenue,
+                    low=row.revenue_estimate_low,
+                    high=row.revenue_estimate_high,
+                    analyst_count=row.analyst_count,
+                    source="alphavantage",
+                    currency=row.reported_currency,
+                    observed_at=observed_at,
+                    period_end=period_end,
+                    source_period=(
+                        period_end.isoformat() if period_end is not None else None
+                    ),
+                    mapping_method=mapping_method,
+                )
+            )
+        return tuple(sorted(estimates, key=lambda item: item.fiscal_year))
+
+    def normalize_forward_revenue_estimates(
+        self,
+        response: EarningsEstimatesResponse,
+        *,
+        observed_at: datetime.datetime | datetime.date | None = None,
+        fiscal_end_month: int | None = None,
+    ) -> tuple[ForwardRevenueEstimate, ...]:
+        """Descriptive alias for :meth:`normalize_earnings_estimates`."""
+
+        return self.normalize_earnings_estimates(
+            response,
+            observed_at=observed_at,
+            fiscal_end_month=fiscal_end_month,
         )
 
     def _add_reports(
@@ -248,3 +322,12 @@ class AlphaVantageNormalizer:
             FISCAL_PERIOD_PRIORITY[observation.fiscal_period],
             observation.concept.value,
         )
+
+
+AlphaVantageEarningsEstimatesNormalizer = AlphaVantageNormalizer
+
+
+__all__ = [
+    "AlphaVantageEarningsEstimatesNormalizer",
+    "AlphaVantageNormalizer",
+]

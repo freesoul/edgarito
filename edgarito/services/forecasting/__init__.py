@@ -31,6 +31,11 @@ from edgarito.services.forecasting.multistage import (
 __all__ = [
     "AdaptiveMultistageFcffForecastService",
     "AdaptiveMultistagePlan",
+    "ForwardEstimateResolver",
+    "ForwardEstimateService",
+    "ForwardRevenueConsensusService",
+    "ForwardRevenueEstimateResolver",
+    "ForwardRevenueEstimateService",
     "ForwardGrowthEvidence",
     "ForwardGrowthOutlook",
     "FcffForecast",
@@ -53,3 +58,31 @@ __all__ = [
     "SimplifiedFcfForecastParameters",
     "SimplifiedFcfForecastService",
 ]
+
+
+def __getattr__(name):
+    """Load the optional provider resolver without creating an import cycle."""
+
+    if name in {
+        "ForwardEstimateResolver",
+        "ForwardEstimateService",
+        "ForwardRevenueConsensusService",
+        "ForwardRevenueEstimateResolver",
+        "ForwardRevenueEstimateService",
+    }:
+        from edgarito.services.forward_estimates import (
+            ForwardEstimateResolver,
+            ForwardEstimateService,
+            ForwardRevenueConsensusService,
+            ForwardRevenueEstimateResolver,
+            ForwardRevenueEstimateService,
+        )
+
+        return {
+            "ForwardEstimateResolver": ForwardEstimateResolver,
+            "ForwardEstimateService": ForwardEstimateService,
+            "ForwardRevenueConsensusService": ForwardRevenueConsensusService,
+            "ForwardRevenueEstimateResolver": ForwardRevenueEstimateResolver,
+            "ForwardRevenueEstimateService": ForwardRevenueEstimateService,
+        }[name]
+    raise AttributeError(name)

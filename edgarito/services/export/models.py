@@ -384,6 +384,12 @@ class AdaptiveMultistagePlanExport(BaseModel):
     historical_growth_path: tuple[Decimal, ...] = ()
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
+    forward_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    forward_revenue_estimates: tuple[dict, ...] = ()
+    forward_estimate_provider: str | None = None
+    forward_estimate_years: tuple[int, ...] = ()
+    forward_estimate_growth_path: tuple[Decimal, ...] = ()
+    forward_estimate_diagnostics: tuple[dict, ...] = ()
     forward_growth_source: str | None = None
     forward_growth_confidence: str | None = None
     stable_state_supported: bool = False

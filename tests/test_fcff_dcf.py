@@ -7,11 +7,16 @@ from zipfile import ZipFile
 
 import pytest
 
+import edgarito.cli.__main__ as cli_module
 from edgarito.cli.__main__ import main
 from edgarito.cli.parser import build_parser
 from edgarito.cli.presentation.dcf import FcffDcfConsolePresenter
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forward import (
+    ForwardEstimateProviderDiagnostic,
+    ForwardRevenueEstimateResult,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -1271,7 +1276,30 @@ def test_yahoo_bridge_uses_aggregate_current_debt_without_current_portion():
     assert "aggregate CurrentDebt" in result.net_debt_source
 
 
-def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
+def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(
+    tmp_path, capsys, monkeypatch
+):
+    async def unavailable_forward_estimates(*_args, **_kwargs):
+        return ForwardRevenueEstimateResult(
+            diagnostics=(
+                ForwardEstimateProviderDiagnostic(
+                    provider="alphavantage",
+                    status="unavailable",
+                    reason="test fixture has no estimate provider",
+                ),
+                ForwardEstimateProviderDiagnostic(
+                    provider="yahoo",
+                    status="unavailable",
+                    reason="test fixture has no estimate provider",
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        cli_module.ForwardRevenueEstimateService,
+        "resolve",
+        unavailable_forward_estimates,
+    )
     _cache_aapl(tmp_path)
     profile = tmp_path / "dcf.json"
     profile.write_text(
@@ -1326,6 +1354,8 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
     assert "Historical inputs:" in audit_output
     assert "Management guidance: unavailable" in audit_output
     assert "Forward estimates: unavailable" in audit_output
+    assert "FORWARD ESTIMATE RETRIEVAL" in audit_output
+    assert "Alpha Vantage: unavailable" in audit_output
 
 
 def _forecast() -> FcffForecast:

@@ -1,5 +1,6 @@
 from edgarito.services.providers.alphavantage import (
     AlphaVantageClient,
+    AlphaVantageFunction,
     AlphaVantageOutputSize,
 )
 from edgarito.services.providers.damodaran import (
@@ -16,6 +17,7 @@ __all__ = [
     "COUNTRY_RISK_PREMIUMS_2026",
     "US_INDUSTRY_BETAS_2026",
     "AlphaVantageClient",
+    "AlphaVantageFunction",
     "AlphaVantageOutputSize",
     "DamodaranClient",
     "EcbClient",

@@ -11,6 +11,8 @@ from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.providers.yahoo.fundamentals import (
     YahooCompanyFinancials,
     YahooFinancialReport,
+    YahooRevenueEstimateResponse,
+    YahooRevenueEstimateRow,
 )
 from edgarito.schemas.providers.yahoo.market import YahooMarketHistory, YahooPriceRow
 from edgarito.services.cache.filesystem_cache import FileSystemCache
@@ -122,6 +124,51 @@ class YahooFinanceClient:
         if not prices:
             raise RuntimeError(f"Yahoo returned no closing price for {history.symbol}")
         return max(prices, key=lambda row: row.observed_on).close
+
+    async def get_revenue_estimates(
+        self,
+        symbol: str,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> YahooRevenueEstimateResponse:
+        """Retrieve yfinance's current/next annual revenue estimates.
+
+        The raw yfinance interface is deliberately used only inside this
+        provider adapter.  The rest of the application consumes the
+        provider-neutral ``ForwardRevenueEstimate`` model.
+        """
+
+        normalized_symbol = self._normalize_symbol(symbol)
+        cache_path = f"providers/yahoo/{normalized_symbol}/revenue_estimate.json"
+        if use_cache:
+            cached = self._cache.read(cache_path)
+            if cached is not None:
+                return YahooRevenueEstimateResponse.model_validate_json(cached)
+
+        try:
+            result = await asyncio.to_thread(
+                self._fetch_revenue_estimates, normalized_symbol
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Yahoo revenue-estimate retrieval failed for "
+                f"{normalized_symbol}: {exc}"
+            ) from exc
+        if make_cache:
+            self._cache.save(cache_path, result.model_dump_json())
+        return result
+
+    async def get_revenue_estimate(
+        self,
+        symbol: str,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> YahooRevenueEstimateResponse:
+        """Singular compatibility alias matching yfinance's ticker method."""
+
+        return await self.get_revenue_estimates(
+            symbol, use_cache=use_cache, make_cache=make_cache
+        )
 
     def _fetch_company_financials(self, symbol: str) -> YahooCompanyFinancials:
         ticker = self._ticker_factory(symbol)
@@ -237,6 +284,156 @@ class YahooFinanceClient:
             source_version=f"yfinance/{yf.__version__};repair={str(repair).lower()}",
             rows=tuple(rows),
         )
+
+    def _fetch_revenue_estimates(self, symbol: str) -> YahooRevenueEstimateResponse:
+        ticker = self._ticker_factory(symbol)
+        getter = getattr(ticker, "get_revenue_estimate", None)
+        if callable(getter):
+            table = getter()
+        else:
+            table = getattr(ticker, "revenue_estimate", None)
+        if table is None:
+            raise ValueError("yfinance does not expose get_revenue_estimate")
+
+        rows = self._revenue_estimate_rows(table)
+        return YahooRevenueEstimateResponse(
+            symbol=symbol,
+            rows=tuple(rows),
+            retrieved_at=datetime.datetime.now(datetime.timezone.utc),
+            source_version=f"yfinance/{yf.__version__}",
+        )
+
+    @classmethod
+    def _revenue_estimate_rows(cls, table) -> list[YahooRevenueEstimateRow]:
+        """Convert DataFrame/dict/list variants emitted by yfinance."""
+        raw_rows: list[tuple[object, object]] = []
+        if isinstance(table, pd.DataFrame):
+            raw_rows = list(table.iterrows())
+        elif isinstance(table, dict):
+            # ``as_dict=True`` returns {period: {column: value}}.  A mapping
+            # of columns to sequences is also accepted for simple fakes.
+            if all(isinstance(value, dict) for value in table.values()):
+                keys = {str(key) for value in table.values() for key in value}
+                if any(
+                    re.fullmatch(r"[+-]?\d+[yY]", key.strip()) for key in keys
+                ):
+                    raw_rows = [
+                        (
+                            period,
+                            {
+                                column: values.get(period)
+                                for column, values in table.items()
+                            },
+                        )
+                        for period in sorted(keys)
+                    ]
+                else:
+                    raw_rows = list(table.items())
+            else:
+                periods = table.get("period") or table.get("Period") or ()
+                if not isinstance(periods, (list, tuple)):
+                    periods = (periods,)
+                for index, period in enumerate(periods):
+                    raw_rows.append(
+                        (
+                            period,
+                            {
+                                key: (
+                                    value[index]
+                                    if isinstance(value, (list, tuple))
+                                    and index < len(value)
+                                    else value
+                                )
+                                for key, value in table.items()
+                                if key not in {"period", "Period"}
+                            },
+                        )
+                    )
+        elif isinstance(table, (list, tuple)):
+            raw_rows = [
+                (item.get("period"), item)
+                for item in table
+                if isinstance(item, dict) and item.get("period") is not None
+            ]
+
+        rows = []
+        for period, values in raw_rows:
+            if isinstance(values, pd.Series):
+                values = values.to_dict()
+            if not isinstance(values, dict):
+                continue
+            normalized = {
+                str(key).casefold().replace("_", ""): value
+                for key, value in values.items()
+            }
+            row_period = str(period if period is not None else values.get("period", ""))
+            if not row_period.strip():
+                continue
+            rows.append(
+                YahooRevenueEstimateRow(
+                    period=row_period,
+                    average=cls._estimate_decimal(
+                        cls._first_mapping_value(
+                            normalized,
+                            "average",
+                            "avg",
+                            "value",
+                        )
+                    ),
+                    low=cls._estimate_decimal(
+                        cls._first_mapping_value(normalized, "low")
+                    ),
+                    high=cls._estimate_decimal(
+                        cls._first_mapping_value(normalized, "high")
+                    ),
+                    analyst_count=cls._estimate_int(
+                        cls._first_mapping_value(
+                            normalized,
+                            "numberofanalysts",
+                            "analystcount",
+                            "numberofrevenueanalysts",
+                        )
+                    ),
+                    currency=(
+                        str(
+                            cls._first_mapping_value(
+                                normalized, "currency", "revenuecurrency"
+                            )
+                        )
+                        if cls._first_mapping_value(
+                            normalized, "currency", "revenuecurrency"
+                        )
+                        else None
+                    ),
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _first_mapping_value(mapping: dict, *names):
+        for name in names:
+            if name in mapping:
+                return mapping[name]
+        return None
+
+    @staticmethod
+    def _estimate_decimal(value) -> Optional[Decimal]:
+        if isinstance(value, dict):
+            value = value.get("raw", value.get("value", value.get("val")))
+        if value is None or pd.isna(value):
+            return None
+        try:
+            normalized = Decimal(str(value))
+        except (ArithmeticError, ValueError, TypeError):
+            return None
+        return normalized if normalized.is_finite() else None
+
+    @classmethod
+    def _estimate_int(cls, value) -> Optional[int]:
+        decimal_value = cls._estimate_decimal(value)
+        if decimal_value is None:
+            return None
+        return int(decimal_value)
 
     @classmethod
     def _dataframe_to_reports(cls, table: pd.DataFrame):

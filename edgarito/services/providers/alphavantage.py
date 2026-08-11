@@ -15,6 +15,7 @@ from edgarito.schemas.providers.alphavantage.fundamentals import (
     BalanceSheetResponse,
     CashFlowResponse,
     CompanyOverview,
+    EarningsEstimatesResponse,
     IncomeStatementResponse,
 )
 from edgarito.schemas.providers.alphavantage.market import (
@@ -31,6 +32,7 @@ class AlphaVantageFunction(str, Enum):
     INCOME_STATEMENT = "INCOME_STATEMENT"
     BALANCE_SHEET = "BALANCE_SHEET"
     CASH_FLOW = "CASH_FLOW"
+    EARNINGS_ESTIMATES = "EARNINGS_ESTIMATES"
     TIME_SERIES_DAILY = "TIME_SERIES_DAILY"
     GLOBAL_QUOTE = "GLOBAL_QUOTE"
     DIVIDENDS = "DIVIDENDS"
@@ -146,6 +148,28 @@ class AlphaVantageClient:
             CashFlowResponse,
             use_cache,
             make_cache,
+        )
+
+    async def get_earnings_estimates(
+        self, symbol: str, use_cache: bool = True, make_cache: bool = True
+    ) -> EarningsEstimatesResponse:
+        """Return Alpha Vantage annual/quarterly analyst estimates."""
+
+        return await self._get(
+            AlphaVantageFunction.EARNINGS_ESTIMATES,
+            symbol,
+            EarningsEstimatesResponse,
+            use_cache,
+            make_cache,
+        )
+
+    async def get_revenue_estimates(
+        self, symbol: str, use_cache: bool = True, make_cache: bool = True
+    ) -> EarningsEstimatesResponse:
+        """Compatibility alias for callers interested only in revenue."""
+
+        return await self.get_earnings_estimates(
+            symbol, use_cache=use_cache, make_cache=make_cache
         )
 
     async def get_daily_prices(
