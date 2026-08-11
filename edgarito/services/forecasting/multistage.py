@@ -354,10 +354,11 @@ class AdaptiveMultistageFcffForecastService:
             )
 
         if normalized_historical is not None:
+            historical_confidence = self._historical_growth_confidence(history_path)
             return self._make_outlook(
                 anchor=normalized_historical,
                 source=ForecastAssumptionSource.NORMALIZED_HISTORICAL.value,
-                confidence="medium" if len(history_path) >= 2 else "low",
+                confidence=historical_confidence,
                 current_growth=current_growth,
                 history_path=history_path,
                 terminal_growth_rate=terminal_growth_rate,
@@ -380,6 +381,16 @@ class AdaptiveMultistageFcffForecastService:
             convergence_tolerance=convergence_tolerance,
             forward_evidence=forward_evidence,
         )
+
+    @staticmethod
+    def _historical_growth_confidence(path: tuple[Decimal, ...]) -> str:
+        """Mark short or materially volatile history as weak forward evidence."""
+
+        if len(path) < 3:
+            return "low"
+        if max(path) - min(path) > Decimal("15"):
+            return "low"
+        return "medium"
 
     @classmethod
     def _make_outlook(
@@ -414,6 +425,14 @@ class AdaptiveMultistageFcffForecastService:
         )
         warnings: tuple[str, ...] = ()
         if (
+            source == ForecastAssumptionSource.NORMALIZED_HISTORICAL.value
+            and confidence == "low"
+        ):
+            warnings = (
+                "LOW confidence: normalized historical growth is short or volatile; "
+                "no management or forward estimate evidence was available",
+            )
+        if (
             source == ForecastAssumptionSource.CURRENT_RUN_RATE.value
             and not stable_state_supported
         ):
@@ -423,6 +442,22 @@ class AdaptiveMultistageFcffForecastService:
             )
         return ForwardGrowthOutlook(
             growth_path=path,
+            historical_growth_path=history_path,
+            management_guidance_path=(
+                (
+                    forward_evidence.guidance_growth_path
+                    or forward_evidence.growth_path
+                )
+                if forward_evidence is not None and forward_evidence.guidance
+                else ()
+            ),
+            forward_estimates_path=(
+                forward_evidence.growth_path
+                if forward_evidence is not None
+                and forward_evidence.growth_path
+                and not forward_evidence.guidance
+                else ()
+            ),
             normalized_growth=anchor,
             source=source,
             confidence=confidence,
@@ -513,7 +548,7 @@ class AdaptiveMultistageFcffForecastService:
         return tuple(
             self._base_service._historical_values(
                 FcffForecastDriver.REVENUE_GROWTH,
-                periods[-historical_window:],
+                periods[-(historical_window + 1) :],
             )
         )
 
@@ -1280,6 +1315,9 @@ class AdaptiveMultistageFcffForecastService:
             current_growth_rate=forward_growth.current_growth,
             forward_growth_rate=forward_growth.anchor,
             forward_growth_path=forward_growth.growth_path,
+            historical_growth_path=forward_growth.historical_growth_path,
+            management_guidance_path=forward_growth.management_guidance_path,
+            forward_estimates_path=forward_growth.forward_estimates_path,
             forward_growth_source=forward_growth.source,
             forward_growth_confidence=forward_growth.confidence,
             stable_state_supported=forward_growth.stable_state_supported,

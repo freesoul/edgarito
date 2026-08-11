@@ -336,6 +336,34 @@ class FcffDcfConsolePresenter:
             )
         if result.multistage_plan is not None:
             plan = result.multistage_plan
+            if plan.forward_growth_rate is not None:
+                current_growth_label = (
+                    "Current FY growth"
+                    if result.forecast_seed_type in {"YTD+forecast", "YTD run-rate", "TTM"}
+                    else "First projected FY growth"
+                )
+                lines.extend(
+                    [
+                        "FORWARD REVENUE OUTLOOK",
+                        f"{current_growth_label}: "
+                        f"{self._format_growth(plan.current_growth_rate)} "
+                        f"[{result.forecast_seed_type}]",
+                        "Forward growth anchor: "
+                        f"{self._format_growth(plan.forward_growth_rate)}",
+                        f"Source: {plan.forward_growth_source or 'unavailable'}",
+                        f"Confidence: {plan.forward_growth_confidence or 'unavailable'}",
+                        "Historical inputs: "
+                        f"{self._format_growth_path(plan.historical_growth_path)}",
+                        "Management guidance: "
+                        f"{self._format_growth_path(plan.management_guidance_path)}",
+                        "Forward estimates: "
+                        f"{self._format_growth_path(plan.forward_estimates_path)}",
+                        "Terminal growth: "
+                        f"{self._format_growth(result.parameters.perpetual_growth_rate)}",
+                        f"Stable-state supported: "
+                        f"{'yes' if plan.stable_state_supported else 'no'}",
+                    ]
+                )
             if plan.terminal_roic_source:
                 lines.append(
                     f"Terminal ROIC: {plan.terminal_roic_source} | confidence "
@@ -399,6 +427,16 @@ class FcffDcfConsolePresenter:
             ]
         )
         return lines
+
+    @staticmethod
+    def _format_growth(value: Decimal | None) -> str:
+        return "unavailable" if value is None else f"{value:+.2f}%"
+
+    @classmethod
+    def _format_growth_path(cls, values: tuple[Decimal, ...]) -> str:
+        if not values:
+            return "unavailable"
+        return "[" + ", ".join(cls._format_growth(value) for value in values) + "]"
 
     def _repurchase_details(
         self,

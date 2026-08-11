@@ -233,10 +233,15 @@ class FcffForecastService:
 
         context = self._forecast_context(financials, periods, parameters, as_of)
         historical_periods = periods[-parameters.historical_window :]
+        # Normalized growth needs one predecessor period; operational driver
+        # history remains limited to the configured window above.
+        normalized_historical_periods = periods[
+            -(parameters.historical_window + 1) :
+        ]
         normalized_historical_growth_path = tuple(
             self._historical_values(
                 FcffForecastDriver.REVENUE_GROWTH,
-                list(historical_periods),
+                list(normalized_historical_periods),
             )
         )
         normalized_historical_growth = (

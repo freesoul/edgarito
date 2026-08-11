@@ -381,6 +381,9 @@ class AdaptiveMultistagePlanExport(BaseModel):
     current_growth_rate: Decimal | None = None
     forward_growth_rate: Decimal | None = None
     forward_growth_path: tuple[Decimal, ...] = ()
+    historical_growth_path: tuple[Decimal, ...] = ()
+    management_guidance_path: tuple[Decimal, ...] = ()
+    forward_estimates_path: tuple[Decimal, ...] = ()
     forward_growth_source: str | None = None
     forward_growth_confidence: str | None = None
     stable_state_supported: bool = False

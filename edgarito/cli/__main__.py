@@ -2229,6 +2229,9 @@ def _forward_growth_evidence(
         growth_visibility=growth_visibility,
         lifecycle=getattr(lifecycle, "value", str(lifecycle)),
         growth_path=tuple(value for _year, value in forward_growth_records),
+        guidance_growth_path=tuple(
+            growth_applications[year] for year in sorted(growth_applications)
+        ),
         confidence="high" if forward_growth_records else None,
     )
 

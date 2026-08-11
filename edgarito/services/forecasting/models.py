@@ -594,6 +594,9 @@ class AdaptiveMultistagePlan(BaseModel):
     current_growth_rate: Optional[Decimal] = None
     forward_growth_rate: Optional[Decimal] = None
     forward_growth_path: tuple[Decimal, ...] = ()
+    historical_growth_path: tuple[Decimal, ...] = ()
+    management_guidance_path: tuple[Decimal, ...] = ()
+    forward_estimates_path: tuple[Decimal, ...] = ()
     forward_growth_source: Optional[str] = None
     forward_growth_confidence: Optional[str] = None
     stable_state_supported: bool = False
@@ -662,6 +665,7 @@ class ForwardGrowthEvidence(BaseModel):
             "path",
         ),
     )
+    guidance_growth_path: tuple[Decimal, ...] = ()
     growth_anchor: Optional[Decimal] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -674,7 +678,7 @@ class ForwardGrowthEvidence(BaseModel):
     )
     confidence: Optional[str] = None
 
-    @field_validator("growth_path", mode="before")
+    @field_validator("growth_path", "guidance_growth_path", mode="before")
     @classmethod
     def normalize_growth_path(cls, value):
         if value is None:
@@ -683,7 +687,7 @@ class ForwardGrowthEvidence(BaseModel):
             return (value,)
         return tuple(value)
 
-    @field_validator("growth_path")
+    @field_validator("growth_path", "guidance_growth_path")
     @classmethod
     def validate_growth_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if any(
@@ -791,6 +795,9 @@ class ForwardGrowthOutlook(BaseModel):
             "path",
         ),
     )
+    historical_growth_path: tuple[Decimal, ...] = ()
+    management_guidance_path: tuple[Decimal, ...] = ()
+    forward_estimates_path: tuple[Decimal, ...] = ()
     normalized_growth: Optional[Decimal] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -809,7 +816,13 @@ class ForwardGrowthOutlook(BaseModel):
     current_growth_near_terminal: bool = False
     warnings: tuple[str, ...] = ()
 
-    @field_validator("growth_path", mode="before")
+    @field_validator(
+        "growth_path",
+        "historical_growth_path",
+        "management_guidance_path",
+        "forward_estimates_path",
+        mode="before",
+    )
     @classmethod
     def normalize_path(cls, value):
         if value is None:
@@ -818,7 +831,12 @@ class ForwardGrowthOutlook(BaseModel):
             return (value,)
         return tuple(value)
 
-    @field_validator("growth_path")
+    @field_validator(
+        "growth_path",
+        "historical_growth_path",
+        "management_guidance_path",
+        "forward_estimates_path",
+    )
     @classmethod
     def validate_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if any(

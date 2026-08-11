@@ -294,6 +294,190 @@ def _fcff_financials() -> NormalizedCompanyFinancials:
     )
 
 
+def _fcff_financials_with_revenue_history(
+    revenues: dict[int, str],
+) -> NormalizedCompanyFinancials:
+    template = [
+        item
+        for item in _fcff_financials().observations
+        if item.fiscal_year == 2024
+    ]
+    return _fcff_financials().model_copy(
+        update={
+            "observations": [
+                item.model_copy(
+                    update={
+                        "fiscal_year": fiscal_year,
+                        "period_end": datetime.date(fiscal_year, 12, 31),
+                        "value": (
+                            Decimal(revenue)
+                            if item.concept == FinancialConcept.REVENUE
+                            else item.value
+                        ),
+                    }
+                )
+                for fiscal_year, revenue in revenues.items()
+                for item in template
+            ]
+        }
+    )
+
+
+def test_fcff_normalized_growth_uses_three_rates_without_expanding_driver_history():
+    financials = _fcff_financials_with_revenue_history(
+        {2021: "100", 2022: "120", 2023: "150", 2024: "180"}
+    )
+    forecast = FcffForecastService().forecast(
+        financials,
+        FcffForecastParameters(forecast_years=1, historical_window=3),
+    )
+
+    expected_path = (Decimal("20"), Decimal("25"), Decimal("20"))
+    assert forecast.normalized_historical_growth_path == expected_path
+    assert forecast.normalized_historical_growth == Decimal(
+        "21.66666666666666666666666667"
+    )
+    assert forecast.historical_fiscal_years == (2022, 2023, 2024)
+    assert forecast.observations[0].revenue_growth == Decimal("22.5")
+
+    legacy_seed = forecast.model_copy(
+        update={
+            "normalized_historical_growth": None,
+            "normalized_historical_growth_path": (),
+        }
+    )
+    outlook = AdaptiveMultistageFcffForecastService().resolve_forward_growth(
+        financials,
+        legacy_seed,
+        FcffForecastParameters(forecast_years=1, historical_window=3),
+        Decimal("3"),
+    )
+    assert outlook.historical_growth_path == expected_path
+    assert outlook.normalized_growth == Decimal(
+        "21.66666666666666666666666667"
+    )
+
+
+def test_adaptive_growth_metadata_separates_history_guidance_and_estimates():
+    financials = _fcff_financials_with_revenue_history(
+        {2021: "100", 2022: "120", 2023: "150", 2024: "180"}
+    )
+    service = FcffForecastService()
+    parameters = FcffForecastParameters(forecast_years=5, historical_window=3)
+    seed = service.forecast(financials, parameters)
+    adaptive = AdaptiveMultistageFcffForecastService(service)
+    evidence = ForwardGrowthEvidence(
+        guidance=True,
+        growth_path=(Decimal("12"), Decimal("10")),
+    )
+    outlook = adaptive.resolve_forward_growth(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        forward_evidence=evidence,
+    )
+
+    assert outlook.historical_growth_path == seed.normalized_historical_growth_path
+    assert outlook.management_guidance_path == evidence.growth_path
+    assert outlook.forward_estimates_path == ()
+
+    _, plan = adaptive.forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+        forward_evidence=evidence,
+    )
+    assert plan.historical_growth_path == seed.normalized_historical_growth_path
+    assert plan.management_guidance_path == evidence.growth_path
+    assert plan.forward_estimates_path == ()
+
+    estimate_evidence = ForwardGrowthEvidence(
+        growth_path=(Decimal("8"), Decimal("7")),
+    )
+    estimate_outlook = adaptive.resolve_forward_growth(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        forward_evidence=estimate_evidence,
+    )
+    assert estimate_outlook.management_guidance_path == ()
+    assert estimate_outlook.forward_estimates_path == estimate_evidence.growth_path
+
+
+def test_ytd_growth_remains_separate_from_normalized_annual_history():
+    annual_financials = _fcff_financials_with_revenue_history(
+        {2021: "100", 2022: "120", 2023: "150", 2024: "180"}
+    )
+    quarterly_values = {
+        FinancialConcept.REVENUE: "25",
+        FinancialConcept.OPERATING_INCOME: "5",
+        FinancialConcept.PRETAX_INCOME: "4",
+        FinancialConcept.INCOME_TAX_EXPENSE: "1",
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "1",
+        FinancialConcept.CAPITAL_EXPENDITURES: "2",
+        FinancialConcept.ACCOUNTS_RECEIVABLE: "5",
+        FinancialConcept.INVENTORY: "2",
+        FinancialConcept.PREPAID_AND_OTHER_CURRENT_ASSETS: "1",
+        FinancialConcept.ACCOUNTS_PAYABLE: "2",
+        FinancialConcept.ACCRUED_LIABILITIES: "1",
+        FinancialConcept.DEFERRED_REVENUE_CURRENT: "1",
+    }
+    observations = list(annual_financials.observations)
+    for fiscal_period, period_end in (
+        (FiscalPeriod.Q1, datetime.date(2025, 3, 31)),
+        (FiscalPeriod.Q2, datetime.date(2025, 6, 30)),
+    ):
+        observations.extend(
+            _observation(
+                concept,
+                value,
+                2025,
+                granularity=Granularity.QUARTERLY,
+                fiscal_period=fiscal_period,
+                period_end=period_end,
+            )
+            for concept, value in quarterly_values.items()
+        )
+    financials = annual_financials.model_copy(update={"observations": observations})
+    service = FcffForecastService()
+    seed_parameters = FcffForecastParameters(
+        forecast_years=5,
+        historical_window=3,
+        revenue_growth=Decimal("2.4"),
+    )
+    seed = service.forecast(financials, seed_parameters)
+    requested = seed_parameters.model_copy(update={"revenue_growth": None})
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        requested,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+    )
+
+    expected_anchor = Decimal("21.66666666666666666666666667")
+    assert seed.seed_type == ForecastSeedType.YTD_PLUS_FORECAST
+    assert seed.normalized_historical_growth_path == (
+        Decimal("20"),
+        Decimal("25"),
+        Decimal("20"),
+    )
+    assert seed.current_growth_rate == Decimal("2.4")
+    assert plan.historical_growth_path == seed.normalized_historical_growth_path
+    assert plan.current_growth_rate == Decimal("2.4")
+    assert plan.forward_growth_rate == expected_anchor
+    assert forecast.observations[0].revenue_growth == Decimal("2.4")
+    assert forecast.observations[1].revenue_growth == expected_anchor
+
+
 def test_driver_based_fcff_forecasts_the_full_operating_bridge():
     parameters = FcffForecastParameters(
         forecast_years=2,

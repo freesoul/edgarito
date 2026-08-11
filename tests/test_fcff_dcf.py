@@ -1321,6 +1321,11 @@ def test_cli_runs_fcff_dcf_from_profile_and_cached_financials(tmp_path, capsys):
     audit_output = capsys.readouterr().out
     assert "ASSUMPTION AND PROVENANCE AUDIT" in audit_output
     assert "Net debt source: gross debt - cash and equivalents" in audit_output
+    assert "FORWARD REVENUE OUTLOOK" in audit_output
+    assert "Forward growth anchor:" in audit_output
+    assert "Historical inputs:" in audit_output
+    assert "Management guidance: unavailable" in audit_output
+    assert "Forward estimates: unavailable" in audit_output
 
 
 def _forecast() -> FcffForecast:
