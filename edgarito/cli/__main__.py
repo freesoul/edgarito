@@ -76,6 +76,7 @@ from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
     FcffForecastParameters,
     FcffForecastService,
+    ForecastAssumptionSource,
     ForwardGrowthEvidence,
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
@@ -1481,6 +1482,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             make_cache=True,
         )
         additional_warnings.extend(forward_estimate_result.warnings)
+        forecast_parameters = _materialize_forward_revenue_anchors(
+            forecast_parameters,
+            forward_estimate_result.estimates,
+            forecast,
+            additional_warnings,
+        )
         management_evidence = _forward_growth_evidence(
             profile_context.lifecycle,
             profile_context.economic_traits,
@@ -1490,7 +1497,11 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         consensus_evidence = ForwardRevenueEstimateService.to_growth_evidence(
             forward_estimate_result,
             forecast_years=tuple(item.fiscal_year for item in forecast.observations),
-            base_revenue=forecast.base_revenue,
+            base_revenue=(
+                forecast.ytd_anchor.latest_annual_revenue
+                if forecast.ytd_anchor is not None
+                else forecast.base_revenue
+            ),
             seed_revenues={
                 item.fiscal_year: item.revenue for item in forecast.observations
             },
@@ -2148,6 +2159,56 @@ def _merge_forward_growth_evidence(
             }
         )
     return management.model_copy(update=consensus_metadata)
+
+
+def _materialize_forward_revenue_anchors(
+    parameters: FcffForecastParameters,
+    estimates,
+    forecast,
+    warnings: list[str],
+) -> FcffForecastParameters:
+    """Promote absolute consensus revenue into the existing anchor seam.
+
+    Explicit/profile and management revenue constraints are already present in
+    ``parameters`` and therefore win by being filled first.  A configured
+    percentage path is also higher precedence than provider revenue levels.
+    """
+
+    if parameters.revenue_growth is not None:
+        return parameters
+    anchors = dict(parameters.revenue_anchors)
+    sources = dict(parameters.revenue_anchor_sources)
+    forecast_years = {item.fiscal_year for item in forecast.observations}
+    ytd_anchor = getattr(forecast, "ytd_anchor", None)
+    first_fiscal_year = (
+        forecast.observations[0].fiscal_year if forecast.observations else None
+    )
+    for estimate in estimates:
+        value = estimate.midpoint
+        year = estimate.fiscal_year
+        if value is None or year not in forecast_years or year in anchors:
+            continue
+        if (
+            ytd_anchor is not None
+            and year == first_fiscal_year
+            and value < ytd_anchor.actual_revenue
+        ):
+            warnings.append(
+                f"Forward consensus FY{year} revenue anchor ({value:,.0f}) is "
+                f"below reported YTD revenue ({ytd_anchor.actual_revenue:,.0f}); "
+                "the estimate was rejected"
+            )
+            continue
+        anchors[year] = value
+        sources[year] = ForecastAssumptionSource.FORWARD_EVIDENCE
+    if anchors == parameters.revenue_anchors:
+        return parameters
+    return parameters.model_copy(
+        update={
+            "revenue_anchors": anchors,
+            "revenue_anchor_sources": sources,
+        }
+    )
 
 
 def _financial_snapshot_warnings(

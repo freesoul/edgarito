@@ -9,7 +9,10 @@ import edgarito.cli.__main__ as cli_module
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
-from edgarito.schemas.forward import ForwardRevenueEstimateResult
+from edgarito.schemas.forward import (
+    ForwardRevenueEstimate,
+    ForwardRevenueEstimateResult,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -23,6 +26,7 @@ from edgarito.services.forecasting import (
     AdaptiveMultistageFcffForecastService,
     FcffForecastParameters,
     FcffForecastService,
+    ForecastAssumptionSource,
     ForwardGrowthEvidence,
 )
 from edgarito.services.forward_estimates import ForwardRevenueEstimateService
@@ -167,6 +171,77 @@ def test_alpha_annual_estimates_normalize_and_derive_growth():
     assert evidence.source == "analyst_consensus / alphavantage"
 
 
+def test_absolute_consensus_derives_growth_over_provider_growth_seed():
+    estimates = (
+        ForwardRevenueEstimate.from_value(2025, Decimal("144"), source="yahoo"),
+        ForwardRevenueEstimate.from_value(2026, Decimal("158.4"), source="yahoo"),
+    )
+    evidence = ForwardRevenueEstimateService.to_growth_evidence(
+        ForwardRevenueEstimateResult(estimates=estimates, selected_provider="yahoo"),
+        forecast_years=(2025, 2026),
+        base_revenue=Decimal("120"),
+        seed_growth_path=(Decimal("99"), Decimal("99")),
+    )
+
+    assert evidence.growth_path == (Decimal("20"), Decimal("10"))
+    assert evidence.forward_estimate_growth_path == evidence.growth_path
+
+
+def test_consensus_revenue_materializes_absolute_anchors_with_precedence():
+    parameters = FcffForecastParameters(
+        forecast_years=3,
+        revenue_anchors={2025: Decimal("140")},
+        revenue_anchor_sources={
+            2025: ForecastAssumptionSource.EXPLICIT,
+        },
+    )
+    forecast = SimpleNamespace(
+        observations=[
+            SimpleNamespace(fiscal_year=2025),
+            SimpleNamespace(fiscal_year=2026),
+            SimpleNamespace(fiscal_year=2027),
+        ],
+        ytd_anchor=SimpleNamespace(actual_revenue=Decimal("100")),
+    )
+    estimates = (
+        ForwardRevenueEstimate.from_value(2025, Decimal("144"), source="yahoo"),
+        ForwardRevenueEstimate.from_value(2026, Decimal("158.4"), source="yahoo"),
+        ForwardRevenueEstimate.from_value(2027, Decimal("174"), source="yahoo"),
+    )
+    warnings = []
+
+    enriched = cli_module._materialize_forward_revenue_anchors(
+        parameters, estimates, forecast, warnings
+    )
+
+    assert enriched.revenue_anchors == {
+        2025: Decimal("140"),
+        2026: Decimal("158.4"),
+        2027: Decimal("174"),
+    }
+    assert enriched.revenue_anchor_sources[2026] == ForecastAssumptionSource.FORWARD_EVIDENCE
+    assert not warnings
+
+
+def test_consensus_anchor_below_ytd_is_rejected():
+    parameters = FcffForecastParameters(forecast_years=1)
+    forecast = SimpleNamespace(
+        observations=[SimpleNamespace(fiscal_year=2025)],
+        ytd_anchor=SimpleNamespace(actual_revenue=Decimal("100")),
+    )
+    warnings = []
+
+    enriched = cli_module._materialize_forward_revenue_anchors(
+        parameters,
+        (ForwardRevenueEstimate.from_value(2025, Decimal("90"), source="yahoo"),),
+        forecast,
+        warnings,
+    )
+
+    assert not enriched.revenue_anchors
+    assert "below reported YTD revenue" in warnings[0]
+
+
 def test_alpha_real_estimates_payload_is_normalized():
     response = {
         "symbol": "EX",
@@ -263,7 +338,7 @@ def test_yahoo_relative_periods_map_to_issuer_fiscal_years():
 def test_consensus_path_is_consumed_by_adaptive_multistage():
     financials = _financials()
     base_service = FcffForecastService()
-    parameters = FcffForecastParameters(forecast_years=2)
+    parameters = FcffForecastParameters(forecast_years=3)
     seed = base_service.forecast(financials, parameters)
     evidence = ForwardGrowthEvidence(
         guidance=False,
@@ -389,7 +464,7 @@ def test_cli_resolver_output_reaches_adaptive_multistage(
     )
     financials = _financials()
     base_service = FcffForecastService()
-    parameters = FcffForecastParameters(forecast_years=2)
+    parameters = FcffForecastParameters(forecast_years=3)
     seed = base_service.forecast(financials, parameters)
     result = asyncio.run(
         cli_module._retrieve_forward_estimates(
@@ -399,6 +474,10 @@ def test_cli_resolver_output_reaches_adaptive_multistage(
             use_cache=False,
             make_cache=False,
         )
+    )
+    anchor_warnings = []
+    parameters = cli_module._materialize_forward_revenue_anchors(
+        parameters, result.estimates, seed, anchor_warnings
     )
     evidence = ForwardRevenueEstimateService.to_growth_evidence(
         result,
@@ -418,9 +497,15 @@ def test_cli_resolver_output_reaches_adaptive_multistage(
     )
 
     assert result.selected_provider == "yahoo"
-    assert plan.forward_growth_source == "analyst_consensus / yahoo"
+    assert plan.forward_growth_source == "forward_evidence"
     assert plan.forward_estimate_years == result.years
+    assert tuple(item.revenue for item in forecast.observations[:2]) == (
+        Decimal("144"),
+        Decimal("158.4"),
+    )
     assert tuple(item.revenue_growth for item in forecast.observations[:2]) == (
         Decimal("20"),
         Decimal("10"),
     )
+    assert forecast.observations[2].revenue_growth != Decimal("10")
+    assert not anchor_warnings

@@ -602,16 +602,23 @@ class AdaptiveMultistageFcffForecastService:
         if not requested_parameters.revenue_anchors:
             return (), ForecastAssumptionSource.EXPLICIT, None
         source_values = requested_parameters.revenue_anchor_sources
+        has_management = any(
+            value == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            for value in source_values.values()
+        )
+        has_explicit = any(
+            value == ForecastAssumptionSource.EXPLICIT
+            for value in source_values.values()
+        )
+        has_forward = any(
+            value == ForecastAssumptionSource.FORWARD_EVIDENCE
+            for value in source_values.values()
+        )
         source = (
             ForecastAssumptionSource.MANAGEMENT_GUIDANCE
-            if any(
-                value == ForecastAssumptionSource.MANAGEMENT_GUIDANCE
-                for value in source_values.values()
-            )
-            and not any(
-                value == ForecastAssumptionSource.EXPLICIT
-                for value in source_values.values()
-            )
+            if has_management and not has_explicit
+            else ForecastAssumptionSource.FORWARD_EVIDENCE
+            if has_forward and not has_explicit
             else ForecastAssumptionSource.EXPLICIT
         )
         previous_revenue = seed_forecast.base_revenue
