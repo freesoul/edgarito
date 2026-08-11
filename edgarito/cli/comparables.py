@@ -19,6 +19,7 @@ from edgarito.services.normalization.classification import (
 )
 from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
+from edgarito.services.openai import OpenAIClient
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.yahoo import YahooFinanceClient
 from edgarito.services.valuation import (
@@ -28,6 +29,7 @@ from edgarito.services.valuation import (
     LtmMultiplesService,
     MarketAwarePeerDiscoveryProvider,
     MassiveRelatedCompaniesPeerDiscoveryProvider,
+    OpenAIPeerDiscoveryProvider,
     PeerDiscoveryResult,
     PeerSelectionParameters,
     PeerUniverseSelector,
@@ -35,7 +37,12 @@ from edgarito.services.valuation import (
     ValuationProfileOverrides,
     YahooScreenerPeerDiscoveryProvider,
 )
-from edgarito.settings import MASSIVE_API_KEY
+from edgarito.settings import (
+    MASSIVE_API_KEY,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OPENAI_REASONING_EFFORT,
+)
 
 
 @dataclass(frozen=True)
@@ -205,14 +212,75 @@ async def _build_comparable_report(
                     if MASSIVE_API_KEY
                     else None
                 )
-                discovery = await MarketAwarePeerDiscoveryProvider(
+                market_aware_discovery = MarketAwarePeerDiscoveryProvider(
                     yahoo_discovery,
                     massive_discovery,
                     minimum_candidates=parameters.preferred_minimum,
-                ).discover(
-                    target_source,
-                    max_candidates=max(12, parameters.max_peers * 3),
                 )
+                discovery = None
+                openai_warning = None
+                max_candidates = max(12, parameters.max_peers * 3)
+                if OPENAI_API_KEY:
+                    openai_client = None
+                    try:
+                        openai_client = OpenAIClient(
+                            api_key=OPENAI_API_KEY,
+                            model=OPENAI_MODEL,
+                            reasoning_effort=OPENAI_REASONING_EFFORT,
+                        )
+                        openai_result = await OpenAIPeerDiscoveryProvider(
+                            openai_client
+                        ).discover(
+                            target_source,
+                            max_candidates=max_candidates,
+                        )
+                        minimum_candidates = min(
+                            parameters.preferred_minimum, max_candidates
+                        )
+                        if len(openai_result.candidate_tickers) >= minimum_candidates:
+                            discovery = openai_result
+                        else:
+                            openai_warning = (
+                                "OpenAI returned only "
+                                f"{len(openai_result.candidate_tickers)} candidates; "
+                                "existing Massive/Yahoo discovery used"
+                            )
+                    except Exception as exc:
+                        openai_warning = (
+                            "OpenAI peer discovery failed; existing Massive/Yahoo "
+                            f"discovery used: {exc}"
+                        )
+                    finally:
+                        if openai_client is not None:
+                            try:
+                                await openai_client.close()
+                            except Exception as exc:
+                                openai_warning = (
+                                    openai_warning or "OpenAI peer discovery completed"
+                                ) + f"; client close failed: {exc}"
+
+                    if discovery is not None and openai_warning:
+                        discovery = discovery.model_copy(
+                            update={
+                                "warnings": tuple(
+                                    dict.fromkeys([openai_warning, *discovery.warnings])
+                                )
+                            }
+                        )
+
+                if discovery is None:
+                    discovery = await market_aware_discovery.discover(
+                        target_source,
+                        max_candidates=max_candidates,
+                    )
+                    if openai_warning:
+                        discovery = discovery.model_copy(
+                            update={
+                                "warnings": tuple(
+                                    dict.fromkeys([openai_warning, *discovery.warnings])
+                                )
+                            }
+                        )
                 peer_symbols = list(discovery.candidate_tickers)
             except (RuntimeError, ValueError) as exc:
                 discovery = PeerDiscoveryResult(

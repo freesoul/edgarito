@@ -3,11 +3,14 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.valuation import (
     MarketAwarePeerDiscoveryProvider,
     MassiveRelatedCompaniesPeerDiscoveryProvider,
+    OpenAIPeerDiscoveryProvider,
     PeerDiscoveryResult,
     YahooScreenerPeerDiscoveryProvider,
 )
@@ -57,6 +60,21 @@ class _FailingProvider:
         raise RuntimeError("fixture outage")
 
 
+class _OpenAIProvider:
+    def __init__(self, tickers):
+        self.tickers = tickers
+        self.calls = []
+
+    async def extract_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        return kwargs["response_model"](tickers=self.tickers)
+
+
+class _FailingOpenAIProvider:
+    async def extract_structured(self, **kwargs):
+        raise RuntimeError("OpenAI fixture outage")
+
+
 def _result(provider, target, candidates, confidence="high"):
     return PeerDiscoveryResult(
         provider=provider,
@@ -67,7 +85,71 @@ def _result(provider, target, candidates, confidence="high"):
     )
 
 
-def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path):
+def _target(symbol="AAPL", company_name="Apple Inc."):
+    return YahooCompanyFinancials(
+        symbol=symbol,
+        company_name=company_name,
+        currency="USD",
+        exchange="NasdaqGS",
+        sector="Technology",
+        industry="Consumer Electronics",
+        country="United States",
+        market_capitalization=Decimal("3000000000000"),
+    )
+
+
+def test_openai_discovery_uses_injected_structured_client():
+    openai = _OpenAIProvider([" msft ", "GOOGL", "AMZN", "META"])
+
+    result = asyncio.run(
+        OpenAIPeerDiscoveryProvider(openai).discover(_target(), max_candidates=3)
+    )
+
+    assert result.provider == "openai"
+    assert result.target_ticker == "AAPL"
+    assert result.candidate_tickers == ("MSFT", "GOOGL", "AMZN")
+    assert len(openai.calls) == 1
+    call = openai.calls[0]
+    assert call["response_model"].__name__ == "OpenAIPeerDiscoveryResponse"
+    assert "Target ticker: AAPL" in call["content"]
+    assert "Return at most 3" in call["content"]
+    assert "economically comparable" in call["instructions"]
+
+
+def test_openai_discovery_normalizes_and_excludes_issuer_listings():
+    openai = _OpenAIProvider(
+        [
+            " aapl ",
+            "AAPL.L",
+            "msft",
+            "MSFT.US",
+            "MSFT",
+            "BRK.B",
+            "brk-b",
+            "bad ticker",
+            "$META",
+            "META",
+        ]
+    )
+
+    result = asyncio.run(OpenAIPeerDiscoveryProvider(openai).discover(_target()))
+
+    assert result.candidate_tickers == ("MSFT", "BRK.B", "META")
+    assert "AAPL" not in result.candidate_tickers
+    assert "AAPL.L" not in result.candidate_tickers
+    assert any("invalid ticker" in warning for warning in result.warnings)
+    assert any("cross-listing" in warning for warning in result.warnings)
+    assert any("duplicate issuer" in warning for warning in result.warnings)
+
+
+def test_openai_discovery_propagates_failures_for_orchestration_fallback():
+    with pytest.raises(RuntimeError, match="OpenAI fixture outage"):
+        asyncio.run(
+            OpenAIPeerDiscoveryProvider(_FailingOpenAIProvider()).discover(_target())
+        )
+
+
+def test_us_discovery_uses_massive_first_and_yahoo_when_massive_is_sparse(tmp_path):
     payload = json.loads(
         (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
     )
@@ -95,9 +177,8 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
         MarketAwarePeerDiscoveryProvider(yahoo, massive).discover(target)
     )
 
-    assert primary.provider == "massive-related+yahoo-screener"
+    assert primary.provider == "massive-related"
     assert primary.candidate_tickers == (
-        "ORCL",
         "MSFT",
         "GOOGL",
         "AMZN",
@@ -106,11 +187,9 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
         "ADBE",
     )
     assert "AAPL" not in primary.candidate_tickers
-    assert yahoo.calls == 1
+    assert yahoo.calls == 0
     assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
     assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
-    assert "not comparable evidence" in primary.methodology
-    assert any("discovery hints only" in warning for warning in primary.warnings)
 
     sparse_massive = _StaticProvider(
         _result("massive-related", "AAPL", ("MSFT", "GOOGL"), "low")
@@ -130,12 +209,12 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
 
     assert fallback.provider == "massive-related+yahoo-screener"
     assert fallback.candidate_tickers == (
+        "MSFT",
         "GOOGL",
         "AMZN",
         "META",
         "NVDA",
         "ADBE",
-        "MSFT",
     )
     assert any("too few" in warning for warning in fallback.warnings)
     assert fallback_yahoo.calls == 1
@@ -189,19 +268,15 @@ def test_european_discovery_skips_massive_and_prefers_regional_yahoo_peers(tmp_p
     assert result.candidate_tickers == (
         "STLAM.MI",
         "MONC.MI",
-        "TINY.MI",
         "P911.DE",
         "CFR.SW",
         "RMS.PA",
     )
     assert "RACE.MI" not in result.candidate_tickers
-    assert "TINY.MI" in result.candidate_tickers
+    assert "TINY.MI" not in result.candidate_tickers
     assert massive.calls == 0
     assert len(screen_calls) == 1
     assert "Non-U.S. issuer bypassed" in result.methodology
-    assert "discovery support" in result.methodology
-    assert any("not comparable evidence" in warning for warning in result.warnings)
-    assert any("fell outside" in warning for warning in result.warnings)
 
 
 def test_yahoo_discovery_excludes_target_cross_listing_by_issuer_identity(tmp_path):
