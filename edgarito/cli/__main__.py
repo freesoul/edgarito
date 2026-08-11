@@ -104,6 +104,7 @@ from edgarito.services.valuation import (
     Cyclicality,
     DecisionScenarioPolicy,
     DecisionValuationService,
+    DepreciableAssetLifeResolver,
     DiscountRateService,
     EcbMarketDataCurrencyConverter,
     EconomicTrait,
@@ -231,6 +232,32 @@ def _load_selected_valuation_profile(args):
         profile, _, _ = ValuationProfileLoader.load_for_ticker(ticker, args.profile)
         return profile
     return ValuationProfileLoader.load(args.profile)
+
+
+def _resolve_depreciable_asset_life_configuration(
+    financials: NormalizedCompanyFinancials,
+    profile_context,
+    configuration,
+):
+    """Apply automatic asset-life inference only to an unset profile value."""
+
+    if configuration.depreciable_asset_life_years is not None:
+        return configuration, None
+
+    resolution = DepreciableAssetLifeResolver().resolve(
+        financials,
+        industry=profile_context.industry,
+        business_archetype=profile_context.business_archetype,
+        sector=profile_context.sector,
+    )
+    if resolution.value is None:
+        return configuration, resolution
+    return (
+        configuration.model_copy(
+            update={"depreciable_asset_life_years": resolution.value}
+        ),
+        resolution,
+    )
 
 
 async def _run_forecast(args: argparse.Namespace) -> int:
@@ -1413,6 +1440,18 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             or multistage_configuration.stable_growth_rate is not None
         )
     )
+    asset_life_resolution = None
+    if use_multistage:
+        (
+            multistage_configuration,
+            asset_life_resolution,
+        ) = _resolve_depreciable_asset_life_configuration(
+            financials,
+            profile_context,
+            multistage_configuration,
+        )
+        if asset_life_resolution is not None:
+            additional_warnings.extend(asset_life_resolution.warnings)
     tax_assumption = resolved.assumption_set.find(
         ValuationAssumptionKind.NORMALIZED_TAX_RATE
     )
@@ -1447,14 +1486,19 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             as_of=valuation_date,
             availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
         )
-        multistage_plan = multistage_plan.model_copy(
-            update={
-                "terminal_roic_source": terminal_roic.source,
-                "terminal_roic_methodology": terminal_roic.methodology,
-                "terminal_roic_confidence": terminal_roic.confidence,
-                "terminal_roic_warnings": terminal_roic.warnings,
-            }
-        )
+        plan_updates = {
+            "terminal_roic_source": terminal_roic.source,
+            "terminal_roic_methodology": terminal_roic.methodology,
+            "terminal_roic_confidence": terminal_roic.confidence,
+            "terminal_roic_warnings": terminal_roic.warnings,
+        }
+        if asset_life_resolution is not None and asset_life_resolution.warnings:
+            plan_updates["warnings"] = tuple(
+                dict.fromkeys(
+                    [*multistage_plan.warnings, *asset_life_resolution.warnings]
+                )
+            )
+        multistage_plan = multistage_plan.model_copy(update=plan_updates)
     parameters = FcffDcfParameters(
         wacc=resolved.wacc,
         wacc_source=resolved.wacc_source,
@@ -1529,11 +1573,22 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         valuation_date,
         share_repurchase_parameters,
     )
-    if terminal_roic.warnings:
+    asset_life_warnings = (
+        asset_life_resolution.warnings
+        if asset_life_resolution is not None
+        else ()
+    )
+    if terminal_roic.warnings or asset_life_warnings:
         result = result.model_copy(
             update={
                 "warnings": tuple(
-                    dict.fromkeys([*result.warnings, *terminal_roic.warnings])
+                    dict.fromkeys(
+                        [
+                            *result.warnings,
+                            *terminal_roic.warnings,
+                            *asset_life_warnings,
+                        ]
+                    )
                 )
             }
         )
