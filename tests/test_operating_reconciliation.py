@@ -66,6 +66,23 @@ def test_reconciler_preserves_explicit_and_management_precedence():
     }
 
 
+def test_partial_segments_do_not_demote_management_selection_to_consensus():
+    forecast = _independent(
+        years=(2026,),
+        revenue=("100",),
+        sources={2026: "management_guidance"},
+        confidences={2026: "high"},
+    )
+    result = RevenueForecastReconciler().reconcile(
+        forecast,
+        consensus={2026: Decimal("250")},
+        management_anchors={2026: Decimal("125")},
+    )
+
+    assert result.consolidated_revenue == (Decimal("125"),)
+    assert result.source_by_year[2026] == "management_guidance"
+
+
 def test_reconciler_uses_consensus_only_to_fill_missing_independent_years():
     result = RevenueForecastReconciler().reconcile(
         _independent(
@@ -187,3 +204,77 @@ def test_materialize_selected_revenue_preserves_existing_fcff_anchor_priority():
     }
     assert materialized.revenue_anchor_sources[2026].value == "explicit"
     assert materialized.revenue_anchor_sources[2027].value == "forward_evidence"
+
+
+def test_materialize_selected_consensus_outranks_normalized_history_anchor():
+    parameters = FcffForecastParameters(
+        forecast_years=1,
+        revenue_anchors={2026: Decimal("90")},
+        revenue_anchor_sources={2026: "normalized_historical"},
+    )
+
+    materialized = materialize_revenue_anchors(
+        parameters,
+        {2026: (Decimal("105"), "analyst_consensus")},
+    )
+
+    assert materialized.revenue_anchors[2026] == Decimal("105")
+    assert materialized.revenue_anchor_sources[2026].value == "forward_evidence"
+
+
+def test_reconciliation_retains_per_year_selected_and_candidate_revenue_audit():
+    result = RevenueForecastReconciler().reconcile(
+        _independent(
+            years=(2026, 2027),
+            revenue=("100", "0"),
+            sources={2026: "independent_operating", 2027: "unavailable"},
+            confidences={2026: "high", 2027: "low"},
+        ),
+        consensus={2027: Decimal("115")},
+        management_anchors={2026: Decimal("110")},
+    )
+
+    assert result.selected_revenue_by_year == {
+        2026: Decimal("110"),
+        2027: Decimal("115"),
+    }
+    assert result.selected_source_by_year == {
+        2026: "management_guidance",
+        2027: "analyst_consensus",
+    }
+    assert result.independent_revenue_by_year == {
+        2026: Decimal("100"),
+        2027: Decimal("0"),
+    }
+    assert result.consensus_revenue_by_year == {2027: Decimal("115")}
+    assert result.management_revenue_by_year == {2026: Decimal("110")}
+
+
+def test_reconciliation_exposes_supported_consensus_divergence_and_transition_audit():
+    result = RevenueForecastReconciler().reconcile_with_details(
+        _independent(
+            years=(2026, 2027, 2028),
+            revenue=("100", "0", "120"),
+            sources={
+                2026: "independent_operating",
+                2027: "unavailable",
+                2028: "independent_operating",
+            },
+            confidences={2026: "high", 2027: "low", 2028: "high"},
+        ),
+        consensus=(
+            ForwardRevenueEstimate.from_value(2027, Decimal("125"), source="yahoo"),
+            ForwardRevenueEstimate.from_value(2028, Decimal("999"), source="yahoo"),
+        ),
+    )
+
+    assert result.own_supported_years == (2026, 2028)
+    assert result.consensus_years == (2027,)
+    assert result.divergence_by_year == {
+        2028: (Decimal("999") / Decimal("120") - Decimal("1")) * Decimal("100")
+    }
+    assert result.divergence == result.divergence_by_year[2028].copy_abs()
+    assert result.transition_start_year == 2029
+    assert any(
+        "Consensus revenue years: FY2027" in warning for warning in result.warnings
+    )

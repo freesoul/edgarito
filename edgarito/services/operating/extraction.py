@@ -223,7 +223,9 @@ class OperatingEvidenceExtractor:
         fiscal_years: tuple[int, ...] | None = None,
     ) -> str:
         if context_text is None:
-            context_text = extract_guidance_context(clean_document_text(document.content))
+            context_text = extract_guidance_context(
+                clean_document_text(document.content)
+            )
         identity = {
             "accession": filing.accession_number,
             "document": document.filename,
@@ -268,7 +270,9 @@ class OperatingEvidenceExtractor:
         seen_observations: dict[
             tuple[str, str, int, str], OperatingDriverObservation
         ] = {}
-        seen_programs: dict[tuple[str, int | None, str], OperatingInvestmentProgram] = {}
+        seen_programs: dict[
+            tuple[str, int | None, str], OperatingInvestmentProgram
+        ] = {}
 
         for item in response.segments:
             reason = self._common_invalid_reason(
@@ -284,7 +288,9 @@ class OperatingEvidenceExtractor:
                 self._add_diagnostic(rejection, unsupported, missing)
                 continue
             try:
-                evidence = self._evidence_reference(filing, document, item.supporting_text, source_text)
+                evidence = self._evidence_reference(
+                    filing, document, item.supporting_text, source_text
+                )
                 segment = OperatingSegment(
                     segment_id=item.segment_id,
                     name=item.name,
@@ -334,7 +340,9 @@ class OperatingEvidenceExtractor:
                 self._add_diagnostic(rejection, unsupported, missing)
                 continue
             try:
-                definition = self._definition_from_item(item, filing, document, source_text)
+                definition = self._definition_from_item(
+                    item, filing, document, source_text
+                )
             except ValueError as exc:
                 rejected.append(self._rejection("definition", str(exc), item))
                 continue
@@ -467,7 +475,9 @@ class OperatingEvidenceExtractor:
         archetype = item.archetype
         required = item.required_inputs or item.input_metrics
         formula_id = item.formula_id or archetype.value
-        evidence = self._evidence_reference(filing, document, item.supporting_text, source_text)
+        evidence = self._evidence_reference(
+            filing, document, item.supporting_text, source_text
+        )
         return OperatingDriverDefinition(
             driver_id=item.driver_id,
             archetype=archetype,
@@ -490,7 +500,9 @@ class OperatingEvidenceExtractor:
         document: SecFilingDocument,
         source_text: str,
     ) -> OperatingDriverObservation:
-        evidence = self._evidence_reference(filing, document, item.supporting_text, source_text)
+        evidence = self._evidence_reference(
+            filing, document, item.supporting_text, source_text
+        )
         origin = (
             "management_guidance"
             if item.origin == "management_guidance"
@@ -521,7 +533,9 @@ class OperatingEvidenceExtractor:
         document: SecFilingDocument,
         source_text: str,
     ) -> OperatingInvestmentProgram:
-        evidence = self._evidence_reference(filing, document, item.supporting_text, source_text)
+        evidence = self._evidence_reference(
+            filing, document, item.supporting_text, source_text
+        )
         return OperatingInvestmentProgram(
             program_id=item.program_id,
             name=item.name,
@@ -612,8 +626,7 @@ class OperatingEvidenceExtractor:
             return "Filing post-dates the requested as-of date"
         if fiscal_years and _YEAR_PATTERN.search(evidence):
             years = {
-                int(match.group(0)[-4:])
-                for match in _YEAR_PATTERN.finditer(evidence)
+                int(match.group(0)[-4:]) for match in _YEAR_PATTERN.finditer(evidence)
             }
             if not years.intersection(fiscal_years):
                 return "Evidence period is outside the requested fiscal-year scope"
@@ -647,7 +660,9 @@ class OperatingEvidenceExtractor:
             if Decimal(str(value)) not in numbers:
                 return False
         if fiscal_year is not None and not allow_missing_year:
-            years = {int(match.group(0)[-4:]) for match in _YEAR_PATTERN.finditer(evidence)}
+            years = {
+                int(match.group(0)[-4:]) for match in _YEAR_PATTERN.finditer(evidence)
+            }
             if fiscal_year not in years:
                 return False
         return True
@@ -685,7 +700,13 @@ class OperatingEvidenceExtractor:
     def _rejection(record_type: str, reason: str, item) -> OperatingEvidenceRejection:
         unsupported = any(
             term in reason.casefold()
-            for term in ("unsupported", "analyst", "consensus", "third-party", "forward")
+            for term in (
+                "unsupported",
+                "analyst",
+                "consensus",
+                "third-party",
+                "forward",
+            )
         )
         missing = any(
             term in reason.casefold() for term in ("not found", "absent", "lacks")

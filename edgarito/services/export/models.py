@@ -346,6 +346,18 @@ class FcffForecastExport(BaseModel):
     current_growth_rate: Decimal | None = None
     normalized_historical_growth: Decimal | None = None
     normalized_historical_growth_path: tuple[Decimal, ...] = ()
+    operating_driver_coverage: Decimal | None = None
+    operating_reconstruction_error: Decimal | None = None
+    operating_confidence: str | None = None
+    operating_own_supported_years: tuple[int, ...] = ()
+    operating_consensus_years: tuple[int, ...] = ()
+    operating_divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_divergence: Decimal | None = None
+    operating_transition_start_year: int | None = None
+    operating_warnings: tuple[str, ...] = ()
+    operating_selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_confidence_by_year: dict[int, str] = Field(default_factory=dict)
 
 
 class AdaptiveMultistagePlanExport(BaseModel):
@@ -385,6 +397,7 @@ class AdaptiveMultistagePlanExport(BaseModel):
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
     forward_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    guidance_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
     forward_revenue_estimates: tuple[dict, ...] = ()
     forward_estimate_provider: str | None = None
     forward_estimate_years: tuple[int, ...] = ()
@@ -395,6 +408,18 @@ class AdaptiveMultistagePlanExport(BaseModel):
     stable_state_supported: bool = False
     current_growth_near_terminal: bool = False
     warnings: tuple[str, ...] = ()
+    operating_driver_coverage: Decimal | None = None
+    operating_reconstruction_error: Decimal | None = None
+    operating_confidence: str | None = None
+    operating_own_supported_years: tuple[int, ...] = ()
+    operating_consensus_years: tuple[int, ...] = ()
+    operating_divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_divergence: Decimal | None = None
+    operating_transition_start_year: int | None = None
+    operating_warnings: tuple[str, ...] = ()
+    operating_selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_confidence_by_year: dict[int, str] = Field(default_factory=dict)
 
 
 class ForecastKind(str, Enum):

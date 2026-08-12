@@ -91,6 +91,7 @@ from edgarito.services.normalization.classification import (
 )
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
 from edgarito.services.openai import OpenAIClient
+from edgarito.services.operating import OperatingForecastPipelineService
 from edgarito.services.providers.damodaran import DamodaranClient
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.edgar import EdgarClient
@@ -165,6 +166,12 @@ from edgarito.settings import (
     OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
+
+# Optional provider-neutral injection seam.  Production discovery is not
+# enabled here: callers/tests may supply normalized structured operating
+# evidence without introducing ticker resolution or an extraction provider to
+# the valuation CLI.
+OPERATING_EVIDENCE_PROVIDER = None
 
 
 async def _run_financials(args: argparse.Namespace) -> int:
@@ -1249,6 +1256,19 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             "AI management-guidance extraction skipped because OpenAI is not configured"
         )
     seed_forecast = forecast
+    operating_evidence = None
+    if OPERATING_EVIDENCE_PROVIDER is None:
+        additional_warnings.append(
+            "Structured operating integration inactive: no safe provider is "
+            "configured; standard FCFF forecast retained"
+        )
+    else:
+        operating_evidence, operating_warnings = await _retrieve_operating_evidence(
+            financials,
+            forecast,
+            valuation_date,
+        )
+        additional_warnings.extend(operating_warnings)
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
         value is not None for value in (args.net_debt, args.gross_debt, args.cash)
@@ -1508,7 +1528,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             seed_growth_path=tuple(
                 item.revenue_growth for item in forecast.observations
             ),
-            lifecycle=getattr(profile_context.lifecycle, "value", str(profile_context.lifecycle)),
+            lifecycle=getattr(
+                profile_context.lifecycle, "value", str(profile_context.lifecycle)
+            ),
             backlog=management_evidence.backlog,
             capacity=management_evidence.capacity,
             growth_visibility=management_evidence.growth_visibility,
@@ -1521,26 +1543,51 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 and getattr(getattr(item.guidance, "metric", None), "value", "")
                 == "revenue"
                 for item in (
-                    guidance_overlay.applications if guidance_overlay is not None else ()
+                    guidance_overlay.applications
+                    if guidance_overlay is not None
+                    else ()
                 )
             ),
             forecast_years=tuple(item.fiscal_year for item in forecast.observations),
         )
-        forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
-            forecast_service
-        ).forecast(
-            financials,
-            forecast,
-            forecast_parameters,
-            stable_growth_rate,
-            multistage_configuration,
-            normalized_tax_rate=(
-                tax_assumption.value if tax_assumption is not None else None
-            ),
-            forward_evidence=forward_evidence,
-            as_of=valuation_date,
-            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-        )
+        if operating_evidence is None:
+            forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
+                forecast_service
+            ).forecast(
+                financials,
+                forecast,
+                forecast_parameters,
+                stable_growth_rate,
+                multistage_configuration,
+                normalized_tax_rate=(
+                    tax_assumption.value if tax_assumption is not None else None
+                ),
+                forward_evidence=forward_evidence,
+                as_of=valuation_date,
+                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            )
+        else:
+            pipeline_result = OperatingForecastPipelineService(
+                fcff_service=forecast_service,
+            ).forecast(
+                financials,
+                evidence=operating_evidence,
+                parameters=forecast_parameters,
+                consensus_estimates=forward_estimate_result.estimates,
+                terminal_growth_rate=stable_growth_rate,
+                adaptive_configuration=multistage_configuration,
+                normalized_tax_rate=(
+                    tax_assumption.value if tax_assumption is not None else None
+                ),
+                forward_evidence=forward_evidence,
+                as_of=valuation_date,
+                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            )
+            forecast = pipeline_result.forecast
+            multistage_plan = pipeline_result.adaptive_plan
+            forecast_parameters = pipeline_result.integration.parameters
+            forward_evidence = pipeline_result.forward_growth or forward_evidence
+            additional_warnings.extend(pipeline_result.warnings)
         plan_updates = {
             "terminal_roic_source": terminal_roic.source,
             "terminal_roic_methodology": terminal_roic.methodology,
@@ -1554,6 +1601,19 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 )
             )
         multistage_plan = multistage_plan.model_copy(update=plan_updates)
+    elif operating_evidence is not None:
+        pipeline_result = OperatingForecastPipelineService(
+            fcff_service=forecast_service,
+        ).forecast(
+            financials,
+            evidence=operating_evidence,
+            parameters=forecast_parameters,
+            as_of=valuation_date,
+            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+        )
+        forecast = pipeline_result.forecast
+        forecast_parameters = pipeline_result.integration.parameters
+        additional_warnings.extend(pipeline_result.warnings)
     parameters = FcffDcfParameters(
         wacc=resolved.wacc,
         wacc_source=resolved.wacc_source,
@@ -1629,9 +1689,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         share_repurchase_parameters,
     )
     asset_life_warnings = (
-        asset_life_resolution.warnings
-        if asset_life_resolution is not None
-        else ()
+        asset_life_resolution.warnings if asset_life_resolution is not None else ()
     )
     if terminal_roic.warnings or asset_life_warnings:
         result = result.model_copy(
@@ -2108,6 +2166,47 @@ async def _retrieve_forward_estimates(
         )
 
 
+async def _retrieve_operating_evidence(
+    financials: NormalizedCompanyFinancials,
+    forecast,
+    as_of: datetime.date,
+) -> tuple[object | None, tuple[str, ...]]:
+    """Resolve an injected structured operating-evidence provider.
+
+    The normal CLI has no production operating-discovery default.  Tests or a
+    host application may inject a provider through ``OPERATING_EVIDENCE_PROVIDER``;
+    the contract receives normalized company data and fiscal years only, never a
+    ticker-specific lookup instruction.
+    """
+
+    provider = OPERATING_EVIDENCE_PROVIDER
+    if provider is None:
+        return None, ()
+    resolver = getattr(provider, "discover", None) or getattr(
+        provider, "retrieve", None
+    )
+    if resolver is None and callable(provider):
+        resolver = provider
+    if resolver is None:
+        return None, (
+            "Structured operating evidence provider is invalid: expected "
+            "discover, retrieve, or a callable",
+        )
+    try:
+        evidence = resolver(
+            financials=financials,
+            company_id=financials.company_id,
+            as_of=as_of,
+            fiscal_years=tuple(item.fiscal_year for item in forecast.observations),
+        )
+        if hasattr(evidence, "__await__"):
+            evidence = await evidence
+        warnings = tuple(getattr(evidence, "warnings", ()))
+        return evidence, warnings
+    except Exception as exc:
+        return None, (f"Structured operating evidence unavailable: {exc}",)
+
+
 def _merge_forward_growth_evidence(
     management: ForwardGrowthEvidence,
     consensus: ForwardGrowthEvidence,
@@ -2375,9 +2474,7 @@ def _forward_growth_evidence(
     records = ()
     if guidance_overlay is not None:
         records = (*guidance_overlay.applications, *guidance_overlay.evidence_only)
-    evidence_records = tuple(
-        getattr(item, "guidance", item) for item in records
-    )
+    evidence_records = tuple(getattr(item, "guidance", item) for item in records)
     traits = {getattr(item, "value", str(item)) for item in economic_traits}
     backlog = "backlog_driven" in traits
     for item in guidance_overlay.applications if guidance_overlay is not None else ():
@@ -2410,9 +2507,7 @@ def _forward_growth_evidence(
         if application.driver == "revenue_growth"
         and getattr(getattr(application.guidance, "metric", None), "value", "")
         == "revenue_growth"
-        and getattr(
-            getattr(application.guidance, "period_type", None), "value", ""
-        )
+        and getattr(getattr(application.guidance, "period_type", None), "value", "")
         == "fiscal_year"
         and application.guidance.fiscal_year == application.fiscal_year
         and application.value is not None
@@ -2426,10 +2521,7 @@ def _forward_growth_evidence(
             # an aligned prefix. If there is a later application after the
             # gap, leave the path empty so the overlaid forecast path retains
             # that record's original fiscal-year position.
-            if any(
-                year in growth_applications
-                for year in forecast_years[index + 1 :]
-            ):
+            if any(year in growth_applications for year in forecast_years[index + 1 :]):
                 forward_growth_records = []
             break
         forward_growth_records.append((fiscal_year, value))
@@ -2444,6 +2536,7 @@ def _forward_growth_evidence(
         guidance_growth_path=tuple(
             growth_applications[year] for year in sorted(growth_applications)
         ),
+        guidance_growth_path_by_year=tuple(sorted(growth_applications.items())),
         confidence="high" if forward_growth_records else None,
     )
 

@@ -1377,6 +1377,18 @@ class FcffDcfResult(BaseModel):
     forecast_cell_audits: dict[int, dict[str, ForecastValue]] = Field(
         default_factory=dict
     )
+    operating_driver_coverage: Decimal | None = None
+    operating_reconstruction_error: Decimal | None = None
+    operating_confidence: str | None = None
+    operating_own_supported_years: tuple[int, ...] = ()
+    operating_consensus_years: tuple[int, ...] = ()
+    operating_divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_divergence: Decimal | None = None
+    operating_transition_start_year: int | None = None
+    operating_warnings: tuple[str, ...] = ()
+    operating_selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_confidence_by_year: dict[int, str] = Field(default_factory=dict)
     capital_bridge: FcffDcfCapitalBridge
     explicit_forecast_present_value: PresentValueResult
     terminal_value: TerminalValueResult

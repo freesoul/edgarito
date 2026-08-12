@@ -531,6 +531,21 @@ class FcffForecast(BaseModel):
     current_growth_rate: Optional[Decimal] = None
     normalized_historical_growth: Optional[Decimal] = None
     normalized_historical_growth_path: tuple[Decimal, ...] = ()
+    # Optional provider-neutral operating-reconciliation audit.  These fields
+    # are populated only when structured operating evidence is injected; the
+    # ordinary FCFF path remains unchanged when it is absent.
+    operating_driver_coverage: Optional[Decimal] = None
+    operating_reconstruction_error: Optional[Decimal] = None
+    operating_confidence: Optional[str] = None
+    operating_own_supported_years: tuple[int, ...] = ()
+    operating_consensus_years: tuple[int, ...] = ()
+    operating_divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_divergence: Optional[Decimal] = None
+    operating_transition_start_year: Optional[int] = None
+    operating_warnings: tuple[str, ...] = ()
+    operating_selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_confidence_by_year: dict[int, str] = Field(default_factory=dict)
 
     @property
     def current_growth(self) -> Optional[Decimal]:
@@ -558,6 +573,34 @@ class FcffForecast(BaseModel):
         """Return the optional DCF-only remaining-period representation."""
 
         return self.dcf_stub
+
+    @property
+    def operating_coverage(self) -> Optional[Decimal]:
+        """Short alias for the operating driver reconstruction coverage."""
+
+        return self.operating_driver_coverage
+
+    @property
+    def operating_supported_years(self) -> tuple[int, ...]:
+        """Short alias for independently supported operating years."""
+
+        return self.operating_own_supported_years
+
+    @property
+    def own_supported_years(self) -> tuple[int, ...]:
+        return self.operating_own_supported_years
+
+    @property
+    def consensus_years(self) -> tuple[int, ...]:
+        return self.operating_consensus_years
+
+    @property
+    def divergence(self) -> Optional[Decimal]:
+        return self.operating_divergence
+
+    @property
+    def transition_start_year(self) -> Optional[int]:
+        return self.operating_transition_start_year
 
 
 class AdaptiveMultistagePlan(BaseModel):
@@ -602,6 +645,7 @@ class AdaptiveMultistagePlan(BaseModel):
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
     forward_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    guidance_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
     forward_revenue_estimates: tuple[ForwardRevenueEstimate, ...] = ()
     forward_estimate_provider: Optional[str] = None
     forward_estimate_years: tuple[int, ...] = ()
@@ -612,6 +656,18 @@ class AdaptiveMultistagePlan(BaseModel):
     stable_state_supported: bool = False
     current_growth_near_terminal: bool = False
     warnings: tuple[str, ...] = ()
+    operating_driver_coverage: Optional[Decimal] = None
+    operating_reconstruction_error: Optional[Decimal] = None
+    operating_confidence: Optional[str] = None
+    operating_own_supported_years: tuple[int, ...] = ()
+    operating_consensus_years: tuple[int, ...] = ()
+    operating_divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_divergence: Optional[Decimal] = None
+    operating_transition_start_year: Optional[int] = None
+    operating_warnings: tuple[str, ...] = ()
+    operating_selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    operating_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_confidence_by_year: dict[int, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_stages(self) -> "AdaptiveMultistagePlan":
@@ -654,6 +710,22 @@ class AdaptiveMultistagePlan(BaseModel):
     def stable_state_eligible(self) -> bool:
         return self.stable_state_supported
 
+    @property
+    def own_supported_years(self) -> tuple[int, ...]:
+        return self.operating_own_supported_years
+
+    @property
+    def consensus_years(self) -> tuple[int, ...]:
+        return self.operating_consensus_years
+
+    @property
+    def divergence(self) -> Optional[Decimal]:
+        return self.operating_divergence
+
+    @property
+    def transition_start_year(self) -> Optional[int]:
+        return self.operating_transition_start_year
+
 
 class ForwardGrowthEvidence(BaseModel):
     """Forward indicators that justify delaying the historical growth fade."""
@@ -694,6 +766,11 @@ class ForwardGrowthEvidence(BaseModel):
         ),
     )
     confidence: Optional[str] = None
+    # Exact fiscal-year positions for management growth applications.  The
+    # compact ``guidance_growth_path`` remains for compatibility, while this
+    # mapping prevents consensus-filled years from being mislabeled as
+    # management evidence during later reconciliation.
+    guidance_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
 
     @field_validator("growth_path", "guidance_growth_path", mode="before")
     @classmethod
@@ -704,13 +781,18 @@ class ForwardGrowthEvidence(BaseModel):
             return (value,)
         return tuple(value)
 
+    @field_validator("guidance_growth_path_by_year", mode="before")
+    @classmethod
+    def normalize_guidance_year_path(cls, value):
+        if value is None:
+            return ()
+        return tuple((int(year), rate) for year, rate in value)
+
     @field_validator("growth_path", "guidance_growth_path")
     @classmethod
     def validate_growth_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if any(
-            not item.is_finite()
-            or item <= Decimal("-100")
-            or item > Decimal("1000")
+            not item.is_finite() or item <= Decimal("-100") or item > Decimal("1000")
             for item in value
         ):
             raise ValueError(
@@ -729,9 +811,7 @@ class ForwardGrowthEvidence(BaseModel):
     @classmethod
     def validate_growth_anchor(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and (
-            not value.is_finite()
-            or value <= Decimal("-100")
-            or value > Decimal("1000")
+            not value.is_finite() or value <= Decimal("-100") or value > Decimal("1000")
         ):
             raise ValueError(
                 "Forward growth evidence anchor must be finite and greater than -100%"
@@ -823,6 +903,7 @@ class ForwardGrowthOutlook(BaseModel):
     management_guidance_path: tuple[Decimal, ...] = ()
     forward_estimates_path: tuple[Decimal, ...] = ()
     growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
+    guidance_growth_path_by_year: tuple[tuple[int, Decimal], ...] = ()
     forward_revenue_estimates: tuple[ForwardRevenueEstimate, ...] = ()
     forward_estimate_provider: Optional[str] = None
     forward_estimate_years: tuple[int, ...] = ()
@@ -868,6 +949,13 @@ class ForwardGrowthOutlook(BaseModel):
             return ()
         return tuple((int(year), rate) for year, rate in value)
 
+    @field_validator("guidance_growth_path_by_year", mode="before")
+    @classmethod
+    def normalize_guidance_year_path(cls, value):
+        if value is None:
+            return ()
+        return tuple((int(year), rate) for year, rate in value)
+
     @field_validator(
         "growth_path",
         "historical_growth_path",
@@ -877,9 +965,7 @@ class ForwardGrowthOutlook(BaseModel):
     @classmethod
     def validate_path(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
         if any(
-            not item.is_finite()
-            or item <= Decimal("-100")
-            or item > Decimal("1000")
+            not item.is_finite() or item <= Decimal("-100") or item > Decimal("1000")
             for item in value
         ):
             raise ValueError(
@@ -891,11 +977,11 @@ class ForwardGrowthOutlook(BaseModel):
     @classmethod
     def validate_rate(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and (
-            not value.is_finite()
-            or value <= Decimal("-100")
-            or value > Decimal("1000")
+            not value.is_finite() or value <= Decimal("-100") or value > Decimal("1000")
         ):
-            raise ValueError("Forward growth rates must be finite and greater than -100%")
+            raise ValueError(
+                "Forward growth rates must be finite and greater than -100%"
+            )
         return value
 
     @field_validator("confidence")

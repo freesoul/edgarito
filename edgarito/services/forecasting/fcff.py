@@ -235,9 +235,7 @@ class FcffForecastService:
         historical_periods = periods[-parameters.historical_window :]
         # Normalized growth needs one predecessor period; operational driver
         # history remains limited to the configured window above.
-        normalized_historical_periods = periods[
-            -(parameters.historical_window + 1) :
-        ]
+        normalized_historical_periods = periods[-(parameters.historical_window + 1) :]
         normalized_historical_growth_path = tuple(
             self._historical_values(
                 FcffForecastDriver.REVENUE_GROWTH,
@@ -1391,7 +1389,9 @@ class FcffForecastService:
                     driver == FcffForecastDriver.REVENUE_GROWTH
                     and fallback_revenue_growth is not None
                 ):
-                    paths[driver] = (fallback_revenue_growth,) * parameters.forecast_years
+                    paths[driver] = (
+                        fallback_revenue_growth,
+                    ) * parameters.forecast_years
                     sources[driver] = ForecastAssumptionSource.CURRENT_RUN_RATE
                     continue
                 option = driver.value.replace("_", "-")
@@ -1416,8 +1416,10 @@ class FcffForecastService:
         if latest_annual_revenue <= 0:
             return None
         if context.actual_ytd is not None and context.actual_quarters:
-            annualized_revenue = context.actual_ytd.revenue * Decimal(4) / Decimal(
-                context.actual_quarters
+            annualized_revenue = (
+                context.actual_ytd.revenue
+                * Decimal(4)
+                / Decimal(context.actual_quarters)
             )
             return (annualized_revenue / latest_annual_revenue - Decimal(1)) * PERCENT
         if context.seed_type in {

@@ -1,0 +1,65 @@
+{
+  "segments": [
+    {
+      "segment_id": "cloud",
+      "name": "Cloud",
+      "currency": "USD"
+    }
+  ],
+  "definitions": [
+    {
+      "driver_id": "cloud-revenue",
+      "archetype": "volume_price",
+      "segment_id": "cloud",
+      "output_metric": "revenue",
+      "input_metrics": ["volume", "price"],
+      "units": {
+        "volume": "units",
+        "price": "USD/unit"
+      },
+      "formula_id": "volume_price",
+      "required_inputs": ["volume", "price"]
+    }
+  ],
+  "observations": [
+    {
+      "segment_id": "cloud",
+      "driver_id": "volume",
+      "fiscal_year": 2024,
+      "value": "60",
+      "unit": "units",
+      "origin": "reported",
+      "confidence": "high"
+    },
+    {
+      "segment_id": "cloud",
+      "driver_id": "price",
+      "fiscal_year": 2024,
+      "value": "2",
+      "unit": "USD/unit",
+      "origin": "reported",
+      "confidence": "high"
+    },
+    {
+      "segment_id": "cloud",
+      "driver_id": "volume",
+      "fiscal_year": 2025,
+      "value": "70",
+      "unit": "units",
+      "origin": "reported",
+      "confidence": "high"
+    },
+    {
+      "segment_id": "cloud",
+      "driver_id": "price",
+      "fiscal_year": 2025,
+      "value": "2",
+      "unit": "USD/unit",
+      "origin": "reported",
+      "confidence": "high"
+    }
+  ],
+  "historical_revenue": {
+    "2024": "120"
+  }
+}

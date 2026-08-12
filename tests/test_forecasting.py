@@ -298,9 +298,7 @@ def _fcff_financials_with_revenue_history(
     revenues: dict[int, str],
 ) -> NormalizedCompanyFinancials:
     template = [
-        item
-        for item in _fcff_financials().observations
-        if item.fiscal_year == 2024
+        item for item in _fcff_financials().observations if item.fiscal_year == 2024
     ]
     return _fcff_financials().model_copy(
         update={
@@ -353,9 +351,7 @@ def test_fcff_normalized_growth_uses_three_rates_without_expanding_driver_histor
         Decimal("3"),
     )
     assert outlook.historical_growth_path == expected_path
-    assert outlook.normalized_growth == Decimal(
-        "21.66666666666666666666666667"
-    )
+    assert outlook.normalized_growth == Decimal("21.66666666666666666666666667")
 
 
 def test_adaptive_growth_metadata_separates_history_guidance_and_estimates():
@@ -1004,8 +1000,7 @@ def test_mature_low_growth_history_can_support_stable_state_without_current_prox
         update={
             "observations": [
                 item.model_copy(update={"value": Decimal("102.5")})
-                if item.concept == FinancialConcept.REVENUE
-                and item.fiscal_year == 2024
+                if item.concept == FinancialConcept.REVENUE and item.fiscal_year == 2024
                 else item
                 for item in _fcff_financials().observations
             ]
@@ -1058,10 +1053,47 @@ def test_explicit_forward_growth_path_is_preserved_before_terminal_fade():
     assert plan.forward_growth_source == ForecastAssumptionSource.EXPLICIT.value
     assert plan.forward_growth_confidence == "high"
     assert plan.forward_growth_path == (Decimal("12"), Decimal("10"), Decimal("8"))
-    assert [
-        item.revenue_growth for item in forecast.observations[:3]
-    ] == [Decimal("12"), Decimal("10"), Decimal("8")]
+    assert [item.revenue_growth for item in forecast.observations[:3]] == [
+        Decimal("12"),
+        Decimal("10"),
+        Decimal("8"),
+    ]
     assert forecast.observations[3].revenue_growth > Decimal("3")
+
+
+def test_sparse_absolute_revenue_anchors_keep_fiscal_year_positions_before_fade():
+    financials = _fcff_financials()
+    service = FcffForecastService()
+    parameters = FcffForecastParameters(
+        forecast_years=4,
+        revenue_anchors={2026: Decimal("132"), 2028: Decimal("174.24")},
+        revenue_anchor_sources={
+            2026: ForecastAssumptionSource.EXPLICIT,
+            2028: ForecastAssumptionSource.FORWARD_EVIDENCE,
+        },
+    )
+    seed = service.forecast(financials, parameters)
+    forecast, plan = AdaptiveMultistageFcffForecastService(service).forecast(
+        financials,
+        seed,
+        parameters,
+        Decimal("3"),
+        MultistageValuationConfiguration(
+            terminal_return_on_invested_capital=Decimal("15")
+        ),
+    )
+
+    assert [item.revenue for item in forecast.observations[:4]] == [
+        Decimal("144"),
+        Decimal("132"),
+        Decimal("158.4"),
+        Decimal("174.24"),
+    ]
+    assert plan.explicit_growth_prefix_years >= 4
+    assert forecast.observations[1].revenue_growth == Decimal(
+        "-8.333333333333333333333333330"
+    )
+    assert forecast.observations[3].revenue_growth == Decimal("10")
 
 
 def test_management_revenue_anchor_resolves_as_forward_growth_evidence():
@@ -1087,13 +1119,13 @@ def test_management_revenue_anchor_resolves_as_forward_growth_evidence():
         ),
     )
 
-    assert plan.forward_growth_source == ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value
+    assert (
+        plan.forward_growth_source == ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value
+    )
     assert plan.forward_growth_rate == Decimal("10")
     assert plan.forward_growth_confidence == "high"
     assert forecast.observations[0].revenue == Decimal("132")
-    assert forecast.observations[0].cell_audits["revenue"].source.startswith(
-        "derived["
-    )
+    assert forecast.observations[0].cell_audits["revenue"].source.startswith("derived[")
 
 
 def test_run_rate_only_growth_is_low_confidence_and_does_not_claim_stability():

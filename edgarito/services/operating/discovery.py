@@ -175,7 +175,9 @@ class OperatingEvidenceDiscoveryService:
                 )
             except Exception as exc:
                 return OperatingForecastDiscoveryResult(
-                    warnings=(f"Operating evidence discovery skipped: SEC identifier lookup failed: {exc}",)
+                    warnings=(
+                        f"Operating evidence discovery skipped: SEC identifier lookup failed: {exc}",
+                    )
                 )
 
         try:
@@ -188,7 +190,9 @@ class OperatingEvidenceDiscoveryService:
             )
         except Exception as exc:
             return OperatingForecastDiscoveryResult(
-                warnings=(f"Operating evidence discovery skipped: SEC filing retrieval failed: {exc}",)
+                warnings=(
+                    f"Operating evidence discovery skipped: SEC filing retrieval failed: {exc}",
+                )
             )
 
         try:
@@ -198,7 +202,9 @@ class OperatingEvidenceDiscoveryService:
             )
         except Exception as exc:
             return OperatingForecastDiscoveryResult(
-                warnings=(f"Operating evidence discovery skipped: filing selection failed: {exc}",)
+                warnings=(
+                    f"Operating evidence discovery skipped: filing selection failed: {exc}",
+                )
             )
 
         # Match management-guidance ordering: preserve periodic primary reports
@@ -227,7 +233,9 @@ class OperatingEvidenceDiscoveryService:
         seen_observations: dict[
             tuple[str, str, int, str], OperatingDriverObservation
         ] = {}
-        seen_programs: dict[tuple[str, int | None, str], OperatingInvestmentProgram] = {}
+        seen_programs: dict[
+            tuple[str, int | None, str], OperatingInvestmentProgram
+        ] = {}
 
         for filing_index, filing in enumerate(selected_filings):
             if documents_inspected >= self.max_documents:
@@ -268,7 +276,9 @@ class OperatingEvidenceDiscoveryService:
                     f"Operating document selection skipped for {filing.accession_number}: {exc}"
                 )
                 continue
-            if not documents and any(document.is_pdf for document in populated.documents):
+            if not documents and any(
+                document.is_pdf for document in populated.documents
+            ):
                 warnings.append(
                     f"{filing.form} {filing.accession_number} has no selected "
                     "HTML/text operating evidence document; PDF extraction is unsupported"

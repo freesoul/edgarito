@@ -300,7 +300,9 @@ class OperatingInvestmentProgram(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     evidence: EvidenceReference | None = None
 
-    @field_validator("program_id", "name", "segment_id", "fiscal_period", "unit", "purpose")
+    @field_validator(
+        "program_id", "name", "segment_id", "fiscal_period", "unit", "purpose"
+    )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Investment program text")
@@ -312,7 +314,9 @@ class OperatingInvestmentProgram(BaseModel):
             return None
         normalized = value.strip().upper()
         if not _CURRENCY_PATTERN.fullmatch(normalized):
-            raise ValueError("Investment program currency must be a three-letter ISO code")
+            raise ValueError(
+                "Investment program currency must be a three-letter ISO code"
+            )
         return normalized
 
     @field_validator("source")
@@ -383,16 +387,18 @@ class ExtractedOperatingSegment(BaseModel):
             return None
         normalized = value.strip().upper()
         if not _CURRENCY_PATTERN.fullmatch(normalized):
-            raise ValueError("Extracted operating segment currency must be a three-letter ISO code")
+            raise ValueError(
+                "Extracted operating segment currency must be a three-letter ISO code"
+            )
         return normalized
 
     @field_validator("dimensions")
     @classmethod
     def normalize_dimensions(cls, value: dict[str, str]) -> dict[str, str]:
         return {
-            _normalize_required_text(key, "Extracted segment dimension key"): _normalize_required_text(
-                item, "Extracted segment dimension value"
-            )
+            _normalize_required_text(
+                key, "Extracted segment dimension key"
+            ): _normalize_required_text(item, "Extracted segment dimension value")
             for key, item in value.items()
         }
 
@@ -444,9 +450,9 @@ class ExtractedOperatingDriverDefinition(BaseModel):
     @classmethod
     def normalize_units(cls, value: dict[str, str]) -> dict[str, str]:
         return {
-            _normalize_required_text(metric, "Extracted operating unit metric"): _normalize_required_text(
-                unit, "Extracted operating unit"
-            )
+            _normalize_required_text(
+                metric, "Extracted operating unit metric"
+            ): _normalize_required_text(unit, "Extracted operating unit")
             for metric, unit in value.items()
         }
 
@@ -469,10 +475,7 @@ class ExtractedOperatingDriverDefinition(BaseModel):
         data.setdefault("required_inputs", list(data.get("required_inputs") or metrics))
         data.setdefault(
             "units",
-            {
-                metric: "unspecified"
-                for metric in metrics
-            },
+            {metric: "unspecified" for metric in metrics},
         )
         data.setdefault("formula_id", archetype.value)
         return data
@@ -482,13 +485,19 @@ class ExtractedOperatingDriverDefinition(BaseModel):
         input_metrics = self.input_metrics or _archetype_metrics(self.archetype)
         required = self.required_inputs or input_metrics
         if not set(required).issubset(input_metrics):
-            raise ValueError("Extracted required inputs must be listed in input_metrics")
+            raise ValueError(
+                "Extracted required inputs must be listed in input_metrics"
+            )
         if not set(self.optional_inputs).issubset(input_metrics):
-            raise ValueError("Extracted optional inputs must be listed in input_metrics")
+            raise ValueError(
+                "Extracted optional inputs must be listed in input_metrics"
+            )
         if set(required) & set(self.optional_inputs):
             raise ValueError("Extracted required and optional inputs must be disjoint")
         if self.units and not set(input_metrics).issubset(self.units):
-            raise ValueError("Extracted operating definition requires units for all inputs")
+            raise ValueError(
+                "Extracted operating definition requires units for all inputs"
+            )
         return self
 
 
@@ -511,13 +520,15 @@ class ExtractedOperatingObservation(BaseModel):
     unit: str
     currency: str | None = None
     basis: str | None = None
-    origin: Literal[
-        "reported", "first_party_observation", "management_guidance"
-    ] = "reported"
+    origin: Literal["reported", "first_party_observation", "management_guidance"] = (
+        "reported"
+    )
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
-    @field_validator("segment_id", "driver_id", "fiscal_period", "unit", "basis", "supporting_text")
+    @field_validator(
+        "segment_id", "driver_id", "fiscal_period", "unit", "basis", "supporting_text"
+    )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted operating observation text")
@@ -529,7 +540,9 @@ class ExtractedOperatingObservation(BaseModel):
             return None
         normalized = value.strip().upper()
         if not _CURRENCY_PATTERN.fullmatch(normalized):
-            raise ValueError("Extracted operating observation currency must be a three-letter ISO code")
+            raise ValueError(
+                "Extracted operating observation currency must be a three-letter ISO code"
+            )
         return normalized
 
     @field_validator("value", "low", "high")
@@ -554,14 +567,20 @@ class ExtractedOperatingObservation(BaseModel):
     @model_validator(mode="after")
     def require_value(self) -> "ExtractedOperatingObservation":
         if self.value is None and self.low is None and self.high is None:
-            raise ValueError("Extracted operating observation requires a value or range")
+            raise ValueError(
+                "Extracted operating observation requires a value or range"
+            )
         if self.low is not None and self.high is not None and self.low > self.high:
             raise ValueError("Extracted operating observation low cannot exceed high")
         if self.value is not None:
             if self.low is not None and self.value < self.low:
-                raise ValueError("Extracted operating observation value cannot be below low")
+                raise ValueError(
+                    "Extracted operating observation value cannot be below low"
+                )
             if self.high is not None and self.value > self.high:
-                raise ValueError("Extracted operating observation value cannot exceed high")
+                raise ValueError(
+                    "Extracted operating observation value cannot exceed high"
+                )
         return self
 
 
@@ -599,7 +618,15 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
-    @field_validator("program_id", "name", "segment_id", "fiscal_period", "unit", "purpose", "supporting_text")
+    @field_validator(
+        "program_id",
+        "name",
+        "segment_id",
+        "fiscal_period",
+        "unit",
+        "purpose",
+        "supporting_text",
+    )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted investment-program text")
@@ -611,7 +638,9 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
             return None
         normalized = value.strip().upper()
         if not _CURRENCY_PATTERN.fullmatch(normalized):
-            raise ValueError("Extracted investment-program currency must be a three-letter ISO code")
+            raise ValueError(
+                "Extracted investment-program currency must be a three-letter ISO code"
+            )
         return normalized
 
     @field_validator("value", "low", "high")
@@ -639,9 +668,13 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
             raise ValueError("Extracted investment-program low cannot exceed high")
         if self.value is not None:
             if self.low is not None and self.value < self.low:
-                raise ValueError("Extracted investment-program value cannot be below low")
+                raise ValueError(
+                    "Extracted investment-program value cannot be below low"
+                )
             if self.high is not None and self.value > self.high:
-                raise ValueError("Extracted investment-program value cannot exceed high")
+                raise ValueError(
+                    "Extracted investment-program value cannot exceed high"
+                )
         return self
 
 
@@ -752,9 +785,7 @@ class OperatingEvidenceAuditRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    record_type: Literal[
-        "segment", "definition", "observation", "investment_program"
-    ]
+    record_type: Literal["segment", "definition", "observation", "investment_program"]
     segment_id: str | None = None
     segment_name: str | None = None
     driver_id: str | None = None
@@ -847,6 +878,7 @@ class OperatingExtractionCacheEntry(OperatingEvidenceExtractionResult):
     content_hash: str
     accession_number: str
     document_filename: str
+
     @field_validator(
         "model",
         "reasoning_effort",
@@ -859,6 +891,7 @@ class OperatingExtractionCacheEntry(OperatingEvidenceExtractionResult):
     @classmethod
     def normalize_cache_text(cls, value: str) -> str:
         return _normalize_required_text(value, "Operating extraction cache text")
+
 
 # Descriptive aliases keep the extraction boundary discoverable without
 # creating parallel schema implementations.
@@ -925,6 +958,21 @@ class SegmentRevenueForecast(BaseModel):
     confidence_by_year: dict[int, str] = Field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     unit: str = "currency"
+    # Historical driver validation is deliberately an audit result rather
+    # than another forecast input.  ``None`` means that no reported segment
+    # revenue history was supplied and therefore no reconstruction could be
+    # tested.  A zero coverage value means history was supplied but none of
+    # its years had a complete driver reconstruction.
+    driver_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
+    reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
+    reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    supported_years: tuple[int, ...] = ()
+    # Forward years for which this segment supplied its own usable operating
+    # path.  ``supported_years`` is reserved for the historical reconstruction
+    # audit above; keeping the two sets separate makes reconciliation audits
+    # unambiguous.
+    own_supported_years: tuple[int, ...] = ()
+    confidence: Literal["high", "medium", "low"] = "low"
 
     @field_validator("unit")
     @classmethod
@@ -987,6 +1035,46 @@ class SegmentRevenueForecast(BaseModel):
             _normalize_required_text(item, "Segment forecast warning") for item in value
         )
 
+    @field_validator("driver_coverage", "reconstruction_error")
+    @classmethod
+    def validate_reconstruction_metric(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Segment reconstruction audit")
+
+    @field_validator("reconstruction_error_by_year")
+    @classmethod
+    def validate_reconstruction_error_by_year(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        normalized: dict[int, Decimal] = {}
+        for year, error in value.items():
+            normalized_year = int(year)
+            normalized_error = _non_negative_decimal(
+                error, "Segment reconstruction errors"
+            )
+            normalized[normalized_year] = normalized_error
+        return normalized
+
+    @field_validator("supported_years")
+    @classmethod
+    def validate_supported_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Segment supported years")
+        return value
+
+    @field_validator("own_supported_years")
+    @classmethod
+    def validate_own_supported_year_values(
+        cls, value: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Segment own-supported years")
+        return value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_reconstruction_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
     @model_validator(mode="after")
     def validate_forecast(self) -> "SegmentRevenueForecast":
         _validate_year_sequence(self.fiscal_years, "Segment forecast years")
@@ -1002,10 +1090,23 @@ class SegmentRevenueForecast(BaseModel):
             self.revenue, self.revenue_growth, "Segment revenue growth"
         )
         _validate_subset(self.explicit_years, self.fiscal_years, "explicit years")
+        _validate_subset(
+            self.own_supported_years,
+            self.fiscal_years,
+            "own-supported years",
+        )
         _validate_year_map(self.source_by_year, self.fiscal_years, "source_by_year")
         _validate_year_map(
             self.confidence_by_year, self.fiscal_years, "confidence_by_year"
         )
+        if self.driver_coverage is not None and not (
+            Decimal(0) <= self.driver_coverage <= Decimal(1)
+        ):
+            raise ValueError("Segment driver coverage must be between 0 and 1")
+        if set(self.reconstruction_error_by_year) - set(self.supported_years):
+            raise ValueError(
+                "Segment reconstruction errors must be reported for supported years"
+            )
         keys = [
             (item.segment_id, item.driver_id, item.fiscal_year)
             for item in self.driver_forecasts
@@ -1020,6 +1121,24 @@ class SegmentRevenueForecast(BaseModel):
             if item.fiscal_year not in self.fiscal_years:
                 raise ValueError("Driver forecast year must be in fiscal_years")
         return self
+
+    @property
+    def driver_confidence(self) -> str:
+        """Compatibility alias for the reconstruction confidence field."""
+
+        return self.confidence
+
+    @property
+    def coverage_ratio(self) -> Decimal | None:
+        """Compatibility/readability alias for ``driver_coverage``."""
+
+        return self.driver_coverage
+
+    @property
+    def own_supported(self) -> tuple[int, ...]:
+        """Compatibility/readability alias for ``own_supported_years``."""
+
+        return self.own_supported_years
 
 
 class CompanyOperatingForecast(BaseModel):
@@ -1040,6 +1159,26 @@ class CompanyOperatingForecast(BaseModel):
     confidence_by_year: dict[int, str] = Field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     unit: str = "currency"
+    # See ``SegmentRevenueForecast`` for the distinction between unavailable
+    # validation history (``None``) and zero validated coverage.
+    driver_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
+    reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
+    reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    supported_years: tuple[int, ...] = ()
+    # ``supported_years`` describes historical driver reconstruction.  These
+    # fields describe the forward reconciliation and are populated by the
+    # reconciliation seam when consensus is available.
+    own_supported_years: tuple[int, ...] = ()
+    consensus_years: tuple[int, ...] = ()
+    divergence_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    divergence: Decimal | None = Field(default=None, allow_inf_nan=True)
+    confidence: Literal["high", "medium", "low"] = "low"
+    selected_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    selected_source_by_year: dict[int, str] = Field(default_factory=dict)
+    selected_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    independent_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    consensus_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    management_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
 
     @field_validator("company_id")
     @classmethod
@@ -1109,6 +1248,97 @@ class CompanyOperatingForecast(BaseModel):
             _normalize_required_text(item, "Company forecast warning") for item in value
         )
 
+    @field_validator("driver_coverage", "reconstruction_error")
+    @classmethod
+    def validate_reconstruction_metric(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Company reconstruction audit")
+
+    @field_validator("reconstruction_error_by_year")
+    @classmethod
+    def validate_reconstruction_error_by_year(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        normalized: dict[int, Decimal] = {}
+        for year, error in value.items():
+            normalized_year = int(year)
+            normalized_error = _non_negative_decimal(
+                error, "Company reconstruction errors"
+            )
+            normalized[normalized_year] = normalized_error
+        return normalized
+
+    @field_validator("supported_years")
+    @classmethod
+    def validate_supported_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Company supported years")
+        return value
+
+    @field_validator("own_supported_years", "consensus_years")
+    @classmethod
+    def validate_reconciliation_year_values(
+        cls, value: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Company reconciliation years")
+        return value
+
+    @field_validator("divergence_by_year")
+    @classmethod
+    def validate_divergence_by_year(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        normalized: dict[int, Decimal] = {}
+        for year, divergence in value.items():
+            normalized[int(year)] = _finite_decimal(
+                divergence, "Company revenue divergence"
+            )
+        return normalized
+
+    @field_validator("divergence")
+    @classmethod
+    def validate_divergence(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Company revenue divergence")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_reconstruction_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @field_validator(
+        "selected_revenue_by_year",
+        "independent_revenue_by_year",
+        "consensus_revenue_by_year",
+        "management_revenue_by_year",
+    )
+    @classmethod
+    def validate_revenue_audit_maps(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        return {
+            int(year): _non_negative_decimal(amount, "Company revenue audit")
+            for year, amount in value.items()
+        }
+
+    @field_validator("selected_source_by_year")
+    @classmethod
+    def normalize_selected_sources(cls, value: dict[int, str]) -> dict[int, str]:
+        return {
+            int(year): _normalize_required_text(source, "Company selected source")
+            for year, source in value.items()
+        }
+
+    @field_validator("selected_confidence_by_year")
+    @classmethod
+    def normalize_selected_confidences(cls, value: dict[int, str]) -> dict[int, str]:
+        normalized = {
+            int(year): str(getattr(confidence, "value", confidence)).strip().casefold()
+            for year, confidence in value.items()
+        }
+        if set(normalized.values()) - _CONFIDENCE_LEVELS:
+            raise ValueError("Selected revenue confidence must be high, medium, or low")
+        return normalized
+
     @model_validator(mode="after")
     def validate_forecast(self) -> "CompanyOperatingForecast":
         _validate_year_sequence(self.fiscal_years, "Company forecast years")
@@ -1130,6 +1360,47 @@ class CompanyOperatingForecast(BaseModel):
         _validate_year_map(
             self.confidence_by_year, self.fiscal_years, "confidence_by_year"
         )
+        if self.driver_coverage is not None and not (
+            Decimal(0) <= self.driver_coverage <= Decimal(1)
+        ):
+            raise ValueError("Company driver coverage must be between 0 and 1")
+        _validate_subset(
+            self.own_supported_years,
+            self.fiscal_years,
+            "own-supported years",
+        )
+        _validate_subset(
+            self.consensus_years,
+            self.fiscal_years,
+            "consensus years",
+        )
+        _validate_year_map(
+            self.divergence_by_year,
+            self.fiscal_years,
+            "divergence_by_year",
+        )
+        for values, label in (
+            (self.selected_revenue_by_year, "selected_revenue_by_year"),
+            (self.independent_revenue_by_year, "independent_revenue_by_year"),
+            (self.consensus_revenue_by_year, "consensus_revenue_by_year"),
+            (self.management_revenue_by_year, "management_revenue_by_year"),
+        ):
+            if not set(values).issubset(self.fiscal_years):
+                raise ValueError(f"{label} contains a year outside fiscal_years")
+        _validate_year_map(
+            self.selected_source_by_year,
+            self.fiscal_years,
+            "selected_source_by_year",
+        )
+        _validate_year_map(
+            self.selected_confidence_by_year,
+            self.fiscal_years,
+            "selected_confidence_by_year",
+        )
+        if set(self.reconstruction_error_by_year) - set(self.supported_years):
+            raise ValueError(
+                "Company reconstruction errors must be reported for supported years"
+            )
         segment_ids = [item.segment.segment_id for item in self.segment_forecasts]
         if len(segment_ids) != len(set(segment_ids)):
             raise ValueError("Company segment forecasts must have unique segment IDs")
@@ -1145,6 +1416,62 @@ class CompanyOperatingForecast(BaseModel):
                 "Transition must start after the last explicit forecast year"
             )
         return self
+
+    @property
+    def driver_confidence(self) -> str:
+        """Compatibility alias for the reconstruction confidence field."""
+
+        return self.confidence
+
+    @property
+    def coverage_ratio(self) -> Decimal | None:
+        """Compatibility/readability alias for ``driver_coverage``."""
+
+        return self.driver_coverage
+
+    @property
+    def own_supported(self) -> tuple[int, ...]:
+        """Compatibility/readability alias for ``own_supported_years``."""
+
+        return self.own_supported_years
+
+    @property
+    def audit_diagnostics(self) -> dict[str, object]:
+        """Expose reconciliation and reconstruction facts as one audit view."""
+
+        return {
+            "driver_coverage": self.driver_coverage,
+            "reconstruction_error": self.reconstruction_error,
+            "reconstruction_error_by_year": dict(self.reconstruction_error_by_year),
+            "supported_years": self.supported_years,
+            "own_supported_years": self.own_supported_years,
+            "consensus_years": self.consensus_years,
+            "divergence_by_year": dict(self.divergence_by_year),
+            "divergence": self.divergence,
+            "selected_revenue_by_year": dict(self.selected_revenue_by_year),
+            "selected_source_by_year": dict(self.selected_source_by_year),
+            "selected_confidence_by_year": dict(self.selected_confidence_by_year),
+            "independent_revenue_by_year": dict(self.independent_revenue_by_year),
+            "consensus_revenue_by_year": dict(self.consensus_revenue_by_year),
+            "management_revenue_by_year": dict(self.management_revenue_by_year),
+            "confidence": self.confidence,
+            "warnings": self.warnings,
+        }
+
+    @property
+    def diagnostics(self) -> dict[str, object]:
+        """Short alias for :attr:`audit_diagnostics`."""
+
+        return self.audit_diagnostics
+
+    def materialize_revenue_anchors(self, parameters):
+        """Materialize this selected absolute revenue path into FCFF inputs."""
+
+        from edgarito.services.operating.reconciliation import (
+            materialize_revenue_anchors,
+        )
+
+        return materialize_revenue_anchors(parameters, self)
 
 
 def _normalize_required_text(value: str, label: str) -> str:

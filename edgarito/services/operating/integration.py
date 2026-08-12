@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
 from edgarito.schemas.forward import ForwardRevenueEstimate
@@ -12,8 +13,22 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
-from edgarito.services.forecasting.models import FcffForecastParameters
-from edgarito.services.operating.forecast import OperatingForecastService
+from edgarito.services.financial_observation_availability import (
+    ObservationAvailabilityMode,
+)
+from edgarito.services.forecasting import (
+    AdaptiveMultistageFcffForecastService,
+    AdaptiveMultistagePlan,
+    FcffForecast,
+    FcffForecastParameters,
+    FcffForecastService,
+    ForecastAssumptionSource,
+    ForwardGrowthEvidence,
+)
+from edgarito.services.operating.forecast import (
+    OperatingForecastService,
+    normalize_company_historical_revenue,
+)
 from edgarito.services.operating.reconciliation import (
     RevenueForecastReconciler,
     RevenueForecastReconciliation,
@@ -49,6 +64,101 @@ class OperatingForecastIntegrationResult:
     @property
     def fcff_parameters(self) -> FcffForecastParameters:
         return self.parameters
+
+    @property
+    def own_supported_years(self) -> tuple[int, ...]:
+        return self.reconciled_forecast.own_supported_years
+
+    @property
+    def consensus_years(self) -> tuple[int, ...]:
+        return self.reconciled_forecast.consensus_years
+
+    @property
+    def divergence_by_year(self) -> dict[int, Decimal]:
+        return self.reconciled_forecast.divergence_by_year
+
+    @property
+    def divergence(self) -> Decimal | None:
+        return self.reconciled_forecast.divergence
+
+    @property
+    def audit_diagnostics(self) -> dict[str, object]:
+        return self.reconciled_forecast.audit_diagnostics
+
+    @property
+    def diagnostics(self) -> dict[str, object]:
+        return self.audit_diagnostics
+
+    def materialize_revenue_anchors(
+        self, parameters: FcffForecastParameters
+    ) -> FcffForecastParameters:
+        return self.reconciled_forecast.materialize_revenue_anchors(parameters)
+
+
+@dataclass(frozen=True)
+class OperatingForecastPipelineResult:
+    """Operating reconciliation composed into the ordinary FCFF path."""
+
+    integration: OperatingForecastIntegrationResult
+    seed_forecast: FcffForecast
+    forecast: FcffForecast
+    adaptive_plan: AdaptiveMultistagePlan | None = None
+    forward_growth: ForwardGrowthEvidence | None = None
+
+    @property
+    def independent_forecast(self) -> CompanyOperatingForecast:
+        return self.integration.independent_forecast
+
+    @property
+    def reconciled_forecast(self) -> CompanyOperatingForecast:
+        return self.integration.reconciled_forecast
+
+    @property
+    def reconciliation(self) -> RevenueForecastReconciliation:
+        return self.integration.reconciliation
+
+    @property
+    def parameters(self) -> FcffForecastParameters:
+        return self.forecast.parameters
+
+    @property
+    def fcff_forecast(self) -> FcffForecast:
+        return self.forecast
+
+    @property
+    def fcff(self) -> FcffForecast:
+        return self.forecast
+
+    @property
+    def adaptive_multistage_plan(self) -> AdaptiveMultistagePlan | None:
+        return self.adaptive_plan
+
+    @property
+    def forecast_parameters(self) -> FcffForecastParameters:
+        return self.parameters
+
+    @property
+    def plan(self) -> AdaptiveMultistagePlan | None:
+        return self.adaptive_plan
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    *self.integration.reconciled_forecast.warnings,
+                    *self.forecast.warnings,
+                )
+            )
+        )
+
+    @property
+    def audit_diagnostics(self) -> dict[str, object]:
+        return self.integration.audit_diagnostics
+
+    @property
+    def diagnostics(self) -> dict[str, object]:
+        return self.audit_diagnostics
 
 
 class OperatingForecastIntegrationService:
@@ -89,6 +199,13 @@ class OperatingForecastIntegrationService:
         parameters = fcff_parameters or parameters
         if parameters is None:
             raise TypeError("fcff_parameters is required")
+        segments = tuple(segments)
+        if (
+            historical_revenue is not None
+            and not isinstance(historical_revenue, Mapping)
+            and not isinstance(historical_revenue, (str, bytes))
+        ):
+            historical_revenue = tuple(historical_revenue)
         independent = self.forecast_service.forecast(
             segments,
             definitions,
@@ -98,10 +215,14 @@ class OperatingForecastIntegrationService:
             fiscal_years,
             company_id=company_id,
         )
+        company_history = normalize_company_historical_revenue(
+            historical_revenue,
+            segments,
+        )
         reconciliation = self.reconciler.reconcile_with_details(
             independent,
             consensus_estimates=consensus_estimates,
-            historical_revenue=historical_revenue,
+            historical_revenue=company_history,
             explicit_anchors=explicit_anchors,
             management_anchors=management_anchors,
         )
@@ -120,8 +241,452 @@ class OperatingForecastIntegrationService:
 
 OperatingForecastIntegration = OperatingForecastIntegrationService
 
+
+class OperatingForecastPipelineService:
+    """Run structured operating evidence through FCFF and adaptive forecasting.
+
+    The class is intentionally provider-neutral.  Callers may pass an
+    ``OperatingForecastDiscoveryResult`` or any object/mapping exposing the
+    normalized ``segments``, ``definitions``, ``observations``,
+    ``management_constraints``, and ``historical_revenue`` fields.  Discovery,
+    ticker resolution, and extraction stay outside this seam.
+    """
+
+    def __init__(
+        self,
+        integration_service: OperatingForecastIntegrationService | None = None,
+        fcff_service: FcffForecastService | None = None,
+        adaptive_service: AdaptiveMultistageFcffForecastService | None = None,
+    ) -> None:
+        self.integration_service = (
+            integration_service or OperatingForecastIntegrationService()
+        )
+        self.fcff_service = fcff_service or FcffForecastService()
+        self.adaptive_service = (
+            adaptive_service or AdaptiveMultistageFcffForecastService(self.fcff_service)
+        )
+
+    def forecast(
+        self,
+        financials,
+        evidence: Any = None,
+        parameters: FcffForecastParameters | None = None,
+        *,
+        fcff_parameters: FcffForecastParameters | None = None,
+        segments: Iterable[OperatingSegment] | None = None,
+        definitions: Iterable[OperatingDriverDefinition] | None = None,
+        observations: Iterable[OperatingDriverObservation] | None = None,
+        historical_revenue: Mapping[Any, Any] | None = None,
+        consensus_estimates: Iterable[ForwardRevenueEstimate]
+        | Mapping[Any, Any]
+        | Any = (),
+        consensus: Iterable[ForwardRevenueEstimate]
+        | Mapping[Any, Any]
+        | Any
+        | None = None,
+        explicit_anchors: Mapping[Any, Any] | Iterable[Any] | Any | None = None,
+        management_anchors: Mapping[Any, Any] | Iterable[Any] | Any | None = None,
+        management_constraints: Any = None,
+        fiscal_years: Iterable[int] | None = None,
+        terminal_growth_rate: Decimal | None = None,
+        adaptive_configuration: Any | None = None,
+        forward_evidence: ForwardGrowthEvidence | None = None,
+        normalized_tax_rate: Decimal | None = None,
+        as_of=None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
+        company_id: str | None = None,
+    ) -> OperatingForecastPipelineResult:
+        """Compose the operating selection before adaptive FCFF arithmetic."""
+
+        if parameters is not None and fcff_parameters is not None:
+            raise ValueError("Pass either parameters or fcff_parameters, not both")
+        requested = fcff_parameters or parameters
+        if requested is None:
+            raise TypeError("fcff_parameters is required")
+
+        seed = self.fcff_service.forecast(
+            financials,
+            requested,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        years = tuple(
+            fiscal_years
+            if fiscal_years is not None
+            else (item.fiscal_year for item in seed.observations)
+        )
+        values = _evidence_values(evidence)
+        if consensus is not None:
+            if consensus_estimates not in ((), None):
+                raise ValueError(
+                    "Pass either consensus or consensus_estimates, not both"
+                )
+            consensus_estimates = consensus
+        if segments is not None:
+            values["segments"] = segments
+        if definitions is not None:
+            values["definitions"] = definitions
+        if observations is not None:
+            values["observations"] = observations
+        historical = historical_revenue or values.get("historical_revenue")
+        if historical is None:
+            historical = _financial_revenue_history(financials)
+        constraints = _as_items(values.get("management_constraints") or ())
+        if management_constraints is not None:
+            constraints = (*constraints, *_as_items(management_constraints))
+        selected_explicit = explicit_anchors
+        if selected_explicit is None:
+            selected_explicit = _anchors_by_source(
+                requested, ForecastAssumptionSource.EXPLICIT
+            )
+        selected_management = management_anchors
+        if selected_management is None:
+            selected_management = _anchors_by_source(
+                requested, ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            )
+
+        integration = self.integration_service.integrate(
+            segments=values.get("segments", ()),
+            definitions=values.get("definitions", ()),
+            observations=values.get("observations", ()),
+            management_constraints=constraints,
+            historical_revenue=historical,
+            consensus_estimates=consensus_estimates,
+            explicit_anchors=selected_explicit,
+            management_anchors=selected_management,
+            fiscal_years=years,
+            parameters=requested,
+            company_id=company_id or financials.company_id,
+        )
+        operating_seed = self.fcff_service.forecast(
+            financials,
+            integration.parameters,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        operating_seed = _attach_operating_audit(
+            operating_seed,
+            integration.reconciled_forecast,
+        )
+        operating_growth = _reconciliation_growth_evidence(
+            integration.reconciliation,
+            base_revenue=operating_seed.base_revenue,
+        )
+        combined_growth = _merge_operating_growth_evidence(
+            operating_growth,
+            forward_evidence,
+            years=years,
+        )
+
+        if terminal_growth_rate is None or adaptive_configuration is None:
+            return OperatingForecastPipelineResult(
+                integration=integration,
+                seed_forecast=operating_seed,
+                forecast=operating_seed,
+                forward_growth=combined_growth,
+            )
+
+        forecast, plan = self.adaptive_service.forecast(
+            financials,
+            operating_seed,
+            integration.parameters,
+            terminal_growth_rate,
+            adaptive_configuration,
+            normalized_tax_rate=normalized_tax_rate,
+            forward_evidence=combined_growth,
+            as_of=as_of,
+            availability_mode=availability_mode,
+        )
+        forecast = _attach_operating_audit(
+            forecast,
+            integration.reconciled_forecast,
+        )
+        plan = _attach_operating_plan_audit(
+            plan,
+            integration.reconciled_forecast,
+        )
+        return OperatingForecastPipelineResult(
+            integration=integration,
+            seed_forecast=operating_seed,
+            forecast=forecast,
+            adaptive_plan=plan,
+            forward_growth=combined_growth,
+        )
+
+    def forecast_with_evidence_provider(
+        self,
+        financials,
+        provider,
+        parameters: FcffForecastParameters,
+        **kwargs: Any,
+    ) -> OperatingForecastPipelineResult:
+        """Resolve structured evidence from an injected provider and forecast.
+
+        ``provider`` may expose either synchronous or asynchronous
+        ``discover``/``retrieve``.  The async variant is intentionally kept
+        separate so normal synchronous fixture callers remain simple and no
+        ticker-specific discovery policy is introduced here.
+        """
+
+        retrieve = getattr(provider, "discover", None) or getattr(
+            provider, "retrieve", None
+        )
+        if retrieve is None:
+            raise TypeError(
+                "Operating evidence provider must expose discover or retrieve"
+            )
+        evidence = retrieve(financials=financials, **kwargs)
+        if hasattr(evidence, "__await__"):
+            raise TypeError(
+                "Asynchronous operating evidence providers must be awaited by the caller"
+            )
+        return self.forecast(financials, evidence, parameters, **kwargs)
+
+    async def aforecast_with_evidence_provider(
+        self,
+        financials,
+        provider,
+        parameters: FcffForecastParameters,
+        **kwargs: Any,
+    ) -> OperatingForecastPipelineResult:
+        """Async counterpart for an injected discovery implementation."""
+
+        retrieve = getattr(provider, "discover", None) or getattr(
+            provider, "retrieve", None
+        )
+        if retrieve is None:
+            raise TypeError(
+                "Operating evidence provider must expose discover or retrieve"
+            )
+        evidence = retrieve(financials=financials, **kwargs)
+        if hasattr(evidence, "__await__"):
+            evidence = await evidence
+        return self.forecast(financials, evidence, parameters, **kwargs)
+
+    run = forecast
+    compose = forecast
+
+
+def _attach_operating_audit(
+    forecast: FcffForecast,
+    operating: CompanyOperatingForecast,
+) -> FcffForecast:
+    warnings = tuple(dict.fromkeys((*forecast.warnings, *operating.warnings)))
+    return forecast.model_copy(
+        update={
+            "operating_driver_coverage": operating.driver_coverage,
+            "operating_reconstruction_error": operating.reconstruction_error,
+            "operating_confidence": operating.confidence,
+            "operating_own_supported_years": operating.own_supported_years,
+            "operating_consensus_years": operating.consensus_years,
+            "operating_divergence_by_year": operating.divergence_by_year,
+            "operating_divergence": operating.divergence,
+            "operating_transition_start_year": operating.transition_start_year,
+            "operating_warnings": operating.warnings,
+            "operating_selected_revenue_by_year": operating.selected_revenue_by_year,
+            "operating_source_by_year": operating.selected_source_by_year,
+            "operating_confidence_by_year": operating.selected_confidence_by_year,
+            "warnings": warnings,
+        }
+    )
+
+
+def _attach_operating_plan_audit(
+    plan: AdaptiveMultistagePlan,
+    operating: CompanyOperatingForecast,
+) -> AdaptiveMultistagePlan:
+    return plan.model_copy(
+        update={
+            "operating_driver_coverage": operating.driver_coverage,
+            "operating_reconstruction_error": operating.reconstruction_error,
+            "operating_confidence": operating.confidence,
+            "operating_own_supported_years": operating.own_supported_years,
+            "operating_consensus_years": operating.consensus_years,
+            "operating_divergence_by_year": operating.divergence_by_year,
+            "operating_divergence": operating.divergence,
+            "operating_transition_start_year": operating.transition_start_year,
+            "operating_warnings": operating.warnings,
+            "operating_selected_revenue_by_year": operating.selected_revenue_by_year,
+            "operating_source_by_year": operating.selected_source_by_year,
+            "operating_confidence_by_year": operating.selected_confidence_by_year,
+            "warnings": tuple(dict.fromkeys((*plan.warnings, *operating.warnings))),
+        }
+    )
+
+
+def _evidence_values(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {
+        name: getattr(value, name, ())
+        for name in (
+            "segments",
+            "definitions",
+            "observations",
+            "management_constraints",
+            "historical_revenue",
+        )
+        if hasattr(value, name)
+    }
+
+
+def _as_items(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, Mapping)):
+        return (value,)
+    try:
+        return tuple(value)
+    except TypeError:
+        return (value,)
+
+
+def _financial_revenue_history(financials) -> dict[int, Decimal]:
+    """Use normalized annual revenue as conservative operating history."""
+
+    result: dict[int, Decimal] = {}
+    for observation in getattr(financials, "observations", ()):
+        concept = getattr(getattr(observation, "concept", None), "value", "")
+        granularity = getattr(getattr(observation, "granularity", None), "value", "")
+        fiscal_period = getattr(
+            getattr(observation, "fiscal_period", None), "value", ""
+        )
+        if concept != "revenue" or granularity != "annual" or fiscal_period != "FY":
+            continue
+        if observation.value > 0:
+            result[observation.fiscal_year] = observation.value
+    return result
+
+
+def _anchors_by_source(
+    parameters: FcffForecastParameters,
+    source: ForecastAssumptionSource,
+) -> dict[int, Decimal]:
+    return {
+        year: value
+        for year, value in parameters.revenue_anchors.items()
+        if parameters.revenue_anchor_sources.get(
+            year, ForecastAssumptionSource.EXPLICIT
+        )
+        == source
+    }
+
+
+def _reconciliation_growth_evidence(
+    reconciliation: RevenueForecastReconciliation,
+    *,
+    base_revenue: Decimal,
+) -> ForwardGrowthEvidence | None:
+    records = reconciliation.resolved_years
+    if not records:
+        return None
+    previous = base_revenue
+    by_year: list[tuple[int, Decimal]] = []
+    source_by_year: dict[int, str] = {}
+    confidence_by_year: dict[int, str] = {}
+    for item in records:
+        if item.revenue <= 0 or previous <= 0:
+            break
+        growth = (item.revenue / previous - Decimal(1)) * Decimal(100)
+        by_year.append((item.fiscal_year, growth))
+        source_by_year[item.fiscal_year] = item.source
+        confidence_by_year[item.fiscal_year] = item.confidence
+        previous = item.revenue
+    if not by_year:
+        return None
+    sources = set(source_by_year.values())
+    if sources <= {"analyst_consensus"}:
+        source = "analyst_consensus"
+    elif sources <= {"management_guidance"}:
+        source = "management_guidance"
+    elif sources <= {"independent_operating", "mixed"}:
+        source = "independent_operating"
+    else:
+        source = "operating_reconciliation"
+    confidence_rank = {"low": 0, "medium": 1, "high": 2}
+    confidence = min(
+        confidence_by_year.values(), key=lambda value: confidence_rank[value]
+    )
+    return ForwardGrowthEvidence(
+        guidance="management_guidance" in sources,
+        growth_path=tuple(value for _year, value in by_year),
+        growth_path_by_year=tuple(by_year),
+        source=source,
+        confidence=confidence,
+    )
+
+
+def _merge_operating_growth_evidence(
+    operating: ForwardGrowthEvidence | None,
+    existing: ForwardGrowthEvidence | None,
+    *,
+    years: tuple[int, ...],
+) -> ForwardGrowthEvidence | None:
+    if operating is None:
+        return existing
+    if existing is None:
+        return operating
+    operating_by_year = dict(operating.growth_path_by_year)
+    existing_by_year = dict(existing.growth_path_by_year)
+    management_by_year = dict(existing.guidance_growth_path_by_year)
+    if not management_by_year and existing.guidance:
+        management_by_year = dict(existing.growth_path_by_year)
+    merged: list[tuple[int, Decimal]] = []
+    for year in years:
+        operating_value = operating_by_year.get(year)
+        existing_value = existing_by_year.get(year)
+        if year in management_by_year:
+            value = management_by_year[year]
+        elif operating_value is not None:
+            value = operating_value
+        else:
+            value = existing_value
+        if value is not None:
+            merged.append((year, value))
+    prefix: list[tuple[int, Decimal]] = []
+    expected = years[0] if years else None
+    for year, value in merged:
+        if expected is not None and year != expected:
+            break
+        prefix.append((year, value))
+        expected = year + 1
+    return operating.model_copy(
+        update={
+            "guidance": operating.guidance or existing.guidance,
+            "guidance_growth_path": tuple(management_by_year.values()),
+            "guidance_growth_path_by_year": tuple(management_by_year.items()),
+            "backlog": operating.backlog or existing.backlog,
+            "capacity": operating.capacity or existing.capacity,
+            "growth_visibility": max(
+                operating.growth_visibility, existing.growth_visibility
+            ),
+            "lifecycle": existing.lifecycle
+            if existing.lifecycle != "unknown"
+            else operating.lifecycle,
+            "growth_path": tuple(value for _year, value in prefix),
+            "growth_path_by_year": tuple(merged),
+            "confidence": min(
+                (operating.confidence or "medium", existing.confidence or "medium"),
+                key={"low": 0, "medium": 1, "high": 2}.get,
+            ),
+            "source": (
+                "management_guidance" if management_by_year else operating.source
+            ),
+        }
+    )
+
+
+merge_operating_growth_evidence = _merge_operating_growth_evidence
+
 __all__ = [
     "OperatingForecastIntegration",
     "OperatingForecastIntegrationResult",
     "OperatingForecastIntegrationService",
+    "OperatingForecastPipelineResult",
+    "OperatingForecastPipelineService",
+    "merge_operating_growth_evidence",
 ]

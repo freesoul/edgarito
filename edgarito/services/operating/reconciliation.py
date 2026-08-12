@@ -192,6 +192,38 @@ class RevenueForecastReconciliation:
     def warnings(self) -> tuple[str, ...]:
         return self.forecast.warnings
 
+    @property
+    def own_supported_years(self) -> tuple[int, ...]:
+        """Years retained from the supported independent operating path."""
+
+        return self.forecast.own_supported_years
+
+    @property
+    def consensus_years(self) -> tuple[int, ...]:
+        """Years filled by analyst consensus after independent selection."""
+
+        return self.forecast.consensus_years
+
+    @property
+    def divergence_by_year(self) -> dict[int, Decimal]:
+        """Consensus-versus-independent revenue divergence by fiscal year."""
+
+        return self.forecast.divergence_by_year
+
+    @property
+    def divergence(self) -> Decimal | None:
+        """Mean absolute consensus-versus-independent divergence."""
+
+        return self.forecast.divergence
+
+    @property
+    def selected_source_by_year(self) -> dict[int, str]:
+        return self.forecast.selected_source_by_year
+
+    @property
+    def selected_confidence_by_year(self) -> dict[int, str]:
+        return self.forecast.selected_confidence_by_year
+
 
 class RevenueForecastReconciler:
     """Select one absolute revenue value per fiscal year.
@@ -321,6 +353,75 @@ class RevenueForecastReconciler:
             if _is_explicit_selection_source(item.source)
         )
         transition_start_year = explicit_years[-1] + 1 if explicit_years else None
+        own_supported_years = tuple(
+            item.fiscal_year
+            for item in resolved_years
+            if item.independent_revenue is not None
+            and _is_sufficiently_supported(
+                item.independent_source or _INDEPENDENT_SOURCE,
+                item.independent_confidence or "low",
+                minimum_confidence=self.minimum_independent_confidence,
+            )
+        )
+        consensus_years = tuple(
+            item.fiscal_year
+            for item in resolved_years
+            if item.source == _CONSENSUS_SOURCE
+        )
+        divergence_by_year = {
+            item.fiscal_year: item.variance
+            for item in resolved_years
+            if item.variance is not None
+        }
+        divergence = _mean(tuple(abs(value) for value in divergence_by_year.values()))
+        selected_revenue_by_year = {
+            item.fiscal_year: item.revenue for item in resolved_years
+        }
+        selected_source_by_year = {
+            item.fiscal_year: item.source for item in resolved_years
+        }
+        selected_confidence_by_year = {
+            item.fiscal_year: item.confidence for item in resolved_years
+        }
+        independent_revenue_by_year = {
+            item.fiscal_year: item.independent_revenue
+            for item in resolved_years
+            if item.independent_revenue is not None
+        }
+        consensus_revenue_by_year = {
+            item.fiscal_year: item.consensus_revenue
+            for item in resolved_years
+            if item.consensus_revenue is not None
+        }
+        management_revenue_by_year = {
+            item.fiscal_year: item.management_revenue
+            for item in resolved_years
+            if item.management_revenue is not None
+        }
+        if divergence_by_year:
+            for item in resolved_years:
+                if item.fiscal_year not in divergence_by_year:
+                    continue
+                warnings.append(
+                    f"FY{item.fiscal_year}: consensus revenue diverges "
+                    f"{abs(divergence_by_year[item.fiscal_year]):,.2f}% from independent "
+                    "operating revenue"
+                )
+        if own_supported_years:
+            warnings.append(
+                "Independent operating revenue supported years: "
+                + ", ".join(f"FY{year}" for year in own_supported_years)
+            )
+        if consensus_years:
+            warnings.append(
+                "Consensus revenue years: "
+                + ", ".join(f"FY{year}" for year in consensus_years)
+            )
+        if transition_start_year is not None:
+            warnings.append(
+                "Revenue transition starts after "
+                f"FY{transition_start_year - 1}: FY{transition_start_year}"
+            )
         reconciled_forecast = forecast.model_copy(
             update={
                 "consolidated_revenue": revenue,
@@ -329,6 +430,16 @@ class RevenueForecastReconciler:
                 "transition_start_year": transition_start_year,
                 "source_by_year": source_by_year,
                 "confidence_by_year": confidence_by_year,
+                "own_supported_years": own_supported_years,
+                "consensus_years": consensus_years,
+                "divergence_by_year": divergence_by_year,
+                "divergence": divergence,
+                "selected_revenue_by_year": selected_revenue_by_year,
+                "selected_source_by_year": selected_source_by_year,
+                "selected_confidence_by_year": selected_confidence_by_year,
+                "independent_revenue_by_year": independent_revenue_by_year,
+                "consensus_revenue_by_year": consensus_revenue_by_year,
+                "management_revenue_by_year": management_revenue_by_year,
                 "warnings": tuple(dict.fromkeys(warnings)),
             }
         )
@@ -649,8 +760,13 @@ def materialize_revenue_anchors(
             )
         incoming_source = _fcff_source(normalized_source)
         existing_source = sources.get(year, ForecastAssumptionSource.EXPLICIT)
-        if year in anchors and _fcff_source_rank(existing_source) >= _fcff_source_rank(
-            incoming_source
+        existing_rank = _fcff_source_rank(existing_source)
+        # The legacy FCFF enum stores both consensus and independent operating
+        # evidence as ``forward_evidence``.  When a selected operating path is
+        # materialized after the CLI's consensus pass, preserve the operating
+        # precedence instead of letting the collapsed enum win by accident.
+        if year in anchors and existing_rank >= _selection_source_rank(
+            normalized_source
         ):
             continue
         anchors[year] = normalized_value
@@ -725,6 +841,16 @@ def _normalize_year_values(value: Any, label: str) -> dict[int, Decimal]:
             return {year: amount} if year is not None and amount is not None else {}
         result: dict[int, Decimal] = {}
         for raw_year, raw_value in value.items():
+            if isinstance(raw_year, tuple) and len(raw_year) == 2:
+                year = _coerce_year(raw_year[1])
+                if year is None:
+                    raise ValueError(
+                        f"{label} contains an invalid fiscal year: {raw_year[1]}"
+                    )
+                amount = _anchor_value(raw_value, f"{label} FY{year}")
+                if amount is not None:
+                    result[year] = result.get(year, Decimal(0)) + amount
+                continue
             year = _coerce_year(raw_year)
             if year is None:
                 raise ValueError(f"{label} contains an invalid fiscal year: {raw_year}")
@@ -1082,6 +1208,12 @@ def _growth_path(revenue: tuple[Decimal, ...]) -> tuple[Decimal | None, ...]:
     return tuple(growth)
 
 
+def _mean(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    return sum(values, Decimal(0)) / Decimal(len(values))
+
+
 def _fcff_source(value: Any) -> ForecastAssumptionSource:
     normalized = _normalize_source(value) or _INDEPENDENT_SOURCE
     if normalized == _EXPLICIT_SOURCE:
@@ -1100,10 +1232,45 @@ def _fcff_source_rank(value: Any) -> int:
     return {
         _EXPLICIT_SOURCE: 4,
         _MANAGEMENT_SOURCE: 3,
-        ForecastAssumptionSource.FORWARD_EVIDENCE.value: 2,
-        ForecastAssumptionSource.NORMALIZED_HISTORICAL.value: 1,
-        ForecastAssumptionSource.CURRENT_RUN_RATE.value: 0,
+        # The legacy FCFF enum predates the operating source vocabulary.  A
+        # forward-evidence anchor is treated as the lower-ranked consensus
+        # fallback here; the detailed selected source remains on the operating
+        # reconciliation audit and can therefore replace it with supported
+        # independent operating revenue.
+        ForecastAssumptionSource.FORWARD_EVIDENCE.value: 1,
+        ForecastAssumptionSource.NORMALIZED_HISTORICAL.value: 0,
+        ForecastAssumptionSource.CURRENT_RUN_RATE.value: -1,
     }.get(normalized, 0)
+
+
+def _selection_source_rank(value: Any) -> int:
+    """Rank operating evidence without collapsing independent and consensus."""
+
+    normalized = _normalize_source(value) or ""
+    if normalized == _EXPLICIT_SOURCE:
+        return 4
+    if normalized == _MANAGEMENT_SOURCE:
+        return 3
+    if normalized in {
+        _INDEPENDENT_SOURCE,
+        "independent",
+        "independent_forecast",
+        "mixed",
+        "derived",
+    }:
+        return 2
+    if normalized in {
+        _CONSENSUS_SOURCE,
+        "consensus",
+        ForecastAssumptionSource.FORWARD_EVIDENCE.value,
+    }:
+        return 1
+    if normalized in {
+        _HISTORICAL_SOURCE,
+        "historical",
+    }:
+        return 0
+    return 1
 
 
 # Names used by callers that describe the same seam in operating rather than

@@ -320,6 +320,40 @@ class FcffDcfConsolePresenter:
                 lines.append(
                     f"  {driver.replace('_', ' ').title()}: {source.replace('_', '-')}"
                 )
+        if result.operating_driver_coverage is not None:
+            lines.extend(
+                [
+                    "OPERATING RECONCILIATION AUDIT",
+                    f"Driver coverage: {result.operating_driver_coverage:.1%}",
+                    "Reconstruction error: "
+                    + (
+                        f"{result.operating_reconstruction_error:.1%}"
+                        if result.operating_reconstruction_error is not None
+                        else "unavailable"
+                    ),
+                    f"Confidence: {result.operating_confidence or 'unavailable'}",
+                    "Own-supported years: "
+                    + ", ".join(
+                        f"FY{year}" for year in result.operating_own_supported_years
+                    ),
+                    "Consensus years: "
+                    + ", ".join(
+                        f"FY{year}" for year in result.operating_consensus_years
+                    ),
+                    "Divergence: "
+                    + (
+                        f"{result.operating_divergence:.2f}%"
+                        if result.operating_divergence is not None
+                        else "unavailable"
+                    ),
+                    "Transition start: "
+                    + (
+                        f"FY{result.operating_transition_start_year}"
+                        if result.operating_transition_start_year is not None
+                        else "unavailable"
+                    ),
+                ]
+            )
         if (
             result.provider.casefold() == "yahoo"
             and result.observation_availability_mode == "current_snapshot"
@@ -339,7 +373,8 @@ class FcffDcfConsolePresenter:
             if plan.forward_growth_rate is not None:
                 current_growth_label = (
                     "Current FY growth"
-                    if result.forecast_seed_type in {"YTD+forecast", "YTD run-rate", "TTM"}
+                    if result.forecast_seed_type
+                    in {"YTD+forecast", "YTD run-rate", "TTM"}
                     else "First projected FY growth"
                 )
                 lines.extend(
@@ -376,9 +411,7 @@ class FcffDcfConsolePresenter:
                         estimate.fiscal_year
                         for estimate in plan.forward_revenue_estimates
                     )
-                    years = ", ".join(
-                        f"FY{year}" for year in estimate_years
-                    )
+                    years = ", ".join(f"FY{year}" for year in estimate_years)
                     lines.extend(
                         [
                             "Selected provider: "
@@ -486,7 +519,9 @@ class FcffDcfConsolePresenter:
             if diagnostic.estimate_count:
                 detail += f" — {diagnostic.estimate_count} annual estimate(s)"
             if diagnostic.years:
-                detail += " (" + ", ".join(f"FY{year}" for year in diagnostic.years) + ")"
+                detail += (
+                    " (" + ", ".join(f"FY{year}" for year in diagnostic.years) + ")"
+                )
             if diagnostic.reason:
                 detail += f" — {diagnostic.reason}"
             lines.append(detail)

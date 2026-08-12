@@ -311,14 +311,30 @@ def _fcff_forecast(source: FcffForecast) -> FcffForecastExport:
         normalized_historical_growth_path=tuple(
             source.normalized_historical_growth_path
         ),
+        operating_driver_coverage=source.operating_driver_coverage,
+        operating_reconstruction_error=source.operating_reconstruction_error,
+        operating_confidence=source.operating_confidence,
+        operating_own_supported_years=tuple(source.operating_own_supported_years),
+        operating_consensus_years=tuple(source.operating_consensus_years),
+        operating_divergence_by_year=dict(source.operating_divergence_by_year),
+        operating_divergence=source.operating_divergence,
+        operating_transition_start_year=source.operating_transition_start_year,
+        operating_warnings=tuple(source.operating_warnings),
+        operating_selected_revenue_by_year=dict(
+            source.operating_selected_revenue_by_year
+        ),
+        operating_source_by_year=dict(source.operating_source_by_year),
+        operating_confidence_by_year=dict(source.operating_confidence_by_year),
     )
 
 
 def _adaptive_plan(source: AdaptiveMultistagePlan | None):
     if source is None:
         return None
+    values = deepcopy(source.model_dump(mode="python"))
+    allowed = set(AdaptiveMultistagePlanExport.model_fields)
     return AdaptiveMultistagePlanExport.model_validate(
-        deepcopy(source.model_dump(mode="python"))
+        {key: value for key, value in values.items() if key in allowed}
     )
 
 

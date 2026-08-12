@@ -22,6 +22,9 @@ from edgarito.services.operating.integration import (
     OperatingForecastIntegration,
     OperatingForecastIntegrationResult,
     OperatingForecastIntegrationService,
+    OperatingForecastPipelineResult,
+    OperatingForecastPipelineService,
+    merge_operating_growth_evidence,
 )
 from edgarito.services.operating.reconciliation import (
     OperatingForecastReconciler,
@@ -58,6 +61,9 @@ __all__ = [
     "OperatingForecastIntegration",
     "OperatingForecastIntegrationResult",
     "OperatingForecastIntegrationService",
+    "OperatingForecastPipelineResult",
+    "OperatingForecastPipelineService",
+    "merge_operating_growth_evidence",
     "OperatingForecastDiscovery",
     "OperatingForecastDiscoveryResult",
     "OperatingForecastDiscoveryService",

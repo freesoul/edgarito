@@ -327,7 +327,11 @@ class AdaptiveMultistageFcffForecastService:
         )
         if anchor_path:
             return self._make_outlook(
-                path=anchor_path if anchor_start == 0 else (),
+                # ``anchor_path`` is aligned to forecast positions through the
+                # last explicit anchor.  Keep the leading gap values: dropping
+                # them compacts a sparse FY2026/FY2028 pair into positions one
+                # and two and starts the adaptive fade too early.
+                path=anchor_path,
                 anchor=anchor_path[-1],
                 source=anchor_source.value,
                 confidence="high",
@@ -458,6 +462,11 @@ class AdaptiveMultistageFcffForecastService:
                 if forward_evidence is not None and forward_evidence.guidance
                 else ()
             ),
+            guidance_growth_path_by_year=(
+                forward_evidence.guidance_growth_path_by_year
+                if forward_evidence is not None
+                else ()
+            ),
             forward_estimates_path=(
                 (
                     forward_evidence.forward_estimate_growth_path
@@ -548,9 +557,7 @@ class AdaptiveMultistageFcffForecastService:
             return False
 
         def stable_values(values: tuple[Decimal, ...]) -> bool:
-            return bool(values) and (
-                max(values) - min(values) <= convergence_tolerance
-            )
+            return bool(values) and (max(values) - min(values) <= convergence_tolerance)
 
         # Two or more consecutive annual growth observations provide the
         # minimum historical evidence.  A mature lifecycle classification can
@@ -622,10 +629,20 @@ class AdaptiveMultistageFcffForecastService:
             else ForecastAssumptionSource.EXPLICIT
         )
         previous_revenue = seed_forecast.base_revenue
+        anchor_indexes = [
+            index
+            for index, observation in enumerate(seed_forecast.observations)
+            if observation.fiscal_year in requested_parameters.revenue_anchors
+        ]
+        if not anchor_indexes:
+            return (), source, None
+        last_anchor_index = max(anchor_indexes)
         has_anchor = False
         first_anchor_index = None
         path = []
-        for index, observation in enumerate(seed_forecast.observations):
+        for index, observation in enumerate(
+            seed_forecast.observations[: last_anchor_index + 1]
+        ):
             target = requested_parameters.revenue_anchors.get(observation.fiscal_year)
             if target is not None and previous_revenue > 0:
                 path.append((target / previous_revenue - Decimal(1)) * Decimal(100))
@@ -633,8 +650,26 @@ class AdaptiveMultistageFcffForecastService:
                 has_anchor = True
                 if first_anchor_index is None:
                     first_anchor_index = index
-            elif not has_anchor:
+            elif has_anchor:
+                # Keep non-anchor fiscal years as placeholders in the aligned
+                # prefix.  Compacting FY2026/FY2028 anchors into a two-value
+                # path would incorrectly apply the FY2028 growth to FY2027 and
+                # start the adaptive fade before the final explicit anchor.
+                path.append(observation.revenue_growth)
+                previous_revenue = previous_revenue * (
+                    Decimal(1) + observation.revenue_growth / Decimal(100)
+                )
+            else:
+                # Preserve the pre-anchor forecast position as well.  The
+                # returned path is indexed like ``seed_forecast.observations``
+                # through the final explicit anchor, not like the sparse set
+                # of anchors alone.
+                path.append(observation.revenue_growth)
                 previous_revenue = observation.revenue
+
+        # The prefix is fiscal-year aligned from the first forecast position;
+        # an anchor may occur after an unanchored gap, but that gap still has to
+        # occupy a position before the adaptive transition.
         return tuple(path), source, first_anchor_index
 
     @classmethod
@@ -1251,9 +1286,7 @@ class AdaptiveMultistageFcffForecastService:
                 forward_evidence=forward_evidence,
             )
 
-        explicit_prefix = tuple(
-            forward_growth.growth_path[: parameters.forecast_years]
-        )
+        explicit_prefix = tuple(forward_growth.growth_path[: parameters.forecast_years])
         initial_growth = forward_growth.anchor
         evidence_score = (
             forward_evidence.score if forward_evidence is not None else Decimal(0)
@@ -1370,6 +1403,7 @@ class AdaptiveMultistageFcffForecastService:
             management_guidance_path=forward_growth.management_guidance_path,
             forward_estimates_path=forward_growth.forward_estimates_path,
             forward_growth_path_by_year=forward_growth.growth_path_by_year,
+            guidance_growth_path_by_year=forward_growth.guidance_growth_path_by_year,
             forward_revenue_estimates=forward_growth.forward_revenue_estimates,
             forward_estimate_provider=forward_growth.forward_estimate_provider,
             forward_estimate_years=forward_growth.forward_estimate_years,
