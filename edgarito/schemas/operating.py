@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import datetime
 import re
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 from edgarito.schemas.valuation.assumptions import AssumptionProvenance
 
@@ -21,6 +30,33 @@ _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _MIN_FISCAL_YEAR = 1900
 _MAX_FISCAL_YEAR = 2200
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
+
+# OpenAI Structured Outputs does not accept an object whose
+# ``additionalProperties`` value is another schema.  Pydantic emits exactly
+# that shape for ``dict[str, str]``.  Keep mappings in the provider-neutral
+# Python contract, but expose a strict list-of-pairs shape to the model.  The
+# before validators below also accept the mapping shape used by existing local
+# fixtures and callers.
+_TEXT_MAP_JSON_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "key": {"type": "string"},
+            "value": {"type": "string"},
+        },
+        "required": ["key", "value"],
+        "additionalProperties": False,
+    },
+}
+ExtractedTextMap = Annotated[
+    dict[str, str],
+    WithJsonSchema(_TEXT_MAP_JSON_SCHEMA),
+]
+ExtractedRevenueMetric = Annotated[
+    Literal["revenue"],
+    WithJsonSchema({"type": "string", "enum": ["revenue"]}),
+]
 
 
 class OperatingArchetype(str, Enum):
@@ -305,7 +341,8 @@ class OperatingInvestmentProgram(BaseModel):
     )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
-        return _normalize_optional_text(value, "Investment program text")
+        normalized = _normalize_optional_text(value, "Investment program text")
+        return normalized or ("FY" if value == "" else normalized)
 
     @field_validator("currency")
     @classmethod
@@ -366,7 +403,7 @@ class ExtractedOperatingSegment(BaseModel):
     parent_id: str | None = None
     scope: Literal["consolidated", "segment", "geography", "product"] = "segment"
     currency: str | None = None
-    dimensions: dict[str, str] = Field(default_factory=dict)
+    dimensions: ExtractedTextMap = Field(default_factory=dict)
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
@@ -374,6 +411,11 @@ class ExtractedOperatingSegment(BaseModel):
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted operating segment text")
+
+    @field_validator("dimensions", mode="before")
+    @classmethod
+    def coerce_dimensions(cls, value: Any) -> dict[str, str]:
+        return _coerce_extracted_text_map(value, "dimension")
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -411,16 +453,25 @@ class ExtractedOperatingDriverDefinition(BaseModel):
     any other forecast path.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     driver_id: str
     archetype: OperatingArchetype
     segment_id: str
-    output_metric: Literal["revenue"] = "revenue"
-    input_metrics: list[str] = Field(default_factory=list)
-    units: dict[str, str] = Field(default_factory=dict)
-    required_inputs: list[str] = Field(default_factory=list)
-    optional_inputs: list[str] = Field(default_factory=list)
+    output_metric: ExtractedRevenueMetric = "revenue"
+    input_metrics: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("input_metrics", "inputs"),
+    )
+    units: ExtractedTextMap = Field(default_factory=dict)
+    required_inputs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("required_inputs", "required_metrics"),
+    )
+    optional_inputs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("optional_inputs", "optional_metrics"),
+    )
     formula_id: str | None = None
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
@@ -434,6 +485,11 @@ class ExtractedOperatingDriverDefinition(BaseModel):
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted operating definition text")
+
+    @field_validator("units", mode="before")
+    @classmethod
+    def coerce_units(cls, value: Any) -> dict[str, str]:
+        return _coerce_extracted_text_map(value, "unit")
 
     @field_validator("input_metrics", "required_inputs", "optional_inputs")
     @classmethod
@@ -467,6 +523,12 @@ class ExtractedOperatingDriverDefinition(BaseModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
+        if "inputs" in data and "input_metrics" not in data:
+            data["input_metrics"] = data.pop("inputs")
+        if "required_metrics" in data and "required_inputs" not in data:
+            data["required_inputs"] = data.pop("required_metrics")
+        if "optional_metrics" in data and "optional_inputs" not in data:
+            data["optional_inputs"] = data.pop("optional_metrics")
         if data.get("archetype") is None:
             return data
         archetype = _coerce_operating_archetype(data["archetype"])
@@ -484,6 +546,14 @@ class ExtractedOperatingDriverDefinition(BaseModel):
     def validate_definition_shape(self) -> "ExtractedOperatingDriverDefinition":
         input_metrics = self.input_metrics or _archetype_metrics(self.archetype)
         required = self.required_inputs or input_metrics
+        # The extraction model sometimes reports an archetype's canonical
+        # optional input (for example utilization) without listing it in its
+        # input_metrics array. Treat the canonical archetype contract as the
+        # boundary rather than rejecting otherwise usable evidence.
+        canonical_metrics = set(_archetype_metrics(self.archetype))
+        input_metrics = tuple(
+            dict.fromkeys((*input_metrics, *canonical_metrics, *self.optional_inputs))
+        )
         if not set(required).issubset(input_metrics):
             raise ValueError(
                 "Extracted required inputs must be listed in input_metrics"
@@ -494,7 +564,7 @@ class ExtractedOperatingDriverDefinition(BaseModel):
             )
         if set(required) & set(self.optional_inputs):
             raise ValueError("Extracted required and optional inputs must be disjoint")
-        if self.units and not set(input_metrics).issubset(self.units):
+        if self.units and not set(self.input_metrics).issubset(self.units):
             raise ValueError(
                 "Extracted operating definition requires units for all inputs"
             )
@@ -618,14 +688,13 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
+    @field_validator("fiscal_period", mode="before")
+    @classmethod
+    def normalize_fiscal_period(cls, value: str | None) -> str:
+        return "FY" if value is None or not str(value).strip() else str(value).strip()
+
     @field_validator(
-        "program_id",
-        "name",
-        "segment_id",
-        "fiscal_period",
-        "unit",
-        "purpose",
-        "supporting_text",
+        "program_id", "name", "segment_id", "unit", "purpose", "supporting_text"
     )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
@@ -685,13 +754,36 @@ class ExtractedOperatingEvidenceResponse(BaseModel):
     consensus estimate, or other unapproved section cannot validate.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # The Responses API returns the parsed JSON object itself.  Some OpenAI
+    # model/provider combinations use the more explicit collection names
+    # below, while the original local contract used the shorter names.  Keep
+    # the JSON schema emitted to OpenAI on the canonical names, but accept the
+    # compatible response aliases at the trust boundary.  ``extra=forbid`` is
+    # intentionally retained so forecast/consensus collections cannot pass
+    # through this compatibility layer.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    segments: list[ExtractedOperatingSegment] = Field(default_factory=list)
-    definitions: list[ExtractedOperatingDriverDefinition] = Field(default_factory=list)
-    observations: list[ExtractedOperatingObservation] = Field(default_factory=list)
+    segments: list[ExtractedOperatingSegment] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("segments", "operating_segments"),
+    )
+    definitions: list[ExtractedOperatingDriverDefinition] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "definitions", "driver_definitions", "operating_definitions"
+        ),
+    )
+    observations: list[ExtractedOperatingObservation] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "observations", "driver_observations", "operating_observations"
+        ),
+    )
     investment_programs: list[ExtractedOperatingInvestmentProgram] = Field(
-        default_factory=list
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "investment_programs", "investment_program_facts"
+        ),
     )
 
 
@@ -1479,6 +1571,43 @@ def _normalize_required_text(value: str, label: str) -> str:
     if not normalized:
         raise ValueError(f"{label} cannot be blank")
     return normalized
+
+
+def _coerce_extracted_text_map(value: Any, label: str) -> dict[str, str]:
+    """Normalize API-safe key/value pairs and legacy mapping fixtures.
+
+    The model-facing schema uses a list of objects because arbitrary JSON
+    object properties are not accepted by OpenAI Structured Outputs.  The
+    domain model still exposes the more useful mapping shape to deterministic
+    consumers, and legacy cached/fixture responses remain readable.
+    """
+
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {
+            _normalize_required_text(
+                key, f"Extracted {label} key"
+            ): _normalize_required_text(item, f"Extracted {label} value")
+            for key, item in value.items()
+        }
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"Extracted {label} map must be an object or key/value list")
+    result: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise TypeError(f"Extracted {label} entries must be objects")
+        if set(item) != {"key", "value"}:
+            raise ValueError(
+                f"Extracted {label} entries must contain only key and value"
+            )
+        key = _normalize_required_text(item["key"], f"Extracted {label} key")
+        if key in result:
+            raise ValueError(f"Extracted {label} keys must be unique")
+        result[key] = _normalize_required_text(
+            item["value"], f"Extracted {label} value"
+        )
+    return result
 
 
 def _coerce_operating_archetype(value: OperatingArchetype | str) -> OperatingArchetype:

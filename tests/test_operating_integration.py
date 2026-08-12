@@ -1,6 +1,11 @@
+import asyncio
 import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
+import pytest
+
+import edgarito.cli.__main__ as cli_main
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
@@ -16,10 +21,12 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
-from edgarito.services.forecasting import FcffForecastParameters
+from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
 from edgarito.services.operating import (
+    OperatingEvidenceDiscoveryService,
     OperatingForecastIntegrationService,
     OperatingForecastPipelineService,
+    OperatingForecastQualityError,
 )
 
 
@@ -205,3 +212,124 @@ def test_pipeline_composes_operating_reconciliation_into_fcff_and_adaptive_plan(
     assert result.plan is not None
     assert result.plan.operating_consensus_years == (2026,)
     assert result.forecast.operating_driver_coverage == Decimal("1")
+    assert result.quality is not None
+    assert result.quality.accepted
+    assert result.quality.driver_coverage == Decimal("1")
+
+
+def test_pipeline_rejects_operating_evidence_below_activation_quality_gate():
+    segment, definition, observations = _operating_fixture()
+
+    with pytest.raises(OperatingForecastQualityError) as caught:
+        OperatingForecastPipelineService().forecast(
+            _fcff_financials(),
+            evidence={
+                "segments": (segment,),
+                "definitions": (definition,),
+                "observations": observations,
+            },
+            parameters=FcffForecastParameters(forecast_years=2),
+        )
+
+    rejection = caught.value.result
+    assert not rejection.accepted
+    assert rejection.driver_coverage == Decimal("0.5")
+    assert "driver coverage=0.5" in rejection.reason
+
+
+def test_cli_operating_provider_is_invoked_with_company_and_forecast_context():
+    calls = {}
+
+    class _Provider:
+        async def discover(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(warnings=("discovery warning",))
+
+    forecast = FcffForecastService().forecast(
+        _fcff_financials(),
+        FcffForecastParameters(forecast_years=2),
+    )
+    evidence, warnings = asyncio.run(
+        cli_main._retrieve_operating_evidence(
+            _fcff_financials(),
+            forecast,
+            datetime.date(2026, 1, 1),
+            provider=_Provider(),
+            args=SimpleNamespace(ticker="FIX", cik=123, refresh=False),
+        )
+    )
+
+    assert evidence is not None
+    assert calls["company_id"] == "fixture-company"
+    assert calls["ticker"] == "FIX"
+    assert calls["cik"] == 123
+    assert calls["fiscal_years"] == (2025, 2026)
+    assert warnings == ("discovery warning",)
+
+
+def test_cli_missing_openai_configuration_returns_structured_operating_rejection(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(cli_main, "OPENAI_API_KEY", None)
+    args = SimpleNamespace(
+        cache_dir=tmp_path,
+        user_agent="Tests (tests@example.com)",
+    )
+
+    async def resolve():
+        async with cli_main._operating_evidence_provider(
+            args, _fcff_financials()
+        ) as result:
+            return result
+
+    provider, rejection = asyncio.run(resolve())
+
+    assert provider is None
+    assert rejection == "OpenAI API key missing"
+
+
+def test_cli_operating_provider_factory_closes_openai_and_sec_clients(
+    monkeypatch, tmp_path
+):
+    state = {}
+
+    class _OpenAI:
+        def __init__(self, **_kwargs):
+            self.closed = False
+            state["openai"] = self
+
+        async def close(self):
+            self.closed = True
+
+    class _Edgar:
+        def __init__(self, cache, user_agent):
+            state["edgar_args"] = (cache, user_agent)
+
+        async def __aenter__(self):
+            state["edgar"] = self
+            return self
+
+        async def __aexit__(self, *_args):
+            state["edgar_closed"] = True
+
+    monkeypatch.setattr(cli_main, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli_main, "OpenAIClient", _OpenAI)
+    monkeypatch.setattr(cli_main, "EdgarClient", _Edgar)
+    args = SimpleNamespace(
+        cache_dir=tmp_path,
+        user_agent="Tests (tests@example.com)",
+    )
+
+    async def resolve():
+        async with cli_main._operating_evidence_provider(
+            args, _fcff_financials()
+        ) as result:
+            assert isinstance(result[0], OperatingEvidenceDiscoveryService)
+            assert result[1] is None
+            return result
+
+    asyncio.run(resolve())
+
+    assert state["edgar_args"][1] == "Tests (tests@example.com)"
+    assert state["edgar_closed"]
+    assert state["openai"].closed

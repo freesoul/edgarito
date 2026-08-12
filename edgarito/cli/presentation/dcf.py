@@ -16,6 +16,7 @@ class FcffDcfConsolePresenter:
         profile_name: str | None = None,
         verbose: bool = False,
         include_warnings: bool = True,
+        operating_audit=None,
     ) -> str:
         identifier = result.ticker or result.company_id
         values = [
@@ -73,7 +74,7 @@ class FcffDcfConsolePresenter:
                     "",
                     *self._economic_model_details(result),
                     "",
-                    *self._audit_details(result),
+                    *self._audit_details(result, operating_audit=operating_audit),
                 ]
             )
 
@@ -306,7 +307,9 @@ class FcffDcfConsolePresenter:
         )
         return [f"{label + ':':<25}{value}" for label, value in rows]
 
-    def _audit_details(self, result: FcffDcfResult) -> list[str]:
+    def _audit_details(
+        self, result: FcffDcfResult, *, operating_audit=None
+    ) -> list[str]:
         lines = [*subsection("ASSUMPTION AND PROVENANCE AUDIT")]
         lines.extend(
             [
@@ -319,6 +322,77 @@ class FcffDcfConsolePresenter:
             for driver, source in sorted(result.forecast_assumption_sources.items()):
                 lines.append(
                     f"  {driver.replace('_', ' ').title()}: {source.replace('_', '-')}"
+                )
+        if operating_audit is not None or result.operating_driver_coverage is not None:
+            audit = operating_audit
+            status = (
+                audit.status.upper()
+                if audit is not None
+                else "ACTIVE"
+                if result.operating_driver_coverage is not None
+                else "REJECTED"
+            )
+            lines.extend(
+                [
+                    "OPERATING FORECAST",
+                    f"Status: {status}",
+                    f"Reason: {getattr(audit, 'reason', 'Operating evidence active')}",
+                    "Definitions: "
+                    + str(getattr(audit, "definitions_count", "unavailable")),
+                    "Observations: "
+                    + str(getattr(audit, "observations_count", "unavailable")),
+                    "Driver coverage: "
+                    + self._format_operating_metric(
+                        getattr(audit, "driver_coverage", None)
+                        if audit is not None
+                        else result.operating_driver_coverage
+                    ),
+                    "Reconstruction error: "
+                    + self._format_operating_metric(
+                        getattr(audit, "reconstruction_error", None)
+                        if audit is not None
+                        else result.operating_reconstruction_error
+                    ),
+                    "Confidence: "
+                    + str(
+                        getattr(audit, "confidence", None)
+                        or result.operating_confidence
+                        or "unavailable"
+                    ),
+                    "Selected own years: "
+                    + self._format_years(
+                        getattr(audit, "own_supported_years", ())
+                        if audit is not None
+                        else result.operating_own_supported_years
+                    ),
+                    "Selected consensus years: "
+                    + self._format_years(
+                        getattr(audit, "consensus_years", ())
+                        if audit is not None
+                        else result.operating_consensus_years
+                    ),
+                    "Transition: "
+                    + self._format_transition(
+                        getattr(audit, "transition_start_year", None)
+                        if audit is not None
+                        else result.operating_transition_start_year
+                    ),
+                ]
+            )
+            if audit is not None and (
+                getattr(audit, "warnings", ())
+                or getattr(audit, "audit_records", ())
+                or getattr(audit, "document_audits", ())
+            ):
+                lines.extend(
+                    [
+                        "Discovery warnings: "
+                        + str(len(getattr(audit, "warnings", ()) or ())),
+                        "Discovery audit records: "
+                        + str(len(getattr(audit, "audit_records", ()) or ())),
+                        "SEC document audits: "
+                        + str(len(getattr(audit, "document_audits", ()) or ())),
+                    ]
                 )
         if result.operating_driver_coverage is not None:
             lines.extend(
@@ -493,6 +567,18 @@ class FcffDcfConsolePresenter:
             ]
         )
         return lines
+
+    @staticmethod
+    def _format_operating_metric(value: Decimal | None) -> str:
+        return "unavailable" if value is None else f"{value:.1%}"
+
+    @staticmethod
+    def _format_years(years) -> str:
+        return ", ".join(f"FY{year}" for year in years) if years else "none"
+
+    @staticmethod
+    def _format_transition(year: int | None) -> str:
+        return f"FY{year}" if year is not None else "unavailable"
 
     @staticmethod
     def _format_growth(value: Decimal | None) -> str:

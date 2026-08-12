@@ -104,6 +104,7 @@ class OperatingForecastPipelineResult:
     forecast: FcffForecast
     adaptive_plan: AdaptiveMultistagePlan | None = None
     forward_growth: ForwardGrowthEvidence | None = None
+    quality: OperatingForecastQualityResult | None = None
 
     @property
     def independent_forecast(self) -> CompanyOperatingForecast:
@@ -159,6 +160,37 @@ class OperatingForecastPipelineResult:
     @property
     def diagnostics(self) -> dict[str, object]:
         return self.audit_diagnostics
+
+
+@dataclass(frozen=True)
+class OperatingForecastQualityResult:
+    """Deterministic activation decision for structured operating evidence."""
+
+    accepted: bool
+    reason: str
+    definitions_count: int = 0
+    observations_count: int = 0
+    driver_coverage: Decimal | None = None
+    reconstruction_error: Decimal | None = None
+    confidence: str | None = None
+    own_supported_years: tuple[int, ...] = ()
+    consensus_years: tuple[int, ...] = ()
+    transition_start_year: int | None = None
+    warnings: tuple[str, ...] = ()
+    audit_records: tuple[Any, ...] = ()
+    document_audits: tuple[Any, ...] = ()
+
+    @property
+    def status(self) -> str:
+        return "active" if self.accepted else "rejected"
+
+
+class OperatingForecastQualityError(ValueError):
+    """Raised when structured operating evidence fails the activation gate."""
+
+    def __init__(self, result: OperatingForecastQualityResult) -> None:
+        self.result = result
+        super().__init__(result.reason)
 
 
 class OperatingForecastIntegrationService:
@@ -318,18 +350,23 @@ class OperatingForecastPipelineService:
             else (item.fiscal_year for item in seed.observations)
         )
         values = _evidence_values(evidence)
+        if segments is not None:
+            values["segments"] = _as_items(segments)
+        if definitions is not None:
+            values["definitions"] = _as_items(definitions)
+        if observations is not None:
+            values["observations"] = _as_items(observations)
+        values["definitions"] = _as_items(values.get("definitions") or ())
+        values["observations"] = _as_items(values.get("observations") or ())
+        initial_quality = self.quality_gate(values)
+        if not initial_quality.accepted:
+            raise OperatingForecastQualityError(initial_quality)
         if consensus is not None:
             if consensus_estimates not in ((), None):
                 raise ValueError(
                     "Pass either consensus or consensus_estimates, not both"
                 )
             consensus_estimates = consensus
-        if segments is not None:
-            values["segments"] = segments
-        if definitions is not None:
-            values["definitions"] = definitions
-        if observations is not None:
-            values["observations"] = observations
         historical = historical_revenue or values.get("historical_revenue")
         if historical is None:
             historical = _financial_revenue_history(financials)
@@ -360,6 +397,9 @@ class OperatingForecastPipelineService:
             parameters=requested,
             company_id=company_id or financials.company_id,
         )
+        quality = self.quality_gate(values, integration.reconciled_forecast)
+        if not quality.accepted:
+            raise OperatingForecastQualityError(quality)
         operating_seed = self.fcff_service.forecast(
             financials,
             integration.parameters,
@@ -369,6 +409,7 @@ class OperatingForecastPipelineService:
         operating_seed = _attach_operating_audit(
             operating_seed,
             integration.reconciled_forecast,
+            additional_warnings=tuple(values.get("warnings") or ()),
         )
         operating_growth = _reconciliation_growth_evidence(
             integration.reconciliation,
@@ -386,6 +427,7 @@ class OperatingForecastPipelineService:
                 seed_forecast=operating_seed,
                 forecast=operating_seed,
                 forward_growth=combined_growth,
+                quality=quality,
             )
 
         forecast, plan = self.adaptive_service.forecast(
@@ -402,10 +444,12 @@ class OperatingForecastPipelineService:
         forecast = _attach_operating_audit(
             forecast,
             integration.reconciled_forecast,
+            additional_warnings=tuple(values.get("warnings") or ()),
         )
         plan = _attach_operating_plan_audit(
             plan,
             integration.reconciled_forecast,
+            additional_warnings=tuple(values.get("warnings") or ()),
         )
         return OperatingForecastPipelineResult(
             integration=integration,
@@ -413,6 +457,75 @@ class OperatingForecastPipelineService:
             forecast=forecast,
             adaptive_plan=plan,
             forward_growth=combined_growth,
+            quality=quality,
+        )
+
+    @staticmethod
+    def quality_gate(
+        evidence: Any,
+        operating_forecast=None,
+    ) -> OperatingForecastQualityResult:
+        """Return whether evidence is safe to activate in the FCFF path.
+
+        The gate deliberately consumes the existing deterministic forecast audit
+        fields rather than introducing a second confidence or scoring system.
+        """
+
+        values = _evidence_values(evidence)
+        definitions_count = len(_as_items(values.get("definitions") or ()))
+        observations_count = len(_as_items(values.get("observations") or ()))
+        coverage = getattr(operating_forecast, "driver_coverage", None)
+        reconstruction_error = getattr(operating_forecast, "reconstruction_error", None)
+        confidence = getattr(operating_forecast, "confidence", None)
+        own_supported_years = tuple(
+            getattr(operating_forecast, "own_supported_years", ()) or ()
+        )
+        consensus_years = tuple(
+            getattr(operating_forecast, "consensus_years", ()) or ()
+        )
+        transition_start_year = getattr(
+            operating_forecast, "transition_start_year", None
+        )
+
+        reasons: list[str] = []
+        if definitions_count == 0:
+            reasons.append("definitions=0 (requires non-empty definitions)")
+        if observations_count == 0:
+            reasons.append("observations=0 (requires non-empty observations)")
+        if operating_forecast is not None:
+            coverage_text = _quality_metric_text(coverage)
+            error_text = _quality_metric_text(reconstruction_error)
+            confidence_text = confidence or "unavailable"
+            if coverage is None or coverage < Decimal("0.60"):
+                reasons.append(f"driver coverage={coverage_text} (minimum 0.60)")
+            if reconstruction_error is None or reconstruction_error > Decimal("0.10"):
+                reasons.append(f"reconstruction error={error_text} (maximum 0.10)")
+            if str(confidence_text).casefold() == "low" or confidence is None:
+                reasons.append(f"confidence={confidence_text} (must not be low)")
+
+        if reasons:
+            reason = "Operating forecast quality rejected: " + "; ".join(reasons)
+            accepted = False
+        elif operating_forecast is None:
+            reason = "Operating forecast quality gate pending deterministic audit"
+            accepted = True
+        else:
+            reason = "Operating forecast quality gate passed"
+            accepted = True
+        return OperatingForecastQualityResult(
+            accepted=accepted,
+            reason=reason,
+            definitions_count=definitions_count,
+            observations_count=observations_count,
+            driver_coverage=coverage,
+            reconstruction_error=reconstruction_error,
+            confidence=confidence,
+            own_supported_years=own_supported_years,
+            consensus_years=consensus_years,
+            transition_start_year=transition_start_year,
+            warnings=tuple(values.get("warnings") or ()),
+            audit_records=tuple(values.get("audit_records") or ()),
+            document_audits=tuple(values.get("document_audits") or ()),
         )
 
     def forecast_with_evidence_provider(
@@ -472,8 +585,15 @@ class OperatingForecastPipelineService:
 def _attach_operating_audit(
     forecast: FcffForecast,
     operating: CompanyOperatingForecast,
+    *,
+    additional_warnings: tuple[str, ...] = (),
 ) -> FcffForecast:
-    warnings = tuple(dict.fromkeys((*forecast.warnings, *operating.warnings)))
+    warnings = tuple(
+        dict.fromkeys((*forecast.warnings, *operating.warnings, *additional_warnings))
+    )
+    operating_warnings = tuple(
+        dict.fromkeys((*operating.warnings, *additional_warnings))
+    )
     return forecast.model_copy(
         update={
             "operating_driver_coverage": operating.driver_coverage,
@@ -484,7 +604,7 @@ def _attach_operating_audit(
             "operating_divergence_by_year": operating.divergence_by_year,
             "operating_divergence": operating.divergence,
             "operating_transition_start_year": operating.transition_start_year,
-            "operating_warnings": operating.warnings,
+            "operating_warnings": operating_warnings,
             "operating_selected_revenue_by_year": operating.selected_revenue_by_year,
             "operating_source_by_year": operating.selected_source_by_year,
             "operating_confidence_by_year": operating.selected_confidence_by_year,
@@ -496,7 +616,12 @@ def _attach_operating_audit(
 def _attach_operating_plan_audit(
     plan: AdaptiveMultistagePlan,
     operating: CompanyOperatingForecast,
+    *,
+    additional_warnings: tuple[str, ...] = (),
 ) -> AdaptiveMultistagePlan:
+    operating_warnings = tuple(
+        dict.fromkeys((*operating.warnings, *additional_warnings))
+    )
     return plan.model_copy(
         update={
             "operating_driver_coverage": operating.driver_coverage,
@@ -507,7 +632,7 @@ def _attach_operating_plan_audit(
             "operating_divergence_by_year": operating.divergence_by_year,
             "operating_divergence": operating.divergence,
             "operating_transition_start_year": operating.transition_start_year,
-            "operating_warnings": operating.warnings,
+            "operating_warnings": operating_warnings,
             "operating_selected_revenue_by_year": operating.selected_revenue_by_year,
             "operating_source_by_year": operating.selected_source_by_year,
             "operating_confidence_by_year": operating.selected_confidence_by_year,
@@ -529,6 +654,9 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "observations",
             "management_constraints",
             "historical_revenue",
+            "warnings",
+            "audit_records",
+            "document_audits",
         )
         if hasattr(value, name)
     }
@@ -688,5 +816,11 @@ __all__ = [
     "OperatingForecastIntegrationService",
     "OperatingForecastPipelineResult",
     "OperatingForecastPipelineService",
+    "OperatingForecastQualityError",
+    "OperatingForecastQualityResult",
     "merge_operating_growth_evidence",
 ]
+
+
+def _quality_metric_text(value: Decimal | None) -> str:
+    return "unavailable" if value is None else str(value)

@@ -1,8 +1,13 @@
 import asyncio
 import datetime
+import json
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import BadRequestError
 from pydantic import ValidationError
 
 from edgarito.schemas.operating import (
@@ -15,6 +20,7 @@ from edgarito.schemas.operating import (
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.openai import OpenAIClient, OpenAIExtractionError
 from edgarito.services.operating.discovery import OperatingEvidenceDiscoveryService
 from edgarito.services.operating.extraction import OperatingEvidenceExtractor
 
@@ -164,7 +170,9 @@ def test_operating_extraction_maps_volume_subscriber_and_capacity_archetypes(tmp
     assert entry.audit_records[-1].record_type == "investment_program"
 
 
-def test_poor_disclosure_returns_empty_evidence_without_inventing_driver_values(tmp_path):
+def test_poor_disclosure_returns_empty_evidence_without_inventing_driver_values(
+    tmp_path,
+):
     filing = _filing()
     ai = _FakeOpenAI(ExtractedOperatingEvidenceResponse())
     service = OperatingEvidenceDiscoveryService(
@@ -211,7 +219,9 @@ def test_source_and_number_validation_rejects_unmatched_or_missing_values(tmp_pa
         ]
     )
     entry, _ = asyncio.run(
-        OperatingEvidenceExtractor(_FakeOpenAI(response), FileSystemCache(tmp_path)).extract(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(
             _filing(),
             _document(text),
             text,
@@ -252,7 +262,9 @@ def test_analyst_and_unsupported_revenue_forecast_claims_are_rejected(tmp_path):
         ]
     )
     entry, _ = asyncio.run(
-        OperatingEvidenceExtractor(_FakeOpenAI(response), FileSystemCache(tmp_path)).extract(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(
             _filing(),
             _document(text),
             text,
@@ -262,7 +274,10 @@ def test_analyst_and_unsupported_revenue_forecast_claims_are_rejected(tmp_path):
 
     assert entry.observations == ()
     assert len(entry.unsupported_evidence) == 2
-    assert all("revenue" in item.reason.casefold() or "expectations" in item.reason for item in entry.rejected)
+    assert all(
+        "revenue" in item.reason.casefold() or "expectations" in item.reason
+        for item in entry.rejected
+    )
 
 
 def test_openai_response_forbids_unapproved_forecast_collection():
@@ -270,6 +285,205 @@ def test_openai_response_forbids_unapproved_forecast_collection():
         ExtractedOperatingEvidenceResponse.model_validate(
             {"forecasts": [{"fiscal_year": 2027, "revenue": 100}]}
         )
+
+
+def test_openai_client_accepts_nested_parsed_response_shape_without_forecasts():
+    payload = {
+        "operating_segments": [
+            {
+                "segment_id": "platform",
+                "name": "Platform",
+                "supporting_text": "Our Platform segment serves customers.",
+                "dimensions": [{"key": "product", "value": "software"}],
+            }
+        ],
+        "driver_definitions": [
+            {
+                "driver_id": "platform-volume-price",
+                "archetype": "volume_price",
+                "segment_id": "platform",
+                "inputs": ["volume", "price"],
+                "units": [
+                    {"key": "volume", "value": "units"},
+                    {"key": "price", "value": "USD/unit"},
+                ],
+                "supporting_text": "Our Platform relationship is volume times price.",
+            }
+        ],
+        "driver_observations": [
+            {
+                "segment_id": "platform",
+                "driver_id": "volume",
+                "fiscal_year": 2026,
+                "value": 12.5,
+                "unit": "units",
+                "supporting_text": "We served 12.5 units in FY2026.",
+            }
+        ],
+        "investment_program_facts": [],
+    }
+    response = SimpleNamespace(
+        output_parsed=None,
+        output=[
+            SimpleNamespace(
+                content=[SimpleNamespace(parsed=payload)],
+            )
+        ],
+    )
+
+    parsed = OpenAIClient._structured_output(response)
+    normalized = ExtractedOperatingEvidenceResponse.model_validate(parsed)
+
+    assert normalized.segments[0].dimensions == {"product": "software"}
+    assert normalized.definitions[0].units == {
+        "volume": "units",
+        "price": "USD/unit",
+    }
+    assert normalized.observations[0].value == 12.5
+    assert normalized.investment_programs == []
+
+    with pytest.raises(ValidationError):
+        ExtractedOperatingEvidenceResponse.model_validate(
+            {**payload, "forecasts": [{"fiscal_year": 2027, "revenue": 100}]}
+        )
+
+
+def test_openai_client_reads_output_text_and_preserves_validation_error_detail():
+    payload = {
+        "segments": [],
+        "definitions": [],
+        "observations": [],
+        "investment_programs": [],
+    }
+    response = SimpleNamespace(output_text=json.dumps(payload))
+    assert OpenAIClient._structured_output(response) == payload
+
+    incomplete = SimpleNamespace(
+        output_parsed=None,
+        output=[],
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+    )
+    with pytest.raises(OpenAIExtractionError, match="max_output_tokens"):
+
+        class _IncompleteClient:
+            class responses:
+                @staticmethod
+                async def parse(**_kwargs):
+                    return incomplete
+
+        asyncio.run(
+            OpenAIClient(client=_IncompleteClient(), max_attempts=1).extract_structured(
+                instructions="extract evidence",
+                content="source",
+                response_model=ExtractedOperatingEvidenceResponse,
+            )
+        )
+
+    class _Client:
+        class responses:
+            @staticmethod
+            async def parse(**_kwargs):
+                return SimpleNamespace(output_parsed={"forecasts": [{"revenue": 100}]})
+
+    client = OpenAIClient(client=_Client())
+    with pytest.raises(OpenAIExtractionError, match="forecasts"):
+        asyncio.run(
+            client.extract_structured(
+                instructions="extract evidence",
+                content="source",
+                response_model=ExtractedOperatingEvidenceResponse,
+            )
+        )
+
+
+def test_openai_client_reports_api_schema_rejection_reason():
+    error = BadRequestError(
+        "structured schema rejected",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        ),
+        body={
+            "error": {"message": "Invalid schema: additionalProperties must be false"}
+        },
+    )
+
+    class _Client:
+        class responses:
+            @staticmethod
+            async def parse(**_kwargs):
+                raise error
+
+    with pytest.raises(
+        OpenAIExtractionError,
+        match="additionalProperties must be false",
+    ):
+        asyncio.run(
+            OpenAIClient(client=_Client(), max_attempts=1).extract_structured(
+                instructions="extract evidence",
+                content="source",
+                response_model=ExtractedOperatingEvidenceResponse,
+            )
+        )
+
+
+def test_existing_operating_fixture_maps_to_compatible_evidence_response_shape():
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "operating"
+            / "structured_evidence.json"
+        ).read_text()
+    )
+    response = ExtractedOperatingEvidenceResponse.model_validate(
+        {
+            "operating_segments": [
+                {**item, "supporting_text": "The company reports a Cloud segment."}
+                for item in fixture["segments"]
+            ],
+            "driver_definitions": [
+                {
+                    **item,
+                    "supporting_text": "Cloud revenue is volume times price.",
+                }
+                for item in fixture["definitions"]
+            ],
+            "driver_observations": [
+                {
+                    **item,
+                    "supporting_text": (
+                        f"Cloud {item['driver_id']} was reported for FY"
+                        f"{item['fiscal_year']}."
+                    ),
+                }
+                for item in fixture["observations"]
+            ],
+            "investment_program_facts": [],
+        }
+    )
+
+    assert len(response.segments) == len(fixture["segments"])
+    assert len(response.definitions) == len(fixture["definitions"])
+    assert len(response.observations) == len(fixture["observations"])
+
+
+def test_discovery_warning_includes_structured_extraction_reason(tmp_path):
+    filing = _filing()
+    ai = _FakeOpenAI(error=OpenAIExtractionError("schema field 'units' is invalid"))
+    result = asyncio.run(
+        OperatingEvidenceDiscoveryService(
+            _Edgar(filing),
+            OperatingEvidenceExtractor(ai, FileSystemCache(tmp_path)),
+            max_filings=1,
+            max_documents=1,
+        ).discover(cik=1, as_of=datetime.date(2026, 3, 1))
+    )
+
+    assert any(
+        "schema field 'units' is invalid" in warning for warning in result.warnings
+    )
 
 
 def test_operating_extraction_cache_hit_is_deterministic(tmp_path):
@@ -332,7 +546,9 @@ def test_discovery_is_generic_for_ticker_labels_and_is_failure_isolated(tmp_path
 
     assert edgar.tickers == ["AAA", "TSLA"]
     assert results[0].segments == results[1].segments == ()
-    assert all("extraction" in warning for result in results for warning in result.warnings)
+    assert all(
+        "extraction" in warning for result in results for warning in result.warnings
+    )
 
 
 class _Edgar:

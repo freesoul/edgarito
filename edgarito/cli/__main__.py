@@ -1,13 +1,15 @@
 import argparse
 import asyncio
 import datetime
+import inspect
 import logging
 import time
-from contextlib import contextmanager
+from collections.abc import Mapping
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from pydantic import ValidationError
 
@@ -93,7 +95,13 @@ from edgarito.services.normalization.classification import (
 )
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
 from edgarito.services.openai import OpenAIClient
-from edgarito.services.operating import OperatingForecastPipelineService
+from edgarito.services.operating import (
+    OperatingEvidenceDiscoveryService,
+    OperatingEvidenceExtractor,
+    OperatingForecastPipelineService,
+    OperatingForecastQualityError,
+    OperatingForecastQualityResult,
+)
 from edgarito.services.providers.damodaran import DamodaranClient
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.edgar import EdgarClient
@@ -169,7 +177,6 @@ from edgarito.settings import (
     PROVIDER_CONFIGURATION,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -190,10 +197,10 @@ def _valuation_step(name: str):
             "Valuation: %s completed in %.1fs", name, time.perf_counter() - started
         )
 
-# Optional provider-neutral injection seam.  Production discovery is not
-# enabled here: callers/tests may supply normalized structured operating
-# evidence without introducing ticker resolution or an extraction provider to
-# the valuation CLI.
+
+# Optional provider-neutral injection seam retained for host applications and
+# tests.  Normal valuation creates the SEC/OpenAI discovery provider below when
+# its optional credentials are configured.
 OPERATING_EVIDENCE_PROVIDER = None
 
 
@@ -1284,19 +1291,55 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         )
     seed_forecast = forecast
     operating_evidence = None
-    if OPERATING_EVIDENCE_PROVIDER is None:
-        additional_warnings.append(
-            "Structured operating integration inactive: no safe provider is "
-            "configured; standard FCFF forecast retained"
-        )
-    else:
-        with _valuation_step("retrieving operating evidence"):
-            operating_evidence, operating_warnings = await _retrieve_operating_evidence(
-                financials,
-                forecast,
-                valuation_date,
+    operating_audit = OperatingForecastQualityResult(
+        accepted=False,
+        reason="Operating forecast inactive: provider not configured",
+    )
+    async with _operating_evidence_provider(args, financials) as (
+        provider,
+        provider_rejection,
+    ):
+        if provider_rejection is not None:
+            operating_audit = OperatingForecastQualityResult(
+                accepted=False,
+                reason=provider_rejection,
             )
-        additional_warnings.extend(operating_warnings)
+            additional_warnings.append(provider_rejection)
+        if provider_rejection is None:
+            with _valuation_step("retrieving operating evidence"):
+                (
+                    operating_evidence,
+                    operating_warnings,
+                ) = await _retrieve_operating_evidence(
+                    financials,
+                    forecast,
+                    valuation_date,
+                    provider=provider,
+                    args=args,
+                )
+            additional_warnings.extend(operating_warnings)
+            if operating_evidence is not None:
+                operating_audit = _operating_quality_audit(
+                    operating_evidence,
+                    discovery_warnings=operating_warnings,
+                )
+                if not operating_audit.accepted:
+                    operating_evidence = None
+                    additional_warnings.append(
+                        f"{operating_audit.reason}; standard FCFF forecast retained"
+                    )
+            else:
+                operating_audit = OperatingForecastQualityResult(
+                    accepted=False,
+                    reason=(
+                        operating_warnings[-1]
+                        if operating_warnings
+                        else "Operating forecast rejected: discovery returned no usable evidence"
+                    ),
+                    warnings=operating_warnings,
+                )
+        else:
+            operating_evidence = None
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
         value is not None for value in (args.net_debt, args.gross_debt, args.cash)
@@ -1598,27 +1641,51 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
             )
         else:
-            pipeline_result = OperatingForecastPipelineService(
-                fcff_service=forecast_service,
-            ).forecast(
-                financials,
-                evidence=operating_evidence,
-                parameters=forecast_parameters,
-                consensus_estimates=forward_estimate_result.estimates,
-                terminal_growth_rate=stable_growth_rate,
-                adaptive_configuration=multistage_configuration,
-                normalized_tax_rate=(
-                    tax_assumption.value if tax_assumption is not None else None
-                ),
-                forward_evidence=forward_evidence,
-                as_of=valuation_date,
-                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-            )
-            forecast = pipeline_result.forecast
-            multistage_plan = pipeline_result.adaptive_plan
-            forecast_parameters = pipeline_result.integration.parameters
-            forward_evidence = pipeline_result.forward_growth or forward_evidence
-            additional_warnings.extend(pipeline_result.warnings)
+            try:
+                pipeline_result = OperatingForecastPipelineService(
+                    fcff_service=forecast_service,
+                ).forecast(
+                    financials,
+                    evidence=operating_evidence,
+                    parameters=forecast_parameters,
+                    consensus_estimates=forward_estimate_result.estimates,
+                    terminal_growth_rate=stable_growth_rate,
+                    adaptive_configuration=multistage_configuration,
+                    normalized_tax_rate=(
+                        tax_assumption.value if tax_assumption is not None else None
+                    ),
+                    forward_evidence=forward_evidence,
+                    as_of=valuation_date,
+                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+                )
+            except OperatingForecastQualityError as exc:
+                operating_audit = exc.result
+                operating_evidence = None
+                additional_warnings.append(
+                    f"{exc.result.reason}; standard consensus/historical forecast retained"
+                )
+                forecast, multistage_plan = AdaptiveMultistageFcffForecastService(
+                    forecast_service
+                ).forecast(
+                    financials,
+                    forecast,
+                    forecast_parameters,
+                    stable_growth_rate,
+                    multistage_configuration,
+                    normalized_tax_rate=(
+                        tax_assumption.value if tax_assumption is not None else None
+                    ),
+                    forward_evidence=forward_evidence,
+                    as_of=valuation_date,
+                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+                )
+            else:
+                operating_audit = pipeline_result.quality or operating_audit
+                forecast = pipeline_result.forecast
+                multistage_plan = pipeline_result.adaptive_plan
+                forecast_parameters = pipeline_result.integration.parameters
+                forward_evidence = pipeline_result.forward_growth or forward_evidence
+                additional_warnings.extend(pipeline_result.warnings)
         plan_updates = {
             "terminal_roic_source": terminal_roic.source,
             "terminal_roic_methodology": terminal_roic.methodology,
@@ -1633,18 +1700,27 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             )
         multistage_plan = multistage_plan.model_copy(update=plan_updates)
     elif operating_evidence is not None:
-        pipeline_result = OperatingForecastPipelineService(
-            fcff_service=forecast_service,
-        ).forecast(
-            financials,
-            evidence=operating_evidence,
-            parameters=forecast_parameters,
-            as_of=valuation_date,
-            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-        )
-        forecast = pipeline_result.forecast
-        forecast_parameters = pipeline_result.integration.parameters
-        additional_warnings.extend(pipeline_result.warnings)
+        try:
+            pipeline_result = OperatingForecastPipelineService(
+                fcff_service=forecast_service,
+            ).forecast(
+                financials,
+                evidence=operating_evidence,
+                parameters=forecast_parameters,
+                as_of=valuation_date,
+                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            )
+        except OperatingForecastQualityError as exc:
+            operating_audit = exc.result
+            operating_evidence = None
+            additional_warnings.append(
+                f"{exc.result.reason}; standard FCFF forecast retained"
+            )
+        else:
+            operating_audit = pipeline_result.quality or operating_audit
+            forecast = pipeline_result.forecast
+            forecast_parameters = pipeline_result.integration.parameters
+            additional_warnings.extend(pipeline_result.warnings)
     parameters = FcffDcfParameters(
         wacc=resolved.wacc,
         wacc_source=resolved.wacc_source,
@@ -1975,6 +2051,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         verbose=args.verbose or args.audit,
         additional_warnings=tuple(additional_warnings),
         management_guidance=guidance_overlay,
+        operating_audit=operating_audit,
     )
     if report_output:
         print(report_output)
@@ -2203,16 +2280,13 @@ async def _retrieve_operating_evidence(
     financials: NormalizedCompanyFinancials,
     forecast,
     as_of: datetime.date,
+    *,
+    provider=None,
+    args: argparse.Namespace | None = None,
 ) -> tuple[object | None, tuple[str, ...]]:
-    """Resolve an injected structured operating-evidence provider.
+    """Resolve structured operating evidence without making it valuation-critical."""
 
-    The normal CLI has no production operating-discovery default.  Tests or a
-    host application may inject a provider through ``OPERATING_EVIDENCE_PROVIDER``;
-    the contract receives normalized company data and fiscal years only, never a
-    ticker-specific lookup instruction.
-    """
-
-    provider = OPERATING_EVIDENCE_PROVIDER
+    provider = OPERATING_EVIDENCE_PROVIDER if provider is None else provider
     if provider is None:
         return None, ()
     resolver = getattr(provider, "discover", None) or getattr(
@@ -2226,18 +2300,163 @@ async def _retrieve_operating_evidence(
             "discover, retrieve, or a callable",
         )
     try:
-        evidence = resolver(
-            financials=financials,
-            company_id=financials.company_id,
-            as_of=as_of,
-            fiscal_years=tuple(item.fiscal_year for item in forecast.observations),
-        )
+        resolver_kwargs = {
+            "financials": financials,
+            "company_id": financials.company_id,
+            "as_of": as_of,
+            "fiscal_years": tuple(item.fiscal_year for item in forecast.observations),
+        }
+        if args is not None:
+            resolver_kwargs.update(
+                {
+                    "ticker": args.ticker or financials.ticker,
+                    "cik": args.cik,
+                    "refresh_sec": args.refresh,
+                }
+            )
+        evidence = _call_with_supported_kwargs(resolver, resolver_kwargs)
         if hasattr(evidence, "__await__"):
             evidence = await evidence
-        warnings = tuple(getattr(evidence, "warnings", ()))
+        warnings = tuple(
+            evidence.get("warnings", ())
+            if isinstance(evidence, Mapping)
+            else getattr(evidence, "warnings", ())
+        )
         return evidence, warnings
     except Exception as exc:
         return None, (f"Structured operating evidence unavailable: {exc}",)
+
+
+def _operating_quality_audit(
+    evidence,
+    *,
+    discovery_warnings: tuple[str, ...] = (),
+) -> OperatingForecastQualityResult:
+    """Run the same provider-neutral activation gate used by the pipeline."""
+
+    value = evidence if isinstance(evidence, Mapping) else {}
+    values = {
+        "definitions": tuple(
+            (
+                value.get("definitions", ())
+                if value
+                else getattr(evidence, "definitions", ())
+            )
+            or ()
+        ),
+        "observations": tuple(
+            (
+                value.get("observations", ())
+                if value
+                else getattr(evidence, "observations", ())
+            )
+            or ()
+        ),
+    }
+    # Discovery only supplies driver evidence. Coverage, reconstruction error,
+    # and confidence are produced by the deterministic engine, so do not reject
+    # evidence prematurely before the pipeline has had a chance to calculate
+    # those metrics.
+    preliminary = OperatingForecastPipelineService.quality_gate(values)
+    return replace(
+        preliminary,
+        warnings=tuple(
+            dict.fromkeys(
+                (
+                    *discovery_warnings,
+                    *(
+                        (
+                            value.get("warnings", ())
+                            if value
+                            else getattr(evidence, "warnings", ())
+                        )
+                        or ()
+                    ),
+                )
+            )
+        ),
+        audit_records=tuple(
+            (
+                value.get("audit_records", ())
+                if value
+                else getattr(evidence, "audit_records", ())
+            )
+            or ()
+        ),
+        document_audits=tuple(
+            (
+                value.get("document_audits", ())
+                if value
+                else getattr(evidence, "document_audits", ())
+            )
+            or ()
+        ),
+    )
+
+
+@asynccontextmanager
+async def _operating_evidence_provider(
+    args: argparse.Namespace,
+    financials: NormalizedCompanyFinancials,
+) -> AsyncIterator[tuple[object | None, str | None]]:
+    """Build the normal SEC/OpenAI provider only when optional config is ready."""
+
+    if OPERATING_EVIDENCE_PROVIDER is not None:
+        yield OPERATING_EVIDENCE_PROVIDER, None
+        return
+
+    if not OPENAI_API_KEY or not str(OPENAI_API_KEY).strip():
+        yield None, "OpenAI API key missing"
+        return
+    user_agent = getattr(args, "user_agent", None)
+    if not user_agent or not str(user_agent).strip():
+        yield None, "SEC user-agent missing"
+        return
+
+    cache = FileSystemCache(Path(args.cache_dir))
+    openai_client = None
+    try:
+        openai_client = OpenAIClient(
+            api_key=OPENAI_API_KEY,
+            model=OPENAI_MODEL,
+            reasoning_effort=OPENAI_REASONING_EFFORT,
+        )
+    except Exception as exc:
+        yield None, f"Operating forecast provider unavailable: {exc}"
+        return
+
+    try:
+        async with EdgarClient(cache, str(user_agent)) as edgar:
+            yield (
+                OperatingEvidenceDiscoveryService(
+                    edgar,
+                    OperatingEvidenceExtractor(openai_client, cache),
+                ),
+                None,
+            )
+    finally:
+        await openai_client.close()
+
+
+def _call_with_supported_kwargs(resolver, kwargs: dict[str, object]):
+    """Keep the provider-neutral injection seam compatible with small test fakes."""
+
+    try:
+        signature = inspect.signature(resolver)
+    except (TypeError, ValueError):
+        return resolver(**kwargs)
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return resolver(**kwargs)
+    return resolver(
+        **{
+            name: value
+            for name, value in kwargs.items()
+            if name in signature.parameters
+        }
+    )
 
 
 def _merge_forward_growth_evidence(

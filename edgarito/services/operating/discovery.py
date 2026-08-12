@@ -145,6 +145,8 @@ class OperatingEvidenceDiscoveryService:
         *,
         ticker: str | None = None,
         cik: int | None = None,
+        financials: Any | None = None,
+        company_id: str | int | None = None,
         as_of: datetime.date,
         refresh_sec: bool = False,
         valuation_date: datetime.date | None = None,
@@ -152,6 +154,13 @@ class OperatingEvidenceDiscoveryService:
     ) -> OperatingForecastDiscoveryResult:
         """Return evidence for one valuation date, isolating provider failures."""
 
+        if ticker is None and financials is not None:
+            ticker = getattr(financials, "ticker", None)
+        if cik is None and company_id is not None:
+            try:
+                cik = int(company_id)
+            except (TypeError, ValueError):
+                pass
         if valuation_date is not None and valuation_date != as_of:
             return OperatingForecastDiscoveryResult(
                 warnings=(

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import TypeVar
+from collections.abc import Mapping
+from typing import Any, TypeVar
 
 from openai import (
     APIConnectionError,
@@ -100,10 +102,11 @@ class OpenAIClient:
                     store=False,
                     timeout=self.timeout,
                 )
-                parsed = getattr(response, "output_parsed", None)
+                parsed = self._structured_output(response)
                 if parsed is None:
                     refusal = self._refusal(response)
-                    detail = f": {refusal}" if refusal else ""
+                    reason = refusal or self._response_reason(response)
+                    detail = f": {reason}" if reason else ""
                     raise OpenAIExtractionError(
                         f"OpenAI returned no structured output{detail}"
                     )
@@ -111,13 +114,12 @@ class OpenAIClient:
                     return parsed
                 return response_model.model_validate(parsed)
             except AuthenticationError as exc:
-                raise OpenAIAuthenticationError(
-                    "OpenAI authentication failed"
-                ) from exc
+                raise OpenAIAuthenticationError("OpenAI authentication failed") from exc
             except self._TRANSIENT_ERRORS as exc:
                 if attempt >= self.max_attempts:
                     raise OpenAIExtractionError(
-                        f"OpenAI extraction failed after {attempt} attempts"
+                        "OpenAI extraction failed after "
+                        f"{attempt} attempts: {self._exception_detail(exc)}"
                     ) from exc
                 self._logger.warning(
                     "Transient OpenAI failure; retrying attempt %s/%s",
@@ -127,11 +129,13 @@ class OpenAIClient:
                 await asyncio.sleep(self.retry_delay * attempt)
             except (ValidationError, ValueError, TypeError) as exc:
                 raise OpenAIExtractionError(
-                    "OpenAI returned an invalid structured response"
+                    "OpenAI returned an invalid structured response: "
+                    f"{self._exception_detail(exc)}"
                 ) from exc
             except (APIResponseValidationError, BadRequestError) as exc:
                 raise OpenAIExtractionError(
-                    "OpenAI rejected or could not validate the structured response"
+                    "OpenAI rejected or could not validate the structured response: "
+                    f"{self._exception_detail(exc)}"
                 ) from exc
 
         raise OpenAIExtractionError("OpenAI extraction failed")
@@ -143,9 +147,108 @@ class OpenAIClient:
 
     @staticmethod
     def _refusal(response) -> str | None:
-        for output in getattr(response, "output", ()) or ():
-            for content in getattr(output, "content", ()) or ():
-                refusal = getattr(content, "refusal", None)
+        for output in OpenAIClient._values(OpenAIClient._field(response, "output")):
+            for content in OpenAIClient._values(OpenAIClient._field(output, "content")):
+                refusal = OpenAIClient._field(content, "refusal")
                 if refusal:
                     return str(refusal)
         return None
+
+    @classmethod
+    def _structured_output(cls, response: Any) -> Any | None:
+        """Read parsed Responses output across supported SDK response shapes.
+
+        Current ``responses.parse`` exposes ``output_parsed``.  The underlying
+        response shape, and compatible SDKs/proxies, expose the same value as
+        ``output[*].content[*].parsed`` instead.  A final JSON-text fallback is
+        deliberately limited to those output-text/content fields; it does not
+        recursively search arbitrary response data or accept forecast fields.
+        The response model remains responsible for the strict evidence-only
+        validation after this transport normalization.
+        """
+
+        parsed = cls._field(response, "output_parsed")
+        if parsed is not None:
+            return parsed
+
+        for output in cls._values(cls._field(response, "output")):
+            parsed = cls._field(output, "parsed")
+            if parsed is not None:
+                return parsed
+            for content in cls._values(cls._field(output, "content")):
+                parsed = cls._field(content, "parsed")
+                if parsed is not None:
+                    return parsed
+                parsed = cls._json_object(cls._field(content, "text"))
+                if parsed is not None:
+                    return parsed
+
+        # Keep compatibility with callers that supply a Chat Completions-like
+        # fake while the production client uses Responses.
+        for choice in cls._values(cls._field(response, "choices")):
+            message = cls._field(choice, "message")
+            parsed = cls._field(message, "parsed")
+            if parsed is not None:
+                return parsed
+            parsed = cls._json_object(cls._field(message, "content"))
+            if parsed is not None:
+                return parsed
+
+        return cls._json_object(cls._field(response, "output_text"))
+
+    @staticmethod
+    def _field(value: Any, name: str, default: Any = None) -> Any:
+        if isinstance(value, Mapping):
+            return value.get(name, default)
+        return getattr(value, name, default)
+
+    @staticmethod
+    def _values(value: Any) -> tuple[Any, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, Mapping):
+            return (value,)
+        if isinstance(value, (str, bytes)):
+            return (value,)
+        try:
+            return tuple(value)
+        except TypeError:
+            return (value,)
+
+    @staticmethod
+    def _json_object(value: Any) -> Any | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+
+    @classmethod
+    def _response_reason(cls, response: Any) -> str | None:
+        """Return status/error details when a response has no parsed output."""
+
+        error = cls._field(response, "error")
+        error_message = cls._field(error, "message")
+        if error_message:
+            return str(error_message)
+        incomplete = cls._field(response, "incomplete_details")
+        incomplete_reason = cls._field(incomplete, "reason")
+        if incomplete_reason:
+            return f"incomplete response ({incomplete_reason})"
+        status = cls._field(response, "status")
+        return f"response status={status}" if status and status != "completed" else None
+
+    @staticmethod
+    def _exception_detail(exc: Exception) -> str:
+        """Return a concise provider/Pydantic reason suitable for audit output."""
+
+        body = getattr(exc, "body", None)
+        if isinstance(body, Mapping):
+            error = body.get("error")
+            if isinstance(error, Mapping) and error.get("message"):
+                return str(error["message"])
+            if body.get("message"):
+                return str(body["message"])
+        detail = str(exc).strip()
+        return detail or type(exc).__name__

@@ -48,6 +48,7 @@ class ValuationReportConsolePresenter:
         provider_relative: ProviderNeutralRelativeValuation | None = None,
         additional_warnings: tuple[str, ...] = (),
         management_guidance: GuidanceOverlayResult | None = None,
+        operating_audit=None,
     ) -> str:
         blocks: list[str] = []
         if intrinsic is not None:
@@ -57,6 +58,7 @@ class ValuationReportConsolePresenter:
                     profile_name=profile_name,
                     verbose=verbose,
                     include_warnings=False,
+                    operating_audit=operating_audit,
                 )
             )
         if management_guidance is not None and (
