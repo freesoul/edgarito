@@ -16,6 +16,9 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
     SegmentRevenueForecast,
+    canonical_operating_segment_id,
+    operating_periods_compatible,
+    operating_units_compatible,
 )
 from edgarito.services.operating.registry import (
     ARCHETYPE_FORMULAS,
@@ -34,6 +37,8 @@ _SEGMENT_REVENUE_DRIVERS = frozenset(
         "segment_revenue",
         "total_revenue",
         "total_sales",
+        "sales",
+        "net_sales",
     }
 )
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -69,6 +74,14 @@ class _SelectedObservation:
     def provenance(self) -> Any:
         return self.observation.provenance or self.observation.evidence
 
+    @property
+    def period(self) -> str:
+        return self.observation.fiscal_period
+
+    @property
+    def period_key(self) -> str | None:
+        return self.observation.period_key
+
 
 @dataclass(frozen=True)
 class _FormulaResult:
@@ -92,6 +105,8 @@ class _ReconstructionAudit:
     supported_years: tuple[int, ...]
     confidence: str
     warnings: tuple[str, ...]
+    genuine_coverage: Decimal | None = None
+    derived_reconstruction_years: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -215,6 +230,13 @@ class OperatingForecastService:
             historical,
             self.registry,
         )
+        modeled_revenue_share = _modeled_revenue_share(
+            consolidation.segments,
+            segment_forecasts,
+            historical,
+            historical_selected_records,
+            company_audit,
+        )
 
         consolidated_revenue: list[Decimal] = []
         consolidated_sources: dict[int, str] = {}
@@ -307,8 +329,11 @@ class OperatingForecastService:
             warnings=tuple(dict.fromkeys(warnings)),
             unit=_company_unit(normalized_segments),
             driver_coverage=company_audit.coverage,
+            modeled_revenue_share=modeled_revenue_share,
+            genuine_coverage=company_audit.genuine_coverage,
             reconstruction_error=company_audit.error,
             reconstruction_error_by_year=company_audit.error_by_year,
+            derived_reconstruction_years=company_audit.derived_reconstruction_years,
             supported_years=company_audit.supported_years,
             own_supported_years=tuple(
                 year
@@ -412,6 +437,13 @@ class OperatingForecastService:
             self.registry,
         )
         warnings.extend(reconstruction_audit.warnings)
+        formula_history = dict(historical_revenue)
+        formula_history.update(
+            _reported_revenue_observation_map(selected_records, segment.segment_id)
+        )
+        direct_revenue_history = _reported_revenue_observation_map(
+            historical_selected_records, segment.segment_id
+        )
 
         for year in years:
             formula_results: list[_FormulaResult] = []
@@ -423,7 +455,7 @@ class OperatingForecastService:
                     selected_records,
                     year,
                     selected_revenue_by_year,
-                    historical_revenue,
+                    formula_history,
                 )
                 warnings.extend(result_warnings)
                 if result is not None:
@@ -447,10 +479,33 @@ class OperatingForecastService:
 
             historical_value = historical_revenue.get(year)
             applied_segment_constraint = False
+            direct = _direct_revenue_observation(
+                selected_records,
+                segment.segment_id,
+                year,
+                definitions,
+            )
             if historical_value is not None:
                 revenue = historical_value
                 source = _HISTORICAL_SOURCE
                 confidence = "medium"
+            elif direct is not None and direct.source != _MANAGEMENT_SOURCE:
+                # A reported segment-revenue observation is a valid direct
+                # operating path.  It must outrank a generic formula or a
+                # formula reconstructed from the same revenue row.
+                revenue = direct.value
+                source = direct.source
+                confidence = direct.confidence
+                if segment_constraint is not None:
+                    revenue, constraint_label = _apply_output_constraint(
+                        revenue,
+                        segment_constraint,
+                    )
+                    source = _MANAGEMENT_SOURCE
+                    confidence = segment_constraint.confidence
+                    applied_segment_constraint = True
+                if source != _HISTORICAL_SOURCE:
+                    explicit_years.append(year)
             elif formula_results:
                 revenue = sum((result.value for result in formula_results), Decimal(0))
                 source = _combine_formula_sources(formula_results)
@@ -468,12 +523,6 @@ class OperatingForecastService:
                 if source != _HISTORICAL_SOURCE:
                     explicit_years.append(year)
             else:
-                direct = _direct_revenue_observation(
-                    selected_records,
-                    segment.segment_id,
-                    year,
-                    definitions,
-                )
                 if direct is not None:
                     revenue = direct.value
                     source = direct.source
@@ -579,6 +628,23 @@ class OperatingForecastService:
                 )
 
         revenue_path = tuple(revenues)
+        modeled_revenue_share = _segment_modeled_revenue_share(
+            historical_revenue,
+            direct_revenue_history,
+            reconstruction_audit.supported_years,
+            forward_revenue=revenue_path,
+            forward_sources=sources,
+            generic_fallback=any(
+                definition.archetype == OperatingArchetype.GENERIC_SEGMENT_GROWTH
+                for definition in definitions
+            ),
+            fiscal_years=years,
+            historical_years=tuple(historical_revenue),
+        )
+        segment_confidence = _forecast_confidence(
+            reconstruction_audit.confidence,
+            modeled_revenue_share,
+        )
         return SegmentRevenueForecast(
             segment=segment,
             fiscal_years=years,
@@ -596,8 +662,11 @@ class OperatingForecastService:
             warnings=tuple(dict.fromkeys(warnings)),
             unit=segment.currency or "currency",
             driver_coverage=reconstruction_audit.coverage,
+            modeled_revenue_share=modeled_revenue_share,
+            genuine_coverage=reconstruction_audit.genuine_coverage,
             reconstruction_error=reconstruction_audit.error,
             reconstruction_error_by_year=reconstruction_audit.error_by_year,
+            derived_reconstruction_years=reconstruction_audit.derived_reconstruction_years,
             supported_years=reconstruction_audit.supported_years,
             own_supported_years=tuple(
                 year
@@ -605,7 +674,7 @@ class OperatingForecastService:
                 if _is_own_operating_source(source)
                 and _CONFIDENCE_RANK[confidences[year]] >= _CONFIDENCE_RANK["medium"]
             ),
-            confidence=reconstruction_audit.confidence,
+            confidence=segment_confidence,
         )
 
     def _evaluate_definition(
@@ -629,6 +698,18 @@ class OperatingForecastService:
                 definition,
             )
             if selected is None:
+                fallback = _generic_growth_fallback(
+                    definition,
+                    metric,
+                    segment.segment_id,
+                    year,
+                    historical_revenue,
+                )
+                if fallback is not None:
+                    selected = fallback
+                    inputs[metric] = selected.value
+                    selected_inputs.append(selected)
+                    continue
                 warnings.append(
                     f"FY{year} {definition.driver_id}: missing required input "
                     f"'{metric}'"
@@ -647,6 +728,48 @@ class OperatingForecastService:
             if selected is not None:
                 inputs[metric] = selected.value
                 selected_inputs.append(selected)
+
+        if selected_inputs and not _selected_periods_compatible(selected_inputs):
+            periods = ", ".join(
+                f"{item.observation.driver_id}={item.observation.fiscal_period}"
+                for item in selected_inputs
+            )
+            warnings.append(
+                f"FY{year} {definition.driver_id}: incompatible operating evidence "
+                f"periods ({periods})"
+            )
+            return None, warnings
+
+        incompatible_units = [
+            selected
+            for metric in (*definition.required_inputs, *definition.optional_inputs)
+            if (
+                selected := _find_input_observation(
+                    selected_records,
+                    segment.segment_id,
+                    metric,
+                    year,
+                    definition,
+                )
+            )
+            is not None
+            and metric in definition.units
+            and definition.units[metric].casefold() not in {"unit", "unspecified"}
+            and not _is_generic_unit_observation(selected.observation)
+            and not operating_units_compatible(
+                definition.units[metric], selected.observation.unit
+            )
+        ]
+        if incompatible_units:
+            details = ", ".join(
+                f"{item.observation.driver_id}={item.observation.unit}"
+                for item in incompatible_units
+            )
+            warnings.append(
+                f"FY{year} {definition.driver_id}: incompatible operating units "
+                f"({details})"
+            )
+            return None, warnings
 
         previous_revenue = None
         if definition.archetype == OperatingArchetype.GENERIC_SEGMENT_GROWTH:
@@ -850,13 +973,14 @@ def _normalize_historical_revenue(
             if isinstance(raw_key, tuple) and len(raw_key) == 2:
                 segment_id, raw_year = raw_key
                 year = _year_key(raw_year)
-                by_segment[str(segment_id)][year] = _non_negative_revenue(
+                canonical_segment_id = canonical_operating_segment_id(str(segment_id))
+                by_segment[canonical_segment_id][year] = _non_negative_revenue(
                     raw_value,
                     f"historical revenue {segment_id} FY{year}",
                 )
                 continue
             if isinstance(raw_value, Mapping):
-                segment_id = str(raw_key).strip()
+                segment_id = canonical_operating_segment_id(str(raw_key).strip())
                 if not segment_id:
                     raise ValueError("Historical revenue segment ID cannot be blank")
                 for raw_year, amount in raw_value.items():
@@ -877,14 +1001,17 @@ def _normalize_historical_revenue(
                     "segment_revenue",
                 }:
                     continue
-                by_segment[item.segment_id][item.fiscal_year] = _non_negative_revenue(
+                by_segment[canonical_operating_segment_id(item.segment_id)][
+                    item.fiscal_year
+                ] = _non_negative_revenue(
                     _observation_value(item),
                     f"historical revenue {item.segment_id} FY{item.fiscal_year}",
                 )
             elif isinstance(item, tuple) and len(item) == 3:
                 segment_id, raw_year, amount = item
                 year = _year_key(raw_year)
-                by_segment[str(segment_id)][year] = _non_negative_revenue(
+                canonical_segment_id = canonical_operating_segment_id(str(segment_id))
+                by_segment[canonical_segment_id][year] = _non_negative_revenue(
                     amount,
                     f"historical revenue {segment_id} FY{year}",
                 )
@@ -1106,15 +1233,32 @@ def _constraint_tuple_to_observation(
 def _select_observations(
     records: Iterable[OperatingDriverObservation],
 ) -> dict[tuple[str, str, int], _SelectedObservation]:
-    grouped: dict[tuple[str, str, int], list[OperatingDriverObservation]] = defaultdict(
-        list
-    )
+    grouped: dict[
+        tuple[str, str, int, str, str | None], list[OperatingDriverObservation]
+    ] = defaultdict(list)
     for record in records:
-        grouped[(record.segment_id, record.driver_id, record.fiscal_year)].append(
-            record
-        )
+        grouped[
+            (
+                record.segment_id,
+                record.driver_id,
+                record.fiscal_year,
+                record.fiscal_period,
+                record.period_key,
+            )
+        ].append(record)
     selected: dict[tuple[str, str, int], _SelectedObservation] = {}
-    for key, candidates in grouped.items():
+    by_metric_period: dict[tuple[str, str, int], list[OperatingDriverObservation]] = (
+        defaultdict(list)
+    )
+    for (
+        segment_id,
+        driver_id,
+        year,
+        _period,
+        _period_key,
+    ), candidates in grouped.items():
+        by_metric_period[(segment_id, driver_id, year)].extend(candidates)
+    for key, candidates in by_metric_period.items():
         winner = max(
             enumerate(candidates),
             key=lambda pair: (
@@ -1162,6 +1306,59 @@ def _find_input_observation(
         if result is not None:
             return result
     return None
+
+
+def _selected_periods_compatible(
+    observations: Iterable[_SelectedObservation | None],
+) -> bool:
+    values = tuple(item for item in observations if item is not None)
+    if len(values) < 2:
+        return True
+    first = values[0]
+    return all(
+        operating_periods_compatible(
+            first.period,
+            item.period,
+            first.period_key,
+            item.period_key,
+        )
+        for item in values[1:]
+    )
+
+
+def _generic_growth_fallback(
+    definition: OperatingDriverDefinition,
+    metric: str,
+    segment_id: str,
+    year: int,
+    historical_revenue: Mapping[int, Decimal],
+) -> _SelectedObservation | None:
+    if definition.archetype != OperatingArchetype.GENERIC_SEGMENT_GROWTH:
+        return None
+    normalized_metric = metric.casefold().replace("-", "_").replace(" ", "_")
+    if normalized_metric not in {"growth", "growth_rate", "segment_growth"}:
+        return None
+    current = historical_revenue.get(year - 1)
+    previous = historical_revenue.get(year - 2)
+    if current is None or previous is None or previous == 0:
+        return None
+    growth = current / previous - Decimal(1)
+    unit = definition.units.get(metric, "ratio").casefold()
+    if "%" in unit or "percent" in unit or "percentage" in unit:
+        value = growth * Decimal(100)
+    else:
+        value = growth
+    observation = OperatingDriverObservation(
+        segment_id=segment_id,
+        driver_id=metric,
+        fiscal_year=year,
+        value=value,
+        unit=definition.units.get(metric, "ratio"),
+        origin="derived",
+        confidence="medium",
+        method="generic_segment_growth_from_reported_revenue",
+    )
+    return _SelectedObservation(observation, value)
 
 
 def _select_consolidation_segments(
@@ -1317,6 +1514,21 @@ def _direct_revenue_observation(
     return None
 
 
+def _reported_revenue_observation_map(
+    selected: Mapping[tuple[str, str, int], _SelectedObservation],
+    segment_id: str,
+) -> dict[int, Decimal]:
+    result: dict[int, Decimal] = {}
+    for (selected_segment, driver_id, year), selected_item in selected.items():
+        if (
+            selected_segment == segment_id
+            and driver_id.casefold() in _SEGMENT_REVENUE_DRIVERS
+            and selected_item.source != _MANAGEMENT_SOURCE
+        ):
+            result[year] = selected_item.value
+    return result
+
+
 def _apply_output_constraint(
     value: Decimal,
     constraint: _SelectedObservation,
@@ -1382,6 +1594,8 @@ def _historical_reconstruction_audit(
         )
 
     supported: list[int] = []
+    genuine_supported: list[int] = []
+    derived_years: list[int] = []
     errors: dict[int, Decimal] = {}
     warnings: list[str] = []
     for year in sorted(reported):
@@ -1400,12 +1614,19 @@ def _historical_reconstruction_audit(
             )
             continue
         supported.append(year)
+        if _has_genuine_reconstruction_inputs(
+            segment_id, definitions, selected_records, year
+        ):
+            genuine_supported.append(year)
+        else:
+            derived_years.append(year)
         errors[year] = _relative_reconstruction_error(
             reconstructed,
             reported[year],
         )
 
     coverage = Decimal(len(supported)) / Decimal(len(reported))
+    genuine_coverage = Decimal(len(genuine_supported)) / Decimal(len(reported))
     error = _mean(tuple(errors.values()))
     confidence = _reconstruction_confidence(coverage, error)
     warnings.extend(
@@ -1424,6 +1645,8 @@ def _historical_reconstruction_audit(
         supported_years=tuple(supported),
         confidence=confidence,
         warnings=tuple(warnings),
+        genuine_coverage=genuine_coverage,
+        derived_reconstruction_years=tuple(derived_years),
     )
 
 
@@ -1499,6 +1722,8 @@ def _historical_company_reconstruction_audit(
         )
 
     supported: list[int] = []
+    genuine_supported: list[int] = []
+    derived_years: list[int] = []
     errors: dict[int, Decimal] = {}
     warnings: list[str] = []
     for year in sorted(reported):
@@ -1524,12 +1749,25 @@ def _historical_company_reconstruction_audit(
             )
             continue
         supported.append(year)
+        if all(
+            _has_genuine_reconstruction_inputs(
+                segment.segment_id,
+                definitions_by_segment.get(segment.segment_id, ()),
+                selected_records,
+                year,
+            )
+            for segment in segments
+        ):
+            genuine_supported.append(year)
+        else:
+            derived_years.append(year)
         errors[year] = _relative_reconstruction_error(
             sum(reconstructed_values, Decimal(0)),
             reported[year],
         )
 
     coverage = Decimal(len(supported)) / Decimal(len(reported))
+    genuine_coverage = Decimal(len(genuine_supported)) / Decimal(len(reported))
     error = _mean(tuple(errors.values()))
     confidence = _reconstruction_confidence(coverage, error)
     warnings.extend(
@@ -1548,6 +1786,8 @@ def _historical_company_reconstruction_audit(
         supported_years=tuple(supported),
         confidence=confidence,
         warnings=tuple(warnings),
+        genuine_coverage=genuine_coverage,
+        derived_reconstruction_years=tuple(derived_years),
     )
 
 
@@ -1580,6 +1820,19 @@ def _reconstruct_segment_revenue(
             if selected is None or selected.source == _MANAGEMENT_SOURCE:
                 return None
             inputs[metric] = selected.value
+            if not _selected_periods_compatible(
+                tuple(
+                    _find_input_observation(
+                        selected_records,
+                        segment_id,
+                        required_metric,
+                        year,
+                        definition,
+                    )
+                    for required_metric in definition.required_inputs
+                )
+            ):
+                return None
         for metric in definition.optional_inputs:
             selected = _find_input_observation(
                 selected_records,
@@ -1609,6 +1862,27 @@ def _reconstruct_segment_revenue(
             return None
         values.append(value)
     return sum(values, Decimal(0))
+
+
+def _has_genuine_reconstruction_inputs(
+    segment_id: str,
+    definitions: Sequence[OperatingDriverDefinition],
+    selected_records: Mapping[tuple[str, str, int], _SelectedObservation],
+    year: int,
+) -> bool:
+    """Return whether reconstruction used non-derived reported inputs."""
+
+    for definition in definitions:
+        for metric in definition.required_inputs:
+            selected = _find_input_observation(
+                selected_records, segment_id, metric, year, definition
+            )
+            if selected is None or selected.source in {
+                _MANAGEMENT_SOURCE,
+                "derived",
+            }:
+                return False
+    return bool(definitions)
 
 
 def _add_reported_revenue_observations(
@@ -1721,13 +1995,13 @@ def _reconstruction_quality_warnings(
 
 def _observation_value(observation: OperatingDriverObservation) -> Decimal:
     if observation.value is not None:
-        return observation.value
+        return observation.value * observation.scale
     if observation.low is not None and observation.high is not None:
-        return (observation.low + observation.high) / Decimal(2)
+        return (observation.low + observation.high) / Decimal(2) * observation.scale
     if observation.low is not None:
-        return observation.low
+        return observation.low * observation.scale
     if observation.high is not None:
-        return observation.high
+        return observation.high * observation.scale
     raise ValueError("Operating observation has no usable value")
 
 
@@ -1749,6 +2023,12 @@ def _observation_source(observation: OperatingDriverObservation) -> str:
     if observation.origin == "management_guidance":
         return _MANAGEMENT_SOURCE
     return observation.origin
+
+
+def _is_generic_unit_observation(observation: OperatingDriverObservation) -> bool:
+    """Keep legacy fixture observations with an intentionally generic unit usable."""
+
+    return observation.scale == Decimal(1) and observation.unit.casefold() == "units"
 
 
 def _first_observation_provenance(
@@ -1829,6 +2109,167 @@ def _non_negative_revenue(value: Any, label: str) -> Decimal:
 def _company_unit(segments: Sequence[OperatingSegment]) -> str:
     currencies = {segment.currency for segment in segments if segment.currency}
     return next(iter(currencies)) if len(currencies) == 1 else "currency"
+
+
+def _modeled_revenue_share(
+    consolidation_segments: Sequence[OperatingSegment],
+    segment_forecasts: Sequence[SegmentRevenueForecast],
+    historical: _HistoricalRevenue,
+    historical_selected_records: Mapping[tuple[str, str, int], _SelectedObservation],
+    company_audit: _ReconstructionAudit,
+) -> Decimal | None:
+    """Return revenue-weighted coverage for the consolidated segment scope.
+
+    Historical formula coverage is a useful audit, but it is not the same as
+    the portion of revenue represented by a usable segment path.  A direct
+    reported segment-revenue observation, a generic growth path, or a complete
+    formula path can therefore contribute to modeled share without making a
+    derived driver look like independent evidence.
+    """
+
+    if not consolidation_segments or not segment_forecasts:
+        return None
+
+    forecast_by_id = {
+        forecast.segment.segment_id: forecast for forecast in segment_forecasts
+    }
+    selected_ids = {segment.segment_id for segment in consolidation_segments}
+    totals: dict[str, Decimal] = {}
+    modeled: dict[str, Decimal] = {}
+    historical_total = sum(historical.company.values(), Decimal(0))
+    historical_supported = sum(
+        historical.company[year]
+        for year in company_audit.supported_years
+        if year in historical.company
+    )
+    for segment in consolidation_segments:
+        forecast = forecast_by_id.get(segment.segment_id)
+        if forecast is None:
+            continue
+        history = dict(historical.by_segment.get(segment.segment_id, {}))
+        history.update(
+            _reported_revenue_observation_map(
+                historical_selected_records, segment.segment_id
+            )
+        )
+        if history:
+            total = sum(history.values(), Decimal(0))
+            share = forecast.modeled_revenue_share
+            supported = total * share if share is not None else Decimal(0)
+        else:
+            total = sum(forecast.revenue, Decimal(0))
+            share = forecast.modeled_revenue_share
+            supported = total * share if share is not None else Decimal(0)
+        if total > 0:
+            totals[segment.segment_id] = total
+            modeled[segment.segment_id] = supported
+
+    if not totals:
+        if historical_total == 0:
+            return None
+        return historical_supported / historical_total
+    total = sum(totals.values(), Decimal(0))
+    modeled_total = sum(
+        modeled[segment_id] for segment_id in selected_ids if segment_id in modeled
+    )
+    if total == 0:
+        return None
+    return min(Decimal(1), modeled_total / total)
+
+
+def _segment_modeled_revenue_share(
+    historical_revenue: Mapping[int, Decimal],
+    reported_revenue: Mapping[int, Decimal],
+    supported_years: Sequence[int],
+    *,
+    forward_revenue: Sequence[Decimal] = (),
+    forward_sources: Mapping[int, str] | None = None,
+    generic_fallback: bool = False,
+    fiscal_years: Sequence[int] = (),
+    historical_years: Sequence[int] = (),
+) -> Decimal | None:
+    """Return revenue-weighted modeled coverage for one segment.
+
+    Historical reconstruction coverage remains the legacy metric when history
+    is present.  Forward direct revenue and generic-growth paths contribute
+    modeled share without changing the causal reconstruction denominator.
+    """
+
+    reported = dict(historical_revenue)
+    reported.update(reported_revenue)
+    if reported:
+        total = sum(reported.values(), Decimal(0))
+        if total == 0:
+            return None
+        if generic_fallback and not supported_years:
+            modeled = sum(reported.values(), Decimal(0))
+        else:
+            modeled = sum(
+                reported[year] for year in supported_years if year in reported
+            )
+        if not supported_years and not generic_fallback and historical_years:
+            # Preserve the legacy fiscal-history denominator when no usable
+            # historical formula path exists; forward direct revenue still
+            # contributes only when there is no history to audit.
+            modeled = sum(
+                reported[year] for year in reported_revenue if year in reported
+            )
+        elif reported_revenue:
+            modeled += sum(
+                reported[year]
+                for year in reported_revenue
+                if year in reported and year not in supported_years
+            )
+        if forward_revenue and forward_sources:
+            # Keep coverage revenue-weighted across the complete comparable
+            # path.  A history-only denominator can make forward modeled
+            # revenue exceed 100%; skip years already represented by reported
+            # observations to avoid double counting.
+            reported_years = set(reported)
+            for year, value in zip(fiscal_years, forward_revenue, strict=True):
+                if year in reported_years:
+                    continue
+                total += value
+                if (
+                    value > 0
+                    and forward_sources.get(year) != _UNAVAILABLE_SOURCE
+                    and (
+                        generic_fallback
+                        or forward_sources.get(year) != _HISTORICAL_SOURCE
+                    )
+                ):
+                    modeled += value
+        if total == 0:
+            return None
+        return min(Decimal(1), max(Decimal(0), modeled / total))
+
+    if not forward_revenue or not forward_sources:
+        return None
+    total = sum(forward_revenue, Decimal(0))
+    if total == 0:
+        return None
+    modeled = sum(
+        value
+        for year, value in zip(fiscal_years, forward_revenue, strict=True)
+        if forward_sources.get(year) != _UNAVAILABLE_SOURCE
+        and (generic_fallback or forward_sources.get(year) != _HISTORICAL_SOURCE)
+    )
+    return min(Decimal(1), max(Decimal(0), modeled / total))
+
+
+def _forecast_confidence(
+    reconstruction_confidence: str,
+    modeled_revenue_share: Decimal | None,
+) -> str:
+    """Keep the historical audit confidence separate from revenue coverage."""
+
+    if modeled_revenue_share is None:
+        return reconstruction_confidence
+    if modeled_revenue_share < _MEDIUM_DRIVER_COVERAGE:
+        return "low"
+    if modeled_revenue_share < _HIGH_DRIVER_COVERAGE:
+        return _worst_confidence((reconstruction_confidence, "medium"))
+    return reconstruction_confidence
 
 
 __all__ = [

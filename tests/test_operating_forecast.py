@@ -600,3 +600,40 @@ def test_company_reconstruction_audit_compares_consolidated_revenue():
     assert result.supported_years == (2024,)
     assert result.confidence == "high"
     assert result.reconstruction_error_by_year == {2024: Decimal("0")}
+
+
+def test_modeled_revenue_share_weights_supported_segments_by_reported_revenue():
+    segments = (_segment("automotive"), _segment("energy"))
+    result = OperatingForecastService().forecast(
+        segments=segments,
+        definitions=(),
+        observations=(
+            _observation(
+                "segment_revenue",
+                "100",
+                2025,
+                segment_id="automotive",
+            ),
+        ),
+        historical_revenue={
+            "automotive": {2025: Decimal("100")},
+            "energy": {2025: Decimal("900")},
+        },
+        fiscal_years=(2025,),
+    )
+
+    assert result.segment_forecasts[0].modeled_revenue_share == Decimal("1")
+    assert result.segment_forecasts[1].modeled_revenue_share == Decimal("0")
+    assert result.modeled_revenue_share == Decimal("0.1")
+
+
+def test_modeled_revenue_share_includes_forward_direct_revenue_in_denominator():
+    result = OperatingForecastService().forecast(
+        segments=(_segment(),),
+        definitions=(),
+        observations=(_observation("segment_revenue", "150", 2025),),
+        historical_revenue={2024: Decimal("100")},
+        fiscal_years=(2024, 2025),
+    )
+
+    assert result.segment_forecasts[0].modeled_revenue_share == Decimal("0.6")

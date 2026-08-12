@@ -28,19 +28,22 @@ from edgarito.schemas.operating import (
     OperatingExtractionCacheEntry,
     OperatingInvestmentProgram,
     OperatingSegment,
+    normalize_operating_fiscal_period,
+    normalize_operating_unit,
+    operating_units_compatible,
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import (
     clean_document_text,
-    extract_guidance_context,
+    extract_operating_context,
     normalize_evidence,
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "operating-evidence-v1"
-SCHEMA_VERSION = "operating-evidence-schema-v1"
-CONTEXT_VERSION = "guidance-context-v1"
+PROMPT_VERSION = "operating-evidence-v2"
+SCHEMA_VERSION = "operating-evidence-schema-v2"
+CONTEXT_VERSION = "operating-context-v2"
 
 OPERATING_PROMPT_VERSION = PROMPT_VERSION
 OPERATING_SCHEMA_VERSION = SCHEMA_VERSION
@@ -59,16 +62,26 @@ Segments must be explicitly described by the company. Definitions must map an
 explicitly described economic relationship to one of the supplied archetypes;
 they describe formula inputs and units only and never calculate revenue.
 Observations are reported or explicitly first-party operating facts for one
-period. Investment programs are first-party announced, planned, in-progress,
+period. Historical segment revenue/sales rows are valid observations: emit
+them with driver_id `revenue` or `segment_revenue`, origin `reported`, and the
+reported fiscal period. They are not forecasts. If the company discloses a
+segment's revenue but not a generic driver relationship, emit a
+`generic_segment_growth` definition only when the filing explicitly describes
+segment growth or the historical revenue rows support that fallback; never
+invent a growth value. Include period_key such as Q1, Q2, Q3, or Q4 where the
+filing identifies a quarter, and use only compatible FY, FQ, or YTD periods.
+Investment programs are first-party announced, planned, in-progress,
 under-construction, completed, or reported facts; they may contain spend,
 capacity, facility, production, or timing facts, but they are not revenue
 forecasts. Do not turn an investment program into revenue or growth.
 
 Copy supporting_text verbatim from the visible source context and keep it
 concise. Every numeric value, including a fiscal year, must appear in that
-supporting excerpt. Exclude historical accounting revenue unless it is an
-operating-driver observation explicitly needed by the described relationship.
-Exclude analyst, consensus, sell-side, Wall Street, market, or third-party
+supporting excerpt. Historical segment revenue is explicitly allowed as a
+reported observation. Do not calculate implied price, ARPU, growth, or any
+other value in the response; deterministic post-processing may derive implied
+price/ARPU only from two accepted same-period reported observations. Exclude
+analyst, consensus, sell-side, Wall Street, market, or third-party
 expectations. Use an empty collection when no qualifying evidence exists.
 """.strip()
 
@@ -99,6 +112,8 @@ _THIRD_PARTY_TERMS = (
 _REVENUE_DRIVER_IDS = {
     "revenue",
     "segment_revenue",
+    "sales",
+    "net_sales",
     "total_revenue",
     "revenue_growth",
     "sales_growth",
@@ -181,7 +196,7 @@ class OperatingEvidenceExtractor:
             else clean_document_text(document.content)
         )
         if context_text is None:
-            context_text = extract_guidance_context(validation_text)
+            context_text = extract_operating_context(validation_text)
         path = self._cache_path(
             filing,
             document,
@@ -223,7 +238,7 @@ class OperatingEvidenceExtractor:
         fiscal_years: tuple[int, ...] | None = None,
     ) -> str:
         if context_text is None:
-            context_text = extract_guidance_context(
+            context_text = extract_operating_context(
                 clean_document_text(document.content)
             )
         identity = {
@@ -265,10 +280,11 @@ class OperatingEvidenceExtractor:
         rejected: list[OperatingEvidenceRejection] = []
         unsupported: list[str] = []
         missing: list[str] = []
+        unusable: list[str] = []
         seen_segments: dict[str, OperatingSegment] = {}
         seen_definitions: dict[tuple[str, str], OperatingDriverDefinition] = {}
         seen_observations: dict[
-            tuple[str, str, int, str], OperatingDriverObservation
+            tuple[str, str, int, str, str | None], OperatingDriverObservation
         ] = {}
         seen_programs: dict[
             tuple[str, int | None, str], OperatingInvestmentProgram
@@ -323,6 +339,7 @@ class OperatingEvidenceExtractor:
                     segment_name=segment.name,
                     source=segment.source,
                     confidence=segment.confidence,
+                    reason="accepted: SEC-supported segment description",
                 )
             )
 
@@ -368,6 +385,7 @@ class OperatingEvidenceExtractor:
                     archetype=definition.archetype,
                     source=definition.source,
                     confidence=definition.confidence,
+                    reason="accepted: SEC-supported operating relationship",
                 )
             )
 
@@ -378,11 +396,14 @@ class OperatingEvidenceExtractor:
                 filing=filing,
                 as_of=as_of,
                 fiscal_years=fiscal_years,
+                definitions=seen_definitions,
             )
             if reason:
                 rejection = self._rejection("observation", reason, item)
                 rejected.append(rejection)
                 self._add_diagnostic(rejection, unsupported, missing)
+                if "period" in reason.casefold() or "unit" in reason.casefold():
+                    unusable.append(reason)
                 continue
             try:
                 observation = self._observation_from_item(
@@ -396,6 +417,7 @@ class OperatingEvidenceExtractor:
                 observation.driver_id,
                 observation.fiscal_year,
                 observation.fiscal_period,
+                observation.period_key,
             )
             previous = seen_observations.get(key)
             if previous is not None:
@@ -411,6 +433,74 @@ class OperatingEvidenceExtractor:
             seen_observations[key] = observation
             observations.append(observation)
             audit_records.append(self._observation_audit(observation))
+
+        derived_observations, derived_audits, derived_unusable = (
+            self._derive_implied_observations(observations)
+        )
+        for observation in derived_observations:
+            key = (
+                observation.segment_id,
+                observation.driver_id,
+                observation.fiscal_year,
+                observation.fiscal_period,
+                observation.period_key,
+            )
+            if key in seen_observations:
+                continue
+            seen_observations[key] = observation
+            observations.append(observation)
+        audit_records.extend(derived_audits)
+        unusable.extend(derived_unusable)
+
+        for segment_id, _segment in seen_segments.items():
+            if any(
+                definition.segment_id == segment_id
+                and definition.output_metric == "revenue"
+                for definition in definitions
+            ):
+                continue
+            revenue_observation = next(
+                (
+                    observation
+                    for observation in observations
+                    if observation.segment_id == segment_id
+                    and observation.driver_id.casefold()
+                    in {"revenue", "segment_revenue", "sales", "net_sales"}
+                    and observation.origin == "reported"
+                ),
+                None,
+            )
+            if revenue_observation is None:
+                continue
+            definition = OperatingDriverDefinition(
+                driver_id="segment-growth",
+                archetype="generic_segment_growth",
+                segment_id=segment_id,
+                output_metric="revenue",
+                input_metrics=("growth",),
+                units={"growth": "ratio"},
+                formula_id="generic_segment_growth",
+                required_inputs=("growth",),
+                source="first_party_filing",
+                confidence="medium",
+                evidence=revenue_observation.evidence,
+            )
+            definitions.append(definition)
+            seen_definitions[(segment_id, definition.driver_id)] = definition
+            audit_records.append(
+                OperatingEvidenceAuditRecord(
+                    record_type="definition",
+                    segment_id=segment_id,
+                    driver_id=definition.driver_id,
+                    archetype=definition.archetype,
+                    source=definition.source,
+                    confidence=definition.confidence,
+                    reason=(
+                        "accepted: generic segment-growth fallback from reported "
+                        "segment revenue history"
+                    ),
+                )
+            )
 
         for item in response.investment_programs:
             reason = self._program_invalid_reason(
@@ -446,6 +536,13 @@ class OperatingEvidenceExtractor:
             programs.append(program)
             audit_records.append(self._program_audit(program))
 
+        for item in rejected:
+            audit_records.append(
+                self._rejection_audit(item.record_type, item.item, item.reason)
+            )
+            if self._is_unusable_reason(item.reason):
+                unusable.append(item.reason)
+
         return OperatingExtractionCacheEntry(
             extracted_at=datetime.datetime.now(datetime.timezone.utc),
             model=self._openai.model,
@@ -463,6 +560,7 @@ class OperatingEvidenceExtractor:
             rejected=tuple(rejected),
             unsupported_evidence=tuple(dict.fromkeys(unsupported)),
             missing_evidence=tuple(dict.fromkeys(missing)),
+            unusable_reasons=tuple(dict.fromkeys(unusable)),
         )
 
     def _definition_from_item(
@@ -515,10 +613,12 @@ class OperatingEvidenceExtractor:
             driver_id=item.driver_id,
             fiscal_year=item.fiscal_year,
             fiscal_period=item.fiscal_period,
+            period_key=item.period_key,
             value=self._decimal(item.value),
             low=self._decimal(item.low),
             high=self._decimal(item.high),
             unit=item.unit,
+            scale=self._decimal(item.scale) or Decimal(1),
             currency=item.currency,
             basis=item.basis,
             origin=origin,
@@ -542,9 +642,11 @@ class OperatingEvidenceExtractor:
             segment_id=item.segment_id,
             fiscal_year=item.fiscal_year,
             fiscal_period=item.fiscal_period,
+            period_key=item.period_key,
             value=self._decimal(item.value),
             low=self._decimal(item.low),
             high=self._decimal(item.high),
+            scale=self._decimal(item.scale) or Decimal(1),
             unit=item.unit,
             currency=item.currency,
             status=item.status,
@@ -562,6 +664,7 @@ class OperatingEvidenceExtractor:
         filing: SecFiling,
         as_of: datetime.date | None,
         fiscal_years: tuple[int, ...] | None,
+        definitions: dict[tuple[str, str], OperatingDriverDefinition],
     ) -> str | None:
         reason = self._common_invalid_reason(
             item.supporting_text,
@@ -572,6 +675,13 @@ class OperatingEvidenceExtractor:
         )
         if reason:
             return reason
+        unit_reason = self._observation_unit_invalid_reason(item, definitions)
+        if unit_reason:
+            return unit_reason
+        try:
+            normalize_operating_fiscal_period(item.fiscal_period)
+        except ValueError as exc:
+            return str(exc)
         if not self._numbers_supported(
             item.supporting_text,
             (item.value, item.low, item.high),
@@ -580,6 +690,50 @@ class OperatingEvidenceExtractor:
             return "Extracted numerical values are absent from supporting text"
         if self._is_direct_revenue_forecast(item.driver_id, item.supporting_text):
             return "Unsupported revenue forecast claims are not operating evidence"
+        return None
+
+    @staticmethod
+    def _rejection_audit(
+        record_type: str, item, reason: str
+    ) -> OperatingEvidenceAuditRecord:
+        return OperatingEvidenceAuditRecord(
+            record_type=record_type,
+            segment_id=getattr(item, "segment_id", None),
+            segment_name=getattr(item, "name", None),
+            driver_id=getattr(item, "driver_id", None),
+            fiscal_year=getattr(item, "fiscal_year", None),
+            fiscal_period=getattr(item, "fiscal_period", None),
+            source="sec",
+            confidence=getattr(item, "confidence", "low"),
+            status=(
+                "unusable"
+                if OperatingEvidenceExtractor._is_unusable_reason(reason)
+                else "rejected"
+            ),
+            reason=reason,
+        )
+
+    @staticmethod
+    def _observation_unit_invalid_reason(
+        item: ExtractedOperatingObservation,
+        definitions: dict[tuple[str, str], OperatingDriverDefinition],
+    ) -> str | None:
+        driver_id = _normalize_metric(item.driver_id)
+        if driver_id in _REVENUE_DRIVER_IDS and not _is_currency_unit(item.unit):
+            return "Segment revenue observation unit is not a currency unit"
+        for (segment_id, _definition_id), definition in definitions.items():
+            if segment_id != item.segment_id:
+                continue
+            for metric, expected_unit in definition.units.items():
+                if _metric_names_match(metric, driver_id):
+                    if expected_unit.casefold() in {"unit", "unspecified"}:
+                        return None
+                    if not operating_units_compatible(expected_unit, item.unit):
+                        return (
+                            f"Observation unit '{item.unit}' is incompatible with "
+                            f"definition unit '{expected_unit}' for {item.driver_id}"
+                        )
+                    return None
         return None
 
     def _program_invalid_reason(
@@ -608,6 +762,143 @@ class OperatingEvidenceExtractor:
         ):
             return "Investment program numerical values are absent from supporting text"
         return None
+
+    @staticmethod
+    def _derive_implied_observations(
+        observations: list[OperatingDriverObservation],
+    ) -> tuple[
+        list[OperatingDriverObservation],
+        list[OperatingEvidenceAuditRecord],
+        list[str],
+    ]:
+        """Derive price/ARPU only from accepted same-period reported facts."""
+
+        grouped: dict[
+            tuple[str, int, str, str | None], dict[str, OperatingDriverObservation]
+        ] = {}
+        for observation in observations:
+            if observation.origin != "reported":
+                continue
+            key = (
+                observation.segment_id,
+                observation.fiscal_year,
+                observation.fiscal_period,
+                observation.period_key,
+            )
+            grouped.setdefault(key, {})[observation.driver_id.casefold()] = observation
+
+        derived: list[OperatingDriverObservation] = []
+        audits: list[OperatingEvidenceAuditRecord] = []
+        unusable: list[str] = []
+        for (segment_id, year, period, period_key), values in grouped.items():
+            revenue = next(
+                (
+                    item
+                    for driver_id, item in values.items()
+                    if driver_id in {"revenue", "segment_revenue", "sales"}
+                ),
+                None,
+            )
+            volume = next(
+                (
+                    item
+                    for driver_id, item in values.items()
+                    if driver_id in {"volume", "units", "deliveries", "shipments"}
+                ),
+                None,
+            )
+            subscribers = next(
+                (
+                    item
+                    for driver_id, item in values.items()
+                    if driver_id in {"subscribers", "users", "subscriber_count"}
+                ),
+                None,
+            )
+            if revenue is None:
+                continue
+            for driver_id, denominator, method in (
+                (
+                    "implied_price",
+                    volume,
+                    "derived_from_reported_segment_revenue_and_volume",
+                ),
+                (
+                    "implied_arpu",
+                    subscribers,
+                    "derived_from_reported_segment_revenue_and_subscribers",
+                ),
+            ):
+                if denominator is None:
+                    continue
+                reason = _implied_pair_invalid_reason(revenue, denominator, driver_id)
+                if reason:
+                    unusable.append(reason)
+                    audits.append(
+                        OperatingEvidenceAuditRecord(
+                            record_type="observation",
+                            segment_id=segment_id,
+                            driver_id=driver_id,
+                            fiscal_year=year,
+                            fiscal_period=period,
+                            period_key=period_key,
+                            source="derived",
+                            confidence="low",
+                            status="unusable",
+                            reason=reason,
+                            method=method,
+                        )
+                    )
+                    continue
+                value = revenue.normalized_value / denominator.normalized_value
+                unit = f"{revenue.unit}/{denominator.unit}"
+                evidence = next(
+                    (
+                        item.evidence
+                        for item in (revenue, denominator)
+                        if item.evidence is not None
+                    ),
+                    None,
+                )
+                derived.append(
+                    OperatingDriverObservation(
+                        segment_id=segment_id,
+                        driver_id=driver_id,
+                        fiscal_year=year,
+                        fiscal_period=period,
+                        period_key=period_key,
+                        value=value,
+                        unit=unit,
+                        origin="derived",
+                        confidence="medium",
+                        method=method,
+                        evidence=evidence,
+                    )
+                )
+                audits.append(
+                    OperatingEvidenceAuditRecord(
+                        record_type="observation",
+                        segment_id=segment_id,
+                        driver_id=driver_id,
+                        fiscal_year=year,
+                        fiscal_period=period,
+                        period_key=period_key,
+                        values={"value": value},
+                        unit=unit,
+                        source="derived",
+                        confidence="medium",
+                        reason=f"accepted: {method}",
+                        method=method,
+                    )
+                )
+        return derived, audits, unusable
+
+    @staticmethod
+    def _is_unusable_reason(reason: str) -> bool:
+        return any(
+            term in reason.casefold()
+            for term in ("period", "unit", "scale", "mismatch", "incompatible")
+        )
 
     @staticmethod
     def _common_invalid_reason(
@@ -751,10 +1042,20 @@ class OperatingEvidenceExtractor:
             driver_id=observation.driver_id,
             fiscal_year=observation.fiscal_year,
             fiscal_period=observation.fiscal_period,
+            period_key=observation.period_key,
             values=values,
             unit=observation.unit,
             source=observation.origin,
             confidence=observation.confidence,
+            reason=(
+                "accepted: "
+                + (
+                    "management guidance"
+                    if observation.origin == "management_guidance"
+                    else "reported SEC observation"
+                )
+            ),
+            method=observation.method,
         )
 
     @staticmethod
@@ -776,11 +1077,69 @@ class OperatingEvidenceExtractor:
             segment_name=program.name,
             fiscal_year=program.fiscal_year,
             fiscal_period=program.fiscal_period,
+            period_key=program.period_key,
             values=values,
             unit=program.unit,
             source=program.source,
             confidence=program.confidence,
+            reason="accepted: SEC-supported investment program fact",
         )
+
+
+def _normalize_metric(value: str) -> str:
+    return value.strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _metric_names_match(left: str, right: str) -> bool:
+    left_normalized = _normalize_metric(left)
+    right_normalized = _normalize_metric(right)
+    aliases = {
+        "subscribers": {"subscriber_count"},
+        "subscriber_count": {"subscribers"},
+        "arpu": {"average_revenue_per_user"},
+        "average_revenue_per_user": {"arpu"},
+        "stores": {"store_count"},
+        "store_count": {"stores"},
+    }
+    return left_normalized == right_normalized or right_normalized in aliases.get(
+        left_normalized, set()
+    )
+
+
+def _is_currency_unit(unit: str) -> bool:
+    normalized, _scale = normalize_operating_unit(unit)
+    return bool(
+        re.search(
+            r"(?:^|/)(?:usd|eur|gbp|jpy|cny|cad|aud|chf|currency)(?:/|$)",
+            normalized,
+        )
+    )
+
+
+def _is_count_unit(unit: str) -> bool:
+    normalized, _scale = normalize_operating_unit(unit)
+    return not _is_currency_unit(unit) and normalized not in {
+        "ratio",
+        "percent",
+        "percentage",
+        "bps",
+        "bp",
+    }
+
+
+def _implied_pair_invalid_reason(
+    revenue: OperatingDriverObservation,
+    denominator: OperatingDriverObservation,
+    driver_id: str,
+) -> str | None:
+    label = "price" if driver_id == "implied_price" else "ARPU"
+    if not _is_currency_unit(revenue.unit):
+        return f"Cannot derive implied {label}: revenue unit is not currency"
+    if not _is_count_unit(denominator.unit):
+        return f"Cannot derive implied {label}: denominator unit is not a count"
+    if denominator.normalized_value == 0:
+        return f"Cannot derive implied {label}: same-period denominator is zero"
+    return None
 
 
 # Common names used by discovery callers; aliases avoid parallel extractors.

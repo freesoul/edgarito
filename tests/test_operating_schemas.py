@@ -14,6 +14,7 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
     SegmentRevenueForecast,
+    operating_periods_compatible,
 )
 from edgarito.schemas.valuation import AssumptionOrigin, AssumptionProvenance
 
@@ -179,6 +180,44 @@ def test_operating_contracts_reject_invalid_decimal_unit_year_and_range_values()
             origin="management_guidance",
             confidence="medium",
         )
+
+
+def test_operating_segment_ids_and_periods_are_canonical_and_compatible():
+    segment = OperatingSegment(
+        segment_id="Automotive business",
+        name="Automotive business",
+        parent_id="Total operating segment",
+    )
+    definition = OperatingDriverDefinition(
+        driver_id="automotive-growth",
+        archetype=OperatingArchetype.GENERIC_SEGMENT_GROWTH,
+        segment_id="Automotive business",
+        output_metric="revenue",
+        input_metrics=("growth",),
+        units={"growth": "ratio"},
+        formula_id="generic_segment_growth",
+        required_inputs=("growth",),
+    )
+    observation = OperatingDriverObservation(
+        segment_id="Automotive business",
+        driver_id="segment_revenue",
+        fiscal_year=2025,
+        fiscal_period="Q1",
+        value=Decimal("10"),
+        unit="USD millions",
+        origin="reported",
+        confidence="high",
+    )
+
+    assert segment.segment_id == "automotive"
+    assert segment.parent_id == "total"
+    assert definition.segment_id == "automotive"
+    assert observation.segment_id == "automotive"
+    assert observation.fiscal_period == "FQ"
+    assert observation.period_key == "Q1"
+    assert operating_periods_compatible("Q1", "FQ", "Q1", "Q1")
+    assert not operating_periods_compatible("Q1", "Q2", "Q1", "Q2")
+    assert not operating_periods_compatible("FY", "FQ")
 
 
 def test_operating_forecast_paths_preserve_absolute_revenue_invariants():

@@ -1319,15 +1319,13 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 )
             additional_warnings.extend(operating_warnings)
             if operating_evidence is not None:
+                # Discovery evidence is gated only after the deterministic
+                # engine reconstructs history; do not reject on missing audit
+                # metrics before the pipeline has calculated them.
                 operating_audit = _operating_quality_audit(
                     operating_evidence,
                     discovery_warnings=operating_warnings,
                 )
-                if not operating_audit.accepted:
-                    operating_evidence = None
-                    additional_warnings.append(
-                        f"{operating_audit.reason}; standard FCFF forecast retained"
-                    )
             else:
                 operating_audit = OperatingForecastQualityResult(
                     accepted=False,
@@ -2388,6 +2386,19 @@ def _operating_quality_audit(
                 value.get("document_audits", ())
                 if value
                 else getattr(evidence, "document_audits", ())
+            )
+            or ()
+        ),
+        modeled_revenue_share=(
+            value.get("modeled_revenue_share", None)
+            if value
+            else getattr(evidence, "modeled_revenue_share", None)
+        ),
+        unusable_evidence=tuple(
+            (
+                value.get("unusable_evidence", ())
+                if value
+                else getattr(evidence, "unusable_evidence", ())
             )
             or ()
         ),

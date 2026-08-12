@@ -20,6 +20,7 @@ from edgarito.schemas.operating import (
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.guidance.documents import extract_operating_context
 from edgarito.services.openai import OpenAIClient, OpenAIExtractionError
 from edgarito.services.operating.discovery import OperatingEvidenceDiscoveryService
 from edgarito.services.operating.extraction import OperatingEvidenceExtractor
@@ -548,6 +549,143 @@ def test_discovery_is_generic_for_ticker_labels_and_is_failure_isolated(tmp_path
     assert results[0].segments == results[1].segments == ()
     assert all(
         "extraction" in warning for result in results for warning in result.warnings
+    )
+
+
+def test_operating_context_retains_historical_segment_table_rows_and_period_headers():
+    text = "\n".join(
+        [
+            "Outlook and other narrative " * 80,
+            "Segment revenue table",
+            "Fiscal year     FY2024     FY2025",
+            "Automotive      80,000     95,000",
+            "Energy           6,000      8,000",
+        ]
+    )
+
+    context = extract_operating_context(text, max_chars=1_000, window_chars=120)
+
+    assert "Fiscal year" in context
+    assert "Automotive" in context
+    assert "FY2025" in context
+
+
+def test_grounded_segment_revenue_creates_generic_growth_fallback(tmp_path):
+    text = "The Automotive segment reported revenue of $100 million in FY2025."
+    response = ExtractedOperatingEvidenceResponse(
+        segments=[
+            ExtractedOperatingSegment(
+                segment_id="Automotive business",
+                name="Automotive business",
+                supporting_text=text,
+            )
+        ],
+        observations=[
+            ExtractedOperatingObservation(
+                segment_id="Automotive business",
+                driver_id="segment_revenue",
+                fiscal_year=2025,
+                value=100,
+                unit="USD millions",
+                supporting_text=text,
+            )
+        ],
+    )
+
+    entry, _ = asyncio.run(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(_filing(), _document(text), text, as_of=datetime.date(2026, 3, 1))
+    )
+
+    assert entry.segments[0].segment_id == "automotive"
+    assert entry.observations[0].segment_id == "automotive"
+    assert entry.observations[0].normalized_value == Decimal("100000000")
+    assert entry.definitions[0].archetype == OperatingArchetype.GENERIC_SEGMENT_GROWTH
+    assert any(
+        "generic segment-growth fallback" in (item.reason or "")
+        for item in entry.audit_records
+    )
+
+
+def test_implied_price_and_arpu_use_only_same_period_reported_revenue_pairs(tmp_path):
+    text = (
+        "The segment reported revenue of $100 million, 20 million units, "
+        "and 10 million subscribers in FY2025."
+    )
+    response = ExtractedOperatingEvidenceResponse(
+        observations=[
+            ExtractedOperatingObservation(
+                segment_id="segment",
+                driver_id=driver_id,
+                fiscal_year=2025,
+                value=value,
+                unit=unit,
+                supporting_text=text,
+            )
+            for driver_id, value, unit in (
+                ("segment_revenue", 100, "USD millions"),
+                ("volume", 20, "million units"),
+                ("subscribers", 10, "million users"),
+            )
+        ]
+    )
+
+    entry, _ = asyncio.run(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(_filing(), _document(text), text, as_of=datetime.date(2026, 3, 1))
+    )
+
+    derived = {
+        item.driver_id: item for item in entry.observations if item.origin == "derived"
+    }
+    assert derived["implied_price"].value == Decimal("5")
+    assert derived["implied_arpu"].value == Decimal("10")
+    assert all(item.fiscal_period == "FY" for item in derived.values())
+    assert all("same-period" not in (item.reason or "") for item in entry.audit_records)
+
+
+def test_incompatible_observation_units_are_rejected_with_item_audit_reason(tmp_path):
+    text = (
+        "The segment uses volume and price to describe revenue. "
+        "The segment reported 20 USD millions of volume in FY2025."
+    )
+    response = ExtractedOperatingEvidenceResponse(
+        definitions=[
+            ExtractedOperatingDriverDefinition(
+                driver_id="segment-volume-price",
+                archetype="volume_price",
+                segment_id="segment",
+                input_metrics=("volume", "price"),
+                required_inputs=("volume", "price"),
+                units={"volume": "units", "price": "USD/unit"},
+                supporting_text="The segment uses volume and price to describe revenue.",
+            )
+        ],
+        observations=[
+            ExtractedOperatingObservation(
+                segment_id="segment",
+                driver_id="volume",
+                fiscal_year=2025,
+                value=20,
+                unit="USD millions",
+                supporting_text=text,
+            )
+        ],
+    )
+
+    entry, _ = asyncio.run(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(_filing(), _document(text), text, as_of=datetime.date(2026, 3, 1))
+    )
+
+    assert entry.observations == ()
+    assert entry.unusable_reasons
+    assert any(
+        audit.status == "unusable" and "incompatible" in (audit.reason or "")
+        for audit in entry.audit_records
     )
 
 

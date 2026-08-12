@@ -20,7 +20,7 @@ from edgarito.schemas.operating import (
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     clean_document_text,
-    extract_guidance_context,
+    extract_operating_context,
     guidance_keyword_hits,
     is_periodic_filing,
 )
@@ -46,6 +46,7 @@ class OperatingForecastDiscoveryResult:
     warnings: tuple[str, ...] = ()
     unsupported_evidence: tuple[str, ...] = ()
     missing_evidence: tuple[str, ...] = ()
+    unusable_evidence: tuple[str, ...] = ()
     audit_records: tuple[OperatingEvidenceAuditRecord, ...] = ()
     document_audits: tuple[OperatingDocumentAudit, ...] = ()
     cache_hits: int = 0
@@ -104,6 +105,9 @@ class OperatingForecastDiscoveryResult:
             "observations": self.observations,
             "management_constraints": self.management_constraints,
             "historical_revenue": self.historical_revenue,
+            "audit_records": self.audit_records,
+            "document_audits": self.document_audits,
+            "unusable_evidence": self.unusable_evidence,
         }
 
 
@@ -127,10 +131,10 @@ class OperatingEvidenceDiscoveryService:
         extractor: OperatingEvidenceExtractor,
         *,
         selector: GuidanceDocumentSelector | None = None,
-        lookback_days: int = 180,
-        max_filings: int = 4,
-        max_documents_per_filing: int = 3,
-        max_documents: int = 6,
+        lookback_days: int = 1825,
+        max_filings: int = 6,
+        max_documents_per_filing: int = 4,
+        max_documents: int = 12,
     ) -> None:
         self._edgar = edgar
         self._extractor = extractor
@@ -190,7 +194,10 @@ class OperatingEvidenceDiscoveryService:
                 )
 
         try:
-            filings = await self._edgar.get_guidance_filings(
+            get_filings = getattr(self._edgar, "get_operating_filings", None)
+            if get_filings is None:
+                get_filings = self._edgar.get_guidance_filings
+            filings = await get_filings(
                 cik,
                 as_of=as_of,
                 lookback_days=self.lookback_days,
@@ -205,7 +212,7 @@ class OperatingEvidenceDiscoveryService:
             )
 
         try:
-            selected_filings = self._selector.select_filings(
+            selected_filings = self._selector.select_operating_filings(
                 filings,
                 limit=self.max_filings,
             )
@@ -233,6 +240,7 @@ class OperatingEvidenceDiscoveryService:
         document_audits: list[OperatingDocumentAudit] = []
         unsupported: list[str] = []
         missing: list[str] = []
+        unusable: list[str] = []
         hits = 0
         misses = 0
         documents_inspected = 0
@@ -240,7 +248,7 @@ class OperatingEvidenceDiscoveryService:
         seen_segments: dict[str, OperatingSegment] = {}
         seen_definitions: dict[tuple[str, str], OperatingDriverDefinition] = {}
         seen_observations: dict[
-            tuple[str, str, int, str], OperatingDriverObservation
+            tuple[str, str, int, str, str | None], OperatingDriverObservation
         ] = {}
         seen_programs: dict[
             tuple[str, int | None, str], OperatingInvestmentProgram
@@ -276,7 +284,7 @@ class OperatingEvidenceDiscoveryService:
                 ),
             )
             try:
-                documents = self._selector.select_documents(
+                documents = self._selector.select_operating_documents(
                     populated,
                     limit=document_limit,
                 )
@@ -298,7 +306,7 @@ class OperatingEvidenceDiscoveryService:
                     break
                 documents_inspected += 1
                 clean_text = clean_document_text(document.content)
-                context_text = extract_guidance_context(clean_text)
+                context_text = extract_operating_context(clean_text)
                 audit = OperatingDocumentAudit(
                     filing_form=filing.form,
                     filing_date=filing.filing_date,
@@ -380,6 +388,7 @@ class OperatingEvidenceDiscoveryService:
                         item.driver_id,
                         item.fiscal_year,
                         item.fiscal_period,
+                        item.period_key,
                     )
                     added = self._append_unique(
                         observations,
@@ -404,6 +413,7 @@ class OperatingEvidenceDiscoveryService:
                 rejected.extend(entry.rejected)
                 unsupported.extend(entry.unsupported_evidence)
                 missing.extend(entry.missing_evidence)
+                unusable.extend(entry.unusable_reasons)
                 audit_records.extend(entry.audit_records)
                 document_audits.append(
                     audit.model_copy(
@@ -417,9 +427,12 @@ class OperatingEvidenceDiscoveryService:
                             "rejected_records": len(entry.rejected),
                             "unsupported_evidence": len(entry.unsupported_evidence),
                             "missing_evidence": len(entry.missing_evidence),
+                            "unusable_evidence": len(entry.unusable_reasons),
                         }
                     )
                 )
+                for reason in entry.unusable_reasons:
+                    warnings.append(f"Operating evidence unusable: {reason}")
 
         if unsupported:
             warnings.append(
@@ -428,6 +441,10 @@ class OperatingEvidenceDiscoveryService:
         if missing:
             warnings.append(
                 f"Operating evidence rejected {len(set(missing))} item(s) with missing support"
+            )
+        if unusable:
+            warnings.append(
+                f"Operating evidence marked {len(set(unusable))} item(s) unusable"
             )
         return OperatingForecastDiscoveryResult(
             segments=tuple(segments),
@@ -439,6 +456,7 @@ class OperatingEvidenceDiscoveryService:
             warnings=tuple(dict.fromkeys(warnings)),
             unsupported_evidence=tuple(dict.fromkeys(unsupported)),
             missing_evidence=tuple(dict.fromkeys(missing)),
+            unusable_evidence=tuple(dict.fromkeys(unusable)),
             audit_records=tuple(audit_records),
             document_audits=tuple(document_audits),
             cache_hits=hits,

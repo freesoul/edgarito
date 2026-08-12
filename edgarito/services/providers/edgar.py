@@ -217,6 +217,33 @@ class EdgarClient:
             make_cache=make_cache,
         )
 
+    async def get_operating_filings(
+        self,
+        cik: int,
+        *,
+        as_of: datetime.date,
+        lookback_days: int = 1825,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> list[SecFiling]:
+        """Return a historical operating-evidence filing window.
+
+        Guidance retrieval intentionally stays short-window and current-report
+        oriented.  Operating discovery needs prior 10-K/10-Q tables as well as
+        8-K evidence, so it uses the older-submissions files when available and
+        applies the as-of cutoff before selection.
+        """
+
+        return await self.get_filings(
+            cik,
+            forms=self.GUIDANCE_FORMS,
+            as_of=as_of,
+            since=as_of - datetime.timedelta(days=max(0, lookback_days)),
+            use_cache=use_cache,
+            make_cache=make_cache,
+            include_older_submissions=True,
+        )
+
     async def get_filing_documents(
         self,
         filing: SecFiling,
@@ -270,9 +297,7 @@ class EdgarClient:
         primary_filename = filing.primary_document.casefold()
         return tuple(
             document.model_copy(
-                update={
-                    "is_primary": document.filename.casefold() == primary_filename
-                }
+                update={"is_primary": document.filename.casefold() == primary_filename}
             )
             for document in documents
         )

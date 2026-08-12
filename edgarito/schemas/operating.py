@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import re
+import unicodedata
 from collections.abc import Mapping
 from decimal import Decimal
 from enum import Enum
@@ -30,6 +31,20 @@ _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _MIN_FISCAL_YEAR = 1900
 _MAX_FISCAL_YEAR = 2200
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
+_OPERATING_PERIODS = {"FY", "FQ", "YTD"}
+_UNIT_SCALES = {
+    "thousand": Decimal("1000"),
+    "thousands": Decimal("1000"),
+    "k": Decimal("1000"),
+    "million": Decimal("1000000"),
+    "millions": Decimal("1000000"),
+    "mn": Decimal("1000000"),
+    "mm": Decimal("1000000"),
+    "billion": Decimal("1000000000"),
+    "billions": Decimal("1000000000"),
+    "bn": Decimal("1000000000"),
+    "bb": Decimal("1000000000"),
+}
 
 # OpenAI Structured Outputs does not accept an object whose
 # ``additionalProperties`` value is another schema.  Pydantic emits exactly
@@ -117,10 +132,15 @@ class OperatingSegment(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     evidence: EvidenceReference | None = None
 
-    @field_validator("segment_id", "name", "parent_id")
+    @field_validator("name")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Segment text")
+
+    @field_validator("segment_id", "parent_id")
+    @classmethod
+    def normalize_segment_ids(cls, value: str | None) -> str | None:
+        return canonical_operating_segment_id(value)
 
     @field_validator("currency")
     @classmethod
@@ -153,6 +173,20 @@ class OperatingSegment(BaseModel):
     def normalize_confidence(cls, value: str) -> str:
         return str(getattr(value, "value", value)).strip().casefold()
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_identity_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        segment_id, name = canonical_operating_segment_identity(
+            data.get("segment_id", ""), data.get("name")
+        )
+        data["segment_id"] = segment_id
+        data["name"] = name
+        data["parent_id"] = canonical_operating_segment_id(data.get("parent_id"))
+        return data
+
 
 class OperatingDriverDefinition(BaseModel):
     """Definition of a deterministic driver relationship without forecast data."""
@@ -172,10 +206,15 @@ class OperatingDriverDefinition(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     evidence: EvidenceReference | None = None
 
-    @field_validator("driver_id", "segment_id", "formula_id")
+    @field_validator("driver_id", "formula_id")
     @classmethod
     def normalize_identifiers(cls, value: str) -> str:
         return _normalize_required_text(value, "Driver identifier")
+
+    @field_validator("segment_id")
+    @classmethod
+    def normalize_definition_segment_id(cls, value: str) -> str:
+        return canonical_operating_segment_id(value) or value
 
     @field_validator("input_metrics", "required_inputs", "optional_inputs")
     @classmethod
@@ -207,6 +246,15 @@ class OperatingDriverDefinition(BaseModel):
     def normalize_confidence(cls, value: str) -> str:
         return str(getattr(value, "value", value)).strip().casefold()
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_segment_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        data["segment_id"] = canonical_operating_segment_id(data.get("segment_id"))
+        return data
+
     @model_validator(mode="after")
     def validate_inputs(self) -> "OperatingDriverDefinition":
         if not self.input_metrics:
@@ -237,12 +285,15 @@ class OperatingDriverObservation(BaseModel):
     driver_id: str
     fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
     fiscal_period: str = "FY"
+    period_key: str | None = None
     value: Decimal | None = Field(default=None, allow_inf_nan=True)
     low: Decimal | None = Field(default=None, allow_inf_nan=True)
     high: Decimal | None = Field(default=None, allow_inf_nan=True)
     unit: str
     currency: str | None = None
     basis: str | None = None
+    scale: Decimal = Decimal(1)
+    method: str | None = None
     origin: Literal[
         "reported",
         "first_party_observation",
@@ -251,15 +302,30 @@ class OperatingDriverObservation(BaseModel):
         "extracted_evidence",
     ]
     confidence: Literal["high", "medium", "low"]
-    provenance: AssumptionProvenance | None = None
+    provenance: AssumptionProvenance | EvidenceReference | None = None
     evidence: EvidenceReference | None = None
 
-    @field_validator("segment_id", "driver_id")
+    @field_validator("driver_id")
     @classmethod
     def normalize_identifiers(cls, value: str) -> str:
         return _normalize_required_text(value, "Operating observation identifier")
 
-    @field_validator("fiscal_period", "unit", "basis")
+    @field_validator("segment_id")
+    @classmethod
+    def normalize_observation_segment_id(cls, value: str) -> str:
+        return canonical_operating_segment_id(value) or value
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating observation period key")
+
+    @field_validator("unit", "basis", "method")
     @classmethod
     def normalize_period_and_units(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating observation text")
@@ -281,10 +347,44 @@ class OperatingDriverObservation(BaseModel):
     def normalize_choices(cls, value: str) -> str:
         return str(getattr(value, "value", value)).strip().casefold()
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_segment_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        if data.get("segment_id") is not None:
+            data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_period_input(cls, value: Any) -> Any:
+        data = _coerce_operating_period_fields(value)
+        if not isinstance(data, Mapping):
+            return data
+        data = dict(data)
+        if data.get("segment_id") is not None:
+            data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
+        unit, unit_scale = normalize_operating_unit(
+            data.get("unit", "unit"), data.get("driver_id")
+        )
+        data["unit"] = unit
+        data["scale"] = Decimal(str(data.get("scale", 1))) * unit_scale
+        return data
+
     @field_validator("value", "low", "high")
     @classmethod
     def validate_decimal(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Operating observations")
+
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, value: Decimal) -> Decimal:
+        normalized = _finite_decimal(value, "Operating observation scale")
+        if normalized is None or normalized <= 0:
+            raise ValueError("Operating observation scale must be positive")
+        return normalized
 
     @model_validator(mode="after")
     def validate_range(self) -> "OperatingDriverObservation":
@@ -298,6 +398,20 @@ class OperatingDriverObservation(BaseModel):
             if self.high is not None and self.value > self.high:
                 raise ValueError("Operating observation value cannot exceed high")
         return self
+
+    @property
+    def normalized_value(self) -> Decimal:
+        """Return the value in the canonical base unit used by formulas."""
+
+        if self.value is not None:
+            return _observation_scaled_value(self.value, self.scale)
+        if self.low is not None and self.high is not None:
+            return (self.low + self.high) / Decimal(2) * self.scale
+        if self.low is not None:
+            return self.low * self.scale
+        if self.high is not None:
+            return self.high * self.scale
+        raise ValueError("Operating observation has no usable value")
 
 
 class OperatingInvestmentProgram(BaseModel):
@@ -317,6 +431,8 @@ class OperatingInvestmentProgram(BaseModel):
         default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
     )
     fiscal_period: str = "FY"
+    period_key: str | None = None
+    scale: Decimal = Decimal(1)
     value: Decimal | None = Field(default=None, allow_inf_nan=True)
     low: Decimal | None = Field(default=None, allow_inf_nan=True)
     high: Decimal | None = Field(default=None, allow_inf_nan=True)
@@ -336,13 +452,37 @@ class OperatingInvestmentProgram(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     evidence: EvidenceReference | None = None
 
-    @field_validator(
-        "program_id", "name", "segment_id", "fiscal_period", "unit", "purpose"
-    )
+    @field_validator("program_id", "name", "fiscal_period", "unit", "purpose")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         normalized = _normalize_optional_text(value, "Investment program text")
         return normalized or ("FY" if value == "" else normalized)
+
+    @field_validator("segment_id")
+    @classmethod
+    def normalize_program_segment_id(cls, value: str | None) -> str | None:
+        return canonical_operating_segment_id(value)
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Investment program period key")
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_period_input(cls, value: Any) -> Any:
+        data = _coerce_operating_period_fields(value)
+        if not isinstance(data, Mapping):
+            return data
+        data = dict(data)
+        if data.get("segment_id") is not None:
+            data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
+        return data
 
     @field_validator("currency")
     @classmethod
@@ -354,6 +494,14 @@ class OperatingInvestmentProgram(BaseModel):
             raise ValueError(
                 "Investment program currency must be a three-letter ISO code"
             )
+        return normalized
+
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, value: Decimal) -> Decimal:
+        normalized = _finite_decimal(value, "Investment program scale")
+        if normalized is None or normalized <= 0:
+            raise ValueError("Investment program scale must be positive")
         return normalized
 
     @field_validator("source")
@@ -444,6 +592,20 @@ class ExtractedOperatingSegment(BaseModel):
             for key, item in value.items()
         }
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_identity_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        segment_id, name = canonical_operating_segment_identity(
+            data.get("segment_id", ""), data.get("name")
+        )
+        data["segment_id"] = segment_id
+        data["name"] = name
+        data["parent_id"] = canonical_operating_segment_id(data.get("parent_id"))
+        return data
+
 
 class ExtractedOperatingDriverDefinition(BaseModel):
     """Untrusted structured output for an archetype mapping.
@@ -523,6 +685,8 @@ class ExtractedOperatingDriverDefinition(BaseModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
+        if data.get("segment_id") is not None:
+            data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
         if "inputs" in data and "input_metrics" not in data:
             data["input_metrics"] = data.pop("inputs")
         if "required_metrics" in data and "required_inputs" not in data:
@@ -584,10 +748,12 @@ class ExtractedOperatingObservation(BaseModel):
     driver_id: str
     fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
     fiscal_period: str = "FY"
+    period_key: str | None = None
     value: float | None = None
     low: float | None = None
     high: float | None = None
     unit: str
+    scale: float = 1
     currency: str | None = None
     basis: str | None = None
     origin: Literal["reported", "first_party_observation", "management_guidance"] = (
@@ -596,12 +762,20 @@ class ExtractedOperatingObservation(BaseModel):
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
-    @field_validator(
-        "segment_id", "driver_id", "fiscal_period", "unit", "basis", "supporting_text"
-    )
+    @field_validator("segment_id", "driver_id", "unit", "basis", "supporting_text")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted operating observation text")
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted observation period key")
 
     @field_validator("currency")
     @classmethod
@@ -622,6 +796,13 @@ class ExtractedOperatingObservation(BaseModel):
             _finite_decimal(Decimal(str(value)), "Extracted operating observations")
         return value
 
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, value: float) -> float:
+        if value <= 0 or not Decimal(str(value)).is_finite():
+            raise ValueError("Extracted operating observation scale must be positive")
+        return value
+
     @field_validator("value", "low", "high")
     @classmethod
     def reject_negative_values(cls, value: float | None) -> float | None:
@@ -633,6 +814,30 @@ class ExtractedOperatingObservation(BaseModel):
     @classmethod
     def normalize_confidence(cls, value: str) -> str:
         return str(getattr(value, "value", value)).strip().casefold()
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_segment_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        if data.get("segment_id") is not None:
+            data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_period_input(cls, value: Any) -> Any:
+        data = _coerce_operating_period_fields(value)
+        if not isinstance(data, Mapping):
+            return data
+        data = dict(data)
+        unit, unit_scale = normalize_operating_unit(
+            data.get("unit", "unit"), data.get("driver_id")
+        )
+        data["unit"] = unit
+        data["scale"] = float(Decimal(str(data.get("scale", 1))) * unit_scale)
+        return data
 
     @model_validator(mode="after")
     def require_value(self) -> "ExtractedOperatingObservation":
@@ -670,9 +875,11 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
         default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
     )
     fiscal_period: str = "FY"
+    period_key: str | None = None
     value: float | None = None
     low: float | None = None
     high: float | None = None
+    scale: float = 1
     unit: str = "unspecified"
     currency: str | None = None
     status: Literal[
@@ -691,7 +898,17 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
     @field_validator("fiscal_period", mode="before")
     @classmethod
     def normalize_fiscal_period(cls, value: str | None) -> str:
-        return "FY" if value is None or not str(value).strip() else str(value).strip()
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted investment period key")
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_period_input(cls, value: Any) -> Any:
+        return _coerce_operating_period_fields(value)
 
     @field_validator(
         "program_id", "name", "segment_id", "unit", "purpose", "supporting_text"
@@ -717,6 +934,13 @@ class ExtractedOperatingInvestmentProgram(BaseModel):
     def validate_number(cls, value: float | None) -> float | None:
         if value is not None:
             _finite_decimal(Decimal(str(value)), "Extracted investment-program values")
+        return value
+
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, value: float) -> float:
+        if value <= 0 or not Decimal(str(value)).is_finite():
+            raise ValueError("Extracted investment-program scale must be positive")
         return value
 
     @field_validator("value", "low", "high")
@@ -842,6 +1066,7 @@ class OperatingDocumentAudit(BaseModel):
     rejected_records: int = Field(default=0, ge=0)
     unsupported_evidence: int = Field(default=0, ge=0)
     missing_evidence: int = Field(default=0, ge=0)
+    unusable_evidence: int = Field(default=0, ge=0)
 
     @field_validator("filing_form", "accession_number", "filename", "document_type")
     @classmethod
@@ -886,17 +1111,39 @@ class OperatingEvidenceAuditRecord(BaseModel):
         default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
     )
     fiscal_period: str | None = None
+    period_key: str | None = None
     values: dict[str, Decimal] = Field(default_factory=dict)
     unit: str | None = None
     source: str
     confidence: Literal["high", "medium", "low"]
+    status: Literal["accepted", "rejected", "unusable"] = "accepted"
+    reason: str | None = None
+    method: str | None = None
 
     @field_validator(
-        "segment_id", "segment_name", "driver_id", "fiscal_period", "unit", "source"
+        "segment_id",
+        "segment_name",
+        "driver_id",
+        "unit",
+        "source",
+        "reason",
+        "method",
     )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating evidence audit text")
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating evidence audit period key")
 
     @field_validator("values")
     @classmethod
@@ -913,6 +1160,11 @@ class OperatingEvidenceAuditRecord(BaseModel):
     def normalize_confidence(cls, value: str) -> str:
         return str(getattr(value, "value", value)).strip().casefold()
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
 
 class OperatingEvidenceExtractionResult(BaseModel):
     """Provider-neutral normalized evidence returned by one extraction."""
@@ -927,9 +1179,12 @@ class OperatingEvidenceExtractionResult(BaseModel):
     rejected: tuple[OperatingEvidenceRejection, ...] = ()
     unsupported_evidence: tuple[str, ...] = ()
     missing_evidence: tuple[str, ...] = ()
+    unusable_reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
-    @field_validator("unsupported_evidence", "missing_evidence", "warnings")
+    @field_validator(
+        "unsupported_evidence", "missing_evidence", "unusable_reasons", "warnings"
+    )
     @classmethod
     def normalize_diagnostics(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(
@@ -955,6 +1210,10 @@ class OperatingEvidenceExtractionResult(BaseModel):
         """Concise alias used by audit-oriented callers."""
 
         return self.audit_records
+
+    @property
+    def unusable_evidence(self) -> tuple[str, ...]:
+        return self.unusable_reasons
 
 
 class OperatingExtractionCacheEntry(OperatingEvidenceExtractionResult):
@@ -1056,8 +1315,11 @@ class SegmentRevenueForecast(BaseModel):
     # tested.  A zero coverage value means history was supplied but none of
     # its years had a complete driver reconstruction.
     driver_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
+    modeled_revenue_share: Decimal | None = Field(default=None, allow_inf_nan=True)
+    genuine_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
     reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
     reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    derived_reconstruction_years: tuple[int, ...] = ()
     supported_years: tuple[int, ...] = ()
     # Forward years for which this segment supplied its own usable operating
     # path.  ``supported_years`` is reserved for the historical reconstruction
@@ -1127,7 +1389,12 @@ class SegmentRevenueForecast(BaseModel):
             _normalize_required_text(item, "Segment forecast warning") for item in value
         )
 
-    @field_validator("driver_coverage", "reconstruction_error")
+    @field_validator(
+        "driver_coverage",
+        "modeled_revenue_share",
+        "genuine_coverage",
+        "reconstruction_error",
+    )
     @classmethod
     def validate_reconstruction_metric(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Segment reconstruction audit")
@@ -1151,6 +1418,15 @@ class SegmentRevenueForecast(BaseModel):
     def validate_supported_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
         if value:
             _validate_year_sequence(value, "Segment supported years")
+        return value
+
+    @field_validator("derived_reconstruction_years")
+    @classmethod
+    def validate_derived_reconstruction_years(
+        cls, value: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Segment derived reconstruction years")
         return value
 
     @field_validator("own_supported_years")
@@ -1195,6 +1471,12 @@ class SegmentRevenueForecast(BaseModel):
             Decimal(0) <= self.driver_coverage <= Decimal(1)
         ):
             raise ValueError("Segment driver coverage must be between 0 and 1")
+        for metric, label in (
+            (self.modeled_revenue_share, "Segment modeled revenue share"),
+            (self.genuine_coverage, "Segment genuine coverage"),
+        ):
+            if metric is not None and not Decimal(0) <= metric <= Decimal(1):
+                raise ValueError(f"{label} must be between 0 and 1")
         if set(self.reconstruction_error_by_year) - set(self.supported_years):
             raise ValueError(
                 "Segment reconstruction errors must be reported for supported years"
@@ -1254,8 +1536,11 @@ class CompanyOperatingForecast(BaseModel):
     # See ``SegmentRevenueForecast`` for the distinction between unavailable
     # validation history (``None``) and zero validated coverage.
     driver_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
+    modeled_revenue_share: Decimal | None = Field(default=None, allow_inf_nan=True)
+    genuine_coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
     reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
     reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    derived_reconstruction_years: tuple[int, ...] = ()
     supported_years: tuple[int, ...] = ()
     # ``supported_years`` describes historical driver reconstruction.  These
     # fields describe the forward reconciliation and are populated by the
@@ -1340,7 +1625,12 @@ class CompanyOperatingForecast(BaseModel):
             _normalize_required_text(item, "Company forecast warning") for item in value
         )
 
-    @field_validator("driver_coverage", "reconstruction_error")
+    @field_validator(
+        "driver_coverage",
+        "modeled_revenue_share",
+        "genuine_coverage",
+        "reconstruction_error",
+    )
     @classmethod
     def validate_reconstruction_metric(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Company reconstruction audit")
@@ -1364,6 +1654,15 @@ class CompanyOperatingForecast(BaseModel):
     def validate_supported_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
         if value:
             _validate_year_sequence(value, "Company supported years")
+        return value
+
+    @field_validator("derived_reconstruction_years")
+    @classmethod
+    def validate_derived_reconstruction_years(
+        cls, value: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Company derived reconstruction years")
         return value
 
     @field_validator("own_supported_years", "consensus_years")
@@ -1456,6 +1755,12 @@ class CompanyOperatingForecast(BaseModel):
             Decimal(0) <= self.driver_coverage <= Decimal(1)
         ):
             raise ValueError("Company driver coverage must be between 0 and 1")
+        for metric, label in (
+            (self.modeled_revenue_share, "Company modeled revenue share"),
+            (self.genuine_coverage, "Company genuine coverage"),
+        ):
+            if metric is not None and not Decimal(0) <= metric <= Decimal(1):
+                raise ValueError(f"{label} must be between 0 and 1")
         _validate_subset(
             self.own_supported_years,
             self.fiscal_years,
@@ -1533,6 +1838,8 @@ class CompanyOperatingForecast(BaseModel):
 
         return {
             "driver_coverage": self.driver_coverage,
+            "modeled_revenue_share": self.modeled_revenue_share,
+            "genuine_coverage": self.genuine_coverage,
             "reconstruction_error": self.reconstruction_error,
             "reconstruction_error_by_year": dict(self.reconstruction_error_by_year),
             "supported_years": self.supported_years,
@@ -1547,6 +1854,7 @@ class CompanyOperatingForecast(BaseModel):
             "consensus_revenue_by_year": dict(self.consensus_revenue_by_year),
             "management_revenue_by_year": dict(self.management_revenue_by_year),
             "confidence": self.confidence,
+            "derived_reconstruction_years": self.derived_reconstruction_years,
             "warnings": self.warnings,
         }
 
@@ -1571,6 +1879,236 @@ def _normalize_required_text(value: str, label: str) -> str:
     if not normalized:
         raise ValueError(f"{label} cannot be blank")
     return normalized
+
+
+def canonical_operating_segment_id(value: str | None) -> str | None:
+    """Return a filing-neutral segment identifier.
+
+    Filings vary between labels such as ``"Platform"``, ``"platform
+    segment"`` and ``"Platform Business"``.  Canonicalization removes only
+    generic reporting words; it does not contain issuer or ticker aliases.
+    """
+
+    if value is None:
+        return None
+    normalized = _canonical_segment_text(value)
+    if not normalized:
+        normalized = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            unicodedata.normalize("NFKD", str(value)).casefold(),
+        ).strip()
+    if not normalized:
+        raise ValueError("Operating segment identifier cannot be blank")
+    return normalized.replace(" ", "_")
+
+
+def canonical_operating_segment_identity(
+    segment_id: str, name: str | None = None
+) -> tuple[str, str]:
+    """Normalize a segment's ID/name pair consistently across filings."""
+
+    raw_display = name or segment_id
+    display = _canonical_segment_display(raw_display) or str(raw_display).strip()
+    canonical_id = canonical_operating_segment_id(display)
+    if canonical_id is None:
+        raise ValueError("Operating segment identifier cannot be blank")
+    return canonical_id, display
+
+
+def normalize_operating_fiscal_period(value: str | None) -> str:
+    """Normalize supported evidence periods to FY, FQ, or YTD.
+
+    Quarter labels are retained in ``period_key`` by the input coercion helper,
+    while the period class remains deliberately small.  TTM/LTM, H1/H2 and
+    other incompatible periods are rejected rather than silently mixed.
+    """
+
+    if value is None:
+        return "FY"
+    normalized = (
+        str(getattr(value, "value", value))
+        .strip()
+        .casefold()
+        .replace("-", " ")
+        .replace("_", " ")
+    )
+    compact = re.sub(r"\s+", " ", normalized)
+    if compact in {"fy", "annual", "annually", "full year", "year"}:
+        return "FY"
+    if compact in {"fq", "quarter", "quarterly", "fiscal quarter"}:
+        return "FQ"
+    if re.fullmatch(r"q[1-4]", compact):
+        return "FQ"
+    if compact in {"ytd", "year to date", "year-to-date"}:
+        return "YTD"
+    if re.search(r"three months? ended|three months? ending", compact):
+        return "FQ"
+    if re.search(r"(?:six|nine) months? ended|(?:six|nine) months? ending", compact):
+        return "YTD"
+    raise ValueError(
+        "Operating evidence period must be compatible FY, FQ, or YTD; "
+        f"received {value!r}"
+    )
+
+
+def operating_periods_compatible(
+    left_period: str | None,
+    right_period: str | None,
+    left_period_key: str | None = None,
+    right_period_key: str | None = None,
+) -> bool:
+    """Return whether two observations can participate in one derivation."""
+
+    try:
+        left = normalize_operating_fiscal_period(left_period)
+        right = normalize_operating_fiscal_period(right_period)
+    except ValueError:
+        return False
+    if left != right:
+        return False
+    if left == "FQ" and bool(left_period_key) != bool(right_period_key):
+        # A bare quarter class does not identify the same quarter as Q1/Q2/etc.
+        return False
+    if left_period_key and right_period_key:
+        return _period_key(left_period_key) == _period_key(right_period_key)
+    return True
+
+
+def normalize_operating_unit(
+    unit: str, driver_id: str | None = None
+) -> tuple[str, Decimal]:
+    """Normalize common reporting scales without guessing from numeric size."""
+
+    raw = _normalize_required_text(unit, "Operating observation unit")
+    folded = (
+        unicodedata.normalize("NFKC", raw)
+        .casefold()
+        .replace("$", "usd")
+        .replace("€", "eur")
+        .replace("£", "gbp")
+    )
+    folded = re.sub(r"\b(us dollars?|u\.s\. dollars?)\b", "usd", folded)
+    scale = Decimal(1)
+    for label, multiplier in sorted(
+        _UNIT_SCALES.items(), key=lambda item: -len(item[0])
+    ):
+        if re.search(rf"(?<![a-z]){re.escape(label)}(?![a-z])", folded):
+            scale *= multiplier
+            folded = re.sub(
+                rf"\b{re.escape(label)}\b", " ", folded, flags=re.IGNORECASE
+            )
+            break
+    folded = folded.replace("per cent", "percent")
+    folded = re.sub(r"\b(?:currency|monetary)\b", "currency", folded)
+    folded = re.sub(r"\b(?:dollars?)\b", "usd", folded)
+    folded = re.sub(r"\b(?:users?|subscribers?)\b", "users", folded)
+    folded = re.sub(r"\b(?:vehicle|vehicles|car|cars|unit|units)\b", "units", folded)
+    folded = re.sub(r"\b(?:stores?|locations?)\b", "locations", folded)
+    folded = re.sub(r"\s+", " ", folded).strip()
+    folded = re.sub(r"\s*/\s*", "/", folded)
+    folded = re.sub(r"\s+per\s+", "/", folded)
+    folded = folded.replace(" ", "_")
+    if not folded:
+        normalized_driver = _canonical_metric_name(driver_id or "")
+        folded = "currency" if "revenue" in normalized_driver else "unit"
+    return folded, scale
+
+
+def operating_units_compatible(expected: str, actual: str) -> bool:
+    """Return whether two declared operating units have the same dimension.
+
+    Reporting scales are intentionally ignored because observations are already
+    normalized to base units.  Ratios and explicit percentage units are the same
+    rate dimension; currency symbols/codes are interchangeable with generic
+    currency in a formula declaration.
+    """
+
+    if str(expected).strip().casefold() in {"unit", "unspecified"} or str(
+        actual
+    ).strip().casefold() in {"unit", "unspecified"}:
+        return True
+    expected_unit, _ = normalize_operating_unit(expected)
+    actual_unit, _ = normalize_operating_unit(actual)
+    if expected_unit == actual_unit:
+        return True
+    if _unit_dimension(expected_unit) == _unit_dimension(actual_unit):
+        return True
+    return False
+
+
+def _unit_dimension(value: str) -> str:
+    normalized = value.casefold()
+    if normalized in {"ratio", "percent", "percentage", "bps", "bp"}:
+        return "rate"
+    normalized = re.sub(
+        r"\b(?:usd|eur|gbp|jpy|cny|cad|aud|chf)\b", "currency", normalized
+    )
+    return normalized
+
+
+def _canonical_segment_text(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = text.casefold().replace("&", " and ")
+    text = re.sub(
+        r"\b(?:reportable|operating|business|segment|division|group|unit)\b",
+        " ",
+        text,
+    )
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _canonical_segment_display(value: str) -> str:
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    text = re.sub(
+        r"\s+(?:reportable|operating)?\s*(?:segment|business|division|group|unit)\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip(" -,:;")
+    return re.sub(r"\s+", " ", text)
+
+
+def _canonical_metric_name(value: str) -> str:
+    return str(value).strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _period_key(value: str) -> str:
+    return re.sub(r"\s+", "", str(value).strip().casefold())
+
+
+def _coerce_operating_period_fields(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return value
+    data = dict(value)
+    if "fiscal_period" not in data:
+        for alias in ("period", "period_type", "period_basis"):
+            if alias in data:
+                data["fiscal_period"] = data.pop(alias)
+                break
+    raw_period = data.get("fiscal_period")
+    if isinstance(raw_period, str) and re.fullmatch(
+        r"q[1-4]", raw_period.strip(), re.I
+    ):
+        data.setdefault("period_key", raw_period.strip().upper())
+    elif isinstance(raw_period, str) and raw_period.strip().casefold() in {
+        "quarter",
+        "quarterly",
+        "fiscal quarter",
+    }:
+        data.setdefault("fiscal_period", "FQ")
+    return data
+
+
+def _scale_value(value: Decimal | None, scale: Decimal) -> Decimal | None:
+    return value * scale if value is not None else None
+
+
+def _observation_scaled_value(value: Decimal | None, scale: Decimal) -> Decimal:
+    if value is None:
+        raise ValueError("Operating observation has no usable value")
+    return value * scale
 
 
 def _coerce_extracted_text_map(value: Any, label: str) -> dict[str, str]:
@@ -1770,4 +2308,10 @@ __all__ = [
     "OperatingExtractionResult",
     "OperatingSegment",
     "SegmentRevenueForecast",
+    "canonical_operating_segment_id",
+    "canonical_operating_segment_identity",
+    "normalize_operating_fiscal_period",
+    "normalize_operating_unit",
+    "operating_units_compatible",
+    "operating_periods_compatible",
 ]

@@ -171,6 +171,7 @@ class OperatingForecastQualityResult:
     definitions_count: int = 0
     observations_count: int = 0
     driver_coverage: Decimal | None = None
+    modeled_revenue_share: Decimal | None = None
     reconstruction_error: Decimal | None = None
     confidence: str | None = None
     own_supported_years: tuple[int, ...] = ()
@@ -179,6 +180,7 @@ class OperatingForecastQualityResult:
     warnings: tuple[str, ...] = ()
     audit_records: tuple[Any, ...] = ()
     document_audits: tuple[Any, ...] = ()
+    unusable_evidence: tuple[str, ...] = ()
 
     @property
     def status(self) -> str:
@@ -475,6 +477,9 @@ class OperatingForecastPipelineService:
         definitions_count = len(_as_items(values.get("definitions") or ()))
         observations_count = len(_as_items(values.get("observations") or ()))
         coverage = getattr(operating_forecast, "driver_coverage", None)
+        modeled_revenue_share = getattr(
+            operating_forecast, "modeled_revenue_share", None
+        )
         reconstruction_error = getattr(operating_forecast, "reconstruction_error", None)
         confidence = getattr(operating_forecast, "confidence", None)
         own_supported_years = tuple(
@@ -518,6 +523,7 @@ class OperatingForecastPipelineService:
             definitions_count=definitions_count,
             observations_count=observations_count,
             driver_coverage=coverage,
+            modeled_revenue_share=modeled_revenue_share,
             reconstruction_error=reconstruction_error,
             confidence=confidence,
             own_supported_years=own_supported_years,
@@ -526,6 +532,7 @@ class OperatingForecastPipelineService:
             warnings=tuple(values.get("warnings") or ()),
             audit_records=tuple(values.get("audit_records") or ()),
             document_audits=tuple(values.get("document_audits") or ()),
+            unusable_evidence=tuple(values.get("unusable_evidence") or ()),
         )
 
     def forecast_with_evidence_provider(
@@ -657,6 +664,7 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "warnings",
             "audit_records",
             "document_audits",
+            "unusable_evidence",
         )
         if hasattr(value, name)
     }

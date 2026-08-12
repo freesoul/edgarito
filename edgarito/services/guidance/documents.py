@@ -52,6 +52,43 @@ GUIDANCE_TERMS = (
     "data center",
 )
 
+# Operating discovery shares the SEC/document retrieval seam with management
+# guidance, but it must not inherit guidance's forward-looking bias.  Keep this
+# vocabulary provider/company neutral: the terms describe the shape of a
+# quantitative operating disclosure rather than a particular issuer.
+OPERATING_TERMS = (
+    "segment",
+    "business",
+    "net sales",
+    "revenue",
+    "revenues",
+    "sales",
+    "volume",
+    "units",
+    "production",
+    "shipments",
+    "deliveries",
+    "average selling price",
+    "asp",
+    "price",
+    "pricing",
+    "customers",
+    "users",
+    "subscribers",
+    "arpu",
+    "capacity",
+    "utilization",
+    "backlog",
+    "orders",
+    "store count",
+    "locations",
+    "sales per store",
+    "table",
+    "millions",
+    "billions",
+    "thousands",
+)
+
 GUIDANCE_CONTEXT_MAX_CHARS = 24_000
 GUIDANCE_CONTEXT_WINDOW_CHARS = 900
 
@@ -65,6 +102,7 @@ def is_periodic_filing(filing: SecFiling) -> bool:
     """Return whether a filing is a periodic report requiring primary priority."""
 
     return filing.form.upper() in _PERIODIC_REPORT_FORMS
+
 
 # Keep the context vocabulary broader than the filing metadata vocabulary.  A
 # primary 10-Q/10-K often has no useful item metadata, so its guidance has to be
@@ -107,6 +145,28 @@ _GUIDANCE_CONTEXT_PATTERNS = (
     (r"\bfacilit(?:y|ies)\b", 3),
     (r"\bdata cent(?:er|re)s?\b", 3),
     (r"\beps\b", 2),
+)
+
+# These patterns deliberately include historical/reporting language and do
+# not assign a premium to words such as "expect" or "forecast".  A long
+# periodic filing commonly places segment revenue and KPI tables far away from
+# its outlook section.
+_OPERATING_CONTEXT_PATTERNS = (
+    (r"\breportable segments?\b", 10),
+    (r"\bsegment(?:s)?\b", 8),
+    (r"\b(?:net )?sales\b", 7),
+    (r"\brevenues?\b", 7),
+    (r"\b(?:average selling price|asp)\b", 7),
+    (r"\b(?:volumes?|units?|production|shipments?|deliveries)\b", 7),
+    (r"\b(?:customers?|users?|subscribers?|arpu)\b", 6),
+    (r"\b(?:capacity|utili[sz]ation|backlog|orders?)\b", 6),
+    (r"\b(?:store count|locations?|sales per store)\b", 5),
+    (r"\b(?:millions?|billions?|thousands?)\b", 5),
+    (r"\b(?:fiscal year|fiscal quarter|year to date|\bFY\d{2,4}\b)\b", 4),
+    (
+        r"\b(?:actual|reported|historical|period ended|three months|six months|nine months)\b",
+        4,
+    ),
 )
 
 _GUIDANCE_AUDIT_PATTERNS = {
@@ -248,6 +308,135 @@ def extract_guidance_context(
     return separator.join(clean_text[start:end] for start, end in selected)
 
 
+def _operating_table_candidates(
+    clean_text: str, *, window_chars: int
+) -> list[tuple[int, int, int]]:
+    """Find source-preserving windows around quantitative operating rows."""
+
+    lines = list(re.finditer(r"[^\n]*(?:\n|$)", clean_text))
+    candidates: list[tuple[int, int, int]] = []
+    for index, line_match in enumerate(lines):
+        line = line_match.group(0).strip()
+        if not line or not re.search(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?", line):
+            continue
+        start_index = max(0, index - 4)
+        end_index = min(len(lines), index + 5)
+        block = " ".join(
+            lines[item].group(0).strip()
+            for item in range(start_index, end_index)
+            if lines[item].group(0).strip()
+        )
+        if not any(
+            re.search(pattern, block, flags=re.IGNORECASE)
+            for pattern, _weight in _OPERATING_CONTEXT_PATTERNS
+        ):
+            continue
+        start = lines[start_index].start()
+        end = lines[end_index - 1].end()
+        if end - start > window_chars * 2:
+            start = max(0, line_match.start() - window_chars)
+            end = min(len(clean_text), line_match.end() + window_chars)
+        period_hits = len(
+            re.findall(
+                r"\b(?:FY\s*)?(?:19|20|21|22)\d{2}\b|\bQ[1-4]\b",
+                block,
+                flags=re.IGNORECASE,
+            )
+        )
+        candidates.append((start, end, 180 + min(20, period_hits * 3)))
+    return candidates
+
+
+def extract_operating_context(
+    clean_text: str,
+    *,
+    max_chars: int = GUIDANCE_CONTEXT_MAX_CHARS,
+    window_chars: int = GUIDANCE_CONTEXT_WINDOW_CHARS,
+) -> str:
+    """Return bounded operating evidence context, including historical tables.
+
+    This is intentionally a separate seam from :func:`extract_guidance_context`.
+    The latter is used by the management-guidance extractor and its forward
+    weighting is part of that contract.  Operating discovery needs a balanced
+    context that can retain a reported segment-revenue row, a KPI table, and a
+    nearby period label even when no guidance language occurs in the document.
+
+    Every returned window is a direct slice of ``clean_text``.  The omitted
+    marker is metadata only and is never valid supporting evidence.
+    """
+
+    if max_chars <= 0 or not clean_text:
+        return ""
+    if len(clean_text) <= max_chars:
+        return clean_text
+
+    matches: list[tuple[int, int, int]] = []
+    for pattern, weight in _OPERATING_CONTEXT_PATTERNS:
+        matches.extend(
+            (match.start(), match.end(), weight)
+            for match in re.finditer(pattern, clean_text, flags=re.IGNORECASE)
+        )
+    if not matches:
+        return clean_text[:max_chars]
+
+    matches.sort(key=lambda item: (item[0], item[1], -item[2]))
+    match_starts = [item[0] for item in matches]
+    candidates: list[tuple[int, int, int]] = _operating_table_candidates(
+        clean_text,
+        window_chars=window_chars,
+    )
+    for start, end, _weight in matches:
+        window_start = max(0, start - window_chars)
+        window_end = min(len(clean_text), end + window_chars)
+        first_match = bisect_left(match_starts, window_start)
+        last_match = bisect_left(match_starts, window_end)
+        window_matches = matches[first_match:last_match]
+        priority = sum(weight for _, _, weight in window_matches)
+        quantitative_hits = sum(weight >= 5 for _, _, weight in window_matches)
+        number_count = len(
+            re.findall(
+                r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?",
+                clean_text[window_start:window_end],
+            )
+        )
+        # Quantitative windows win, but historical and current-period windows
+        # are ranked by the same rule as forward windows.  This prevents an
+        # outlook paragraph from crowding every reported table out of context.
+        candidates.append(
+            (
+                window_start,
+                window_end,
+                quantitative_hits * 100 + priority + min(number_count, 6),
+            )
+        )
+
+    selected: list[tuple[int, int]] = []
+    used = 0
+    separator = "\n\n[... omitted ...]\n\n"
+    for start, end, _score in sorted(
+        candidates, key=lambda item: (-item[2], item[0], item[1])
+    ):
+        if any(
+            start < other_end and end > other_start
+            for other_start, other_end in selected
+        ):
+            continue
+        separator_size = len(separator) if selected else 0
+        if used + separator_size + end - start > max_chars:
+            continue
+        selected.append((start, end))
+        used += separator_size + end - start
+
+    if not selected:
+        start, end, _score = candidates[0]
+        center = (start + end) // 2
+        window_start = max(0, min(center - max_chars // 2, len(clean_text) - max_chars))
+        return clean_text[window_start : window_start + max_chars]
+
+    selected.sort()
+    return separator.join(clean_text[start:end] for start, end in selected)
+
+
 class GuidanceDocumentSelector:
     """Conservative deterministic gate before any model request."""
 
@@ -296,6 +485,51 @@ class GuidanceDocumentSelector:
             seen.add(identity)
             unique.append(filing)
         return unique[:limit]
+
+    def select_operating_filings(
+        self, filings: list[SecFiling], *, limit: int = 6
+    ) -> list[SecFiling]:
+        """Select a balanced set of current and historical operating filings.
+
+        Management guidance uses a short current-report quota.  Operating
+        history needs the latest quarterly report plus prior annual/quarterly
+        reports, so this method keeps periodic filings from being crowded out
+        by a sequence of 8-K exhibits.  It remains generic and deterministic.
+        """
+
+        if limit <= 0:
+            return []
+        ranked = self._rank_unique_filings(filings)
+        current = [
+            filing for filing in ranked if filing.form.upper() in _CURRENT_REPORT_FORMS
+        ]
+        periodic = [
+            filing for filing in ranked if filing.form.upper() in _PERIODIC_REPORT_FORMS
+        ]
+        annual = [
+            filing for filing in periodic if filing.form.upper() in {"10-K", "10-K/A"}
+        ]
+        quarterly = [
+            filing for filing in periodic if filing.form.upper() in {"10-Q", "10-Q/A"}
+        ]
+
+        selected: list[SecFiling] = []
+        # Keep a small current-report allowance for quantitative exhibits, then
+        # reserve space for historical annual and quarterly tables.
+        selected.extend(current[: min(2, limit)])
+        for bucket in (quarterly, annual, periodic):
+            for filing in bucket:
+                if len(selected) >= limit:
+                    break
+                identity = (filing.cik, filing.accession_number)
+                if any(
+                    (item.cik, item.accession_number) == identity for item in selected
+                ):
+                    continue
+                selected.append(filing)
+            if len(selected) >= limit:
+                break
+        return selected[:limit]
 
     def _rank_unique_filings(self, filings: list[SecFiling]) -> list[SecFiling]:
         ranked = sorted(
@@ -368,12 +602,12 @@ class GuidanceDocumentSelector:
         )
 
     def select_documents(
-        self, filing: SecFiling, *, limit: int = 3
+        self, filing: SecFiling, *, limit: int = 3, operating: bool = False
     ) -> list[SecFilingDocument]:
         if limit <= 0:
             return []
 
-        ranked = self._rank_documents(filing)
+        ranked = self._rank_documents(filing, operating=operating)
         if filing.form.upper() not in _PERIODIC_REPORT_FORMS:
             # Keep the existing 8-K/6-K ranking and eligibility behavior intact.
             return [document for score, document in ranked if score > 0][:limit]
@@ -397,17 +631,28 @@ class GuidanceDocumentSelector:
         selected.extend(
             self._mark_primary(document, value=False)
             for score, document in ranked
-            if score > 0
-            and not self.is_primary(filing, document)
+            if score > 0 and not self.is_primary(filing, document)
         )
         return selected[:limit]
 
+    def select_operating_documents(
+        self, filing: SecFiling, *, limit: int = 4
+    ) -> list[SecFilingDocument]:
+        """Select primary filing/table evidence for operating discovery."""
+
+        return self.select_documents(filing, limit=limit, operating=True)
+
     def _rank_documents(
-        self, filing: SecFiling
+        self, filing: SecFiling, *, operating: bool = False
     ) -> list[tuple[int, SecFilingDocument]]:
         return sorted(
             (
-                (self._document_score(filing, document), document)
+                (
+                    self._operating_document_score(filing, document)
+                    if operating
+                    else self._document_score(filing, document),
+                    document,
+                )
                 for document in filing.documents
             ),
             key=lambda pair: (pair[0], pair[1].sequence or "", pair[1].filename),
@@ -470,4 +715,23 @@ class GuidanceDocumentSelector:
         score += min(8, sum(1 for term in GUIDANCE_TERMS if term in sample))
         if filing.form.upper().startswith("6-K") and score < 3:
             return 0
+        return score
+
+    @staticmethod
+    def _operating_document_score(
+        filing: SecFiling, document: SecFilingDocument
+    ) -> int:
+        if document.is_pdf:
+            return 0
+        document_type = document.document_type.upper()
+        metadata = f"{document.description} {document.filename}".casefold()
+        score = sum(2 for term in OPERATING_TERMS if term in metadata)
+        if re.fullmatch(r"EX-99(?:\.\d+)?", document_type):
+            score += 5
+        if document.filename.casefold() == filing.primary_document.casefold():
+            # Periodic primary filings contain the authoritative historical
+            # segment tables even when their metadata is sparse.
+            score += 10
+        sample = clean_document_text(document.content[:300_000]).casefold()
+        score += min(20, sum(1 for term in OPERATING_TERMS if term in sample))
         return score
