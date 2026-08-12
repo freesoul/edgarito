@@ -573,6 +573,12 @@ class FcffDcfService:
             else None
         )
         warnings = [*forecast.warnings, *capital_bridge.warnings]
+        if dcf_stub is not None and capital_bridge.period_end < dcf_stub.period_start:
+            warnings.append(
+                f"Capital bridge is dated {capital_bridge.period_end.isoformat()} "
+                f"before remaining stub start {dcf_stub.period_start.isoformat()}; "
+                "current-period debt/cash data were unavailable"
+            )
         if (
             capital_bridge.share_count_basis
             == ShareCountBasis.CURRENT_SHARES_OUTSTANDING
@@ -845,9 +851,12 @@ class FcffDcfService:
             raise ValueError("FCFF DCF stub period must end after its start")
         if stub.unit != forecast.unit or first.unit != forecast.unit:
             raise ValueError("FCFF DCF stub and forecast must use one currency")
-        if capital_bridge.period_end != stub.period_start:
+        if capital_bridge.period_end > stub.period_start:
             raise ValueError(
-                "FCFF DCF capital bridge period must match the remaining stub start"
+                "FCFF DCF capital bridge period must match or precede the remaining "
+                "stub start; it cannot follow the remaining stub start "
+                f"(bridge {capital_bridge.period_end.isoformat()}; "
+                f"stub {stub.period_start.isoformat()})"
             )
         if capital_bridge.period_end > valuation_date:
             raise ValueError(
