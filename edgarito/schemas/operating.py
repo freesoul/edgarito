@@ -77,6 +77,9 @@ class OperatingSegment(BaseModel):
     scope: Literal["consolidated", "segment", "geography", "product"] = "segment"
     currency: str | None = None
     dimensions: dict[str, str] = Field(default_factory=dict)
+    source: str = "extracted_evidence"
+    confidence: Literal["high", "medium", "low"] = "medium"
+    evidence: EvidenceReference | None = None
 
     @field_validator("segment_id", "name", "parent_id")
     @classmethod
@@ -104,6 +107,16 @@ class OperatingSegment(BaseModel):
             )
         return normalized
 
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: str) -> str:
+        return _normalize_required_text(value, "Segment source")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
 
 class OperatingDriverDefinition(BaseModel):
     """Definition of a deterministic driver relationship without forecast data."""
@@ -119,6 +132,9 @@ class OperatingDriverDefinition(BaseModel):
     formula_id: str
     required_inputs: tuple[str, ...]
     optional_inputs: tuple[str, ...] = ()
+    source: str = "extracted_evidence"
+    confidence: Literal["high", "medium", "low"] = "medium"
+    evidence: EvidenceReference | None = None
 
     @field_validator("driver_id", "segment_id", "formula_id")
     @classmethod
@@ -144,6 +160,16 @@ class OperatingDriverDefinition(BaseModel):
             ): _normalize_required_text(unit, "Driver unit")
             for metric, unit in value.items()
         }
+
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: str) -> str:
+        return _normalize_required_text(value, "Driver source")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
 
     @model_validator(mode="after")
     def validate_inputs(self) -> "OperatingDriverDefinition":
@@ -181,7 +207,13 @@ class OperatingDriverObservation(BaseModel):
     unit: str
     currency: str | None = None
     basis: str | None = None
-    origin: Literal["reported", "management_guidance", "derived", "extracted_evidence"]
+    origin: Literal[
+        "reported",
+        "first_party_observation",
+        "management_guidance",
+        "derived",
+        "extracted_evidence",
+    ]
     confidence: Literal["high", "medium", "low"]
     provenance: AssumptionProvenance | None = None
     evidence: EvidenceReference | None = None
@@ -230,6 +262,615 @@ class OperatingDriverObservation(BaseModel):
             if self.high is not None and self.value > self.high:
                 raise ValueError("Operating observation value cannot exceed high")
         return self
+
+
+class OperatingInvestmentProgram(BaseModel):
+    """A first-party investment or capacity program fact.
+
+    Investment programs are retained as evidence for audit and downstream
+    consumers.  They are deliberately not converted into revenue, growth, or
+    cash-flow forecasts by the operating discovery layer.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    program_id: str
+    name: str
+    segment_id: str | None = None
+    fiscal_year: int | None = Field(
+        default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
+    )
+    fiscal_period: str = "FY"
+    value: Decimal | None = Field(default=None, allow_inf_nan=True)
+    low: Decimal | None = Field(default=None, allow_inf_nan=True)
+    high: Decimal | None = Field(default=None, allow_inf_nan=True)
+    unit: str = "unspecified"
+    currency: str | None = None
+    status: Literal[
+        "announced",
+        "planned",
+        "in_progress",
+        "under_construction",
+        "completed",
+        "reported",
+        "unknown",
+    ] = "reported"
+    purpose: str | None = None
+    source: str = "first_party_filing"
+    confidence: Literal["high", "medium", "low"] = "medium"
+    evidence: EvidenceReference | None = None
+
+    @field_validator("program_id", "name", "segment_id", "fiscal_period", "unit", "purpose")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Investment program text")
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not _CURRENCY_PATTERN.fullmatch(normalized):
+            raise ValueError("Investment program currency must be a three-letter ISO code")
+        return normalized
+
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: str) -> str:
+        return _normalize_required_text(value, "Investment program source")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @field_validator("value", "low", "high")
+    @classmethod
+    def validate_decimal(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Investment program values")
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "OperatingInvestmentProgram":
+        if self.value is None and self.low is None and self.high is None:
+            # A program can be a qualitative first-party fact, such as an
+            # announced facility, without a disclosed amount or capacity.
+            return self
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("Investment program low cannot exceed high")
+        if self.value is not None:
+            if self.low is not None and self.value < self.low:
+                raise ValueError("Investment program value cannot be below low")
+            if self.high is not None and self.value > self.high:
+                raise ValueError("Investment program value cannot exceed high")
+        return self
+
+    @property
+    def amount(self) -> Decimal | None:
+        """Compatibility name for programs disclosed as monetary amounts."""
+
+        return self.value
+
+
+class ExtractedOperatingSegment(BaseModel):
+    """Untrusted structured output for one first-party operating segment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    segment_id: str
+    name: str
+    parent_id: str | None = None
+    scope: Literal["consolidated", "segment", "geography", "product"] = "segment"
+    currency: str | None = None
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    supporting_text: str
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("segment_id", "name", "parent_id", "supporting_text")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted operating segment text")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not _CURRENCY_PATTERN.fullmatch(normalized):
+            raise ValueError("Extracted operating segment currency must be a three-letter ISO code")
+        return normalized
+
+    @field_validator("dimensions")
+    @classmethod
+    def normalize_dimensions(cls, value: dict[str, str]) -> dict[str, str]:
+        return {
+            _normalize_required_text(key, "Extracted segment dimension key"): _normalize_required_text(
+                item, "Extracted segment dimension value"
+            )
+            for key, item in value.items()
+        }
+
+
+class ExtractedOperatingDriverDefinition(BaseModel):
+    """Untrusted structured output for an archetype mapping.
+
+    This schema intentionally has no forecast values.  The model may describe
+    a reported economic relationship, but it cannot return revenue, growth, or
+    any other forecast path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    driver_id: str
+    archetype: OperatingArchetype
+    segment_id: str
+    output_metric: Literal["revenue"] = "revenue"
+    input_metrics: list[str] = Field(default_factory=list)
+    units: dict[str, str] = Field(default_factory=dict)
+    required_inputs: list[str] = Field(default_factory=list)
+    optional_inputs: list[str] = Field(default_factory=list)
+    formula_id: str | None = None
+    supporting_text: str
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("archetype", mode="before")
+    @classmethod
+    def normalize_archetype(cls, value: OperatingArchetype | str) -> OperatingArchetype:
+        return _coerce_operating_archetype(value)
+
+    @field_validator("driver_id", "segment_id", "formula_id", "supporting_text")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted operating definition text")
+
+    @field_validator("input_metrics", "required_inputs", "optional_inputs")
+    @classmethod
+    def normalize_metrics(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(
+            _normalize_required_text(item, "Extracted operating metric")
+            for item in value
+        )
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Extracted operating metric names must be unique")
+        return normalized
+
+    @field_validator("units")
+    @classmethod
+    def normalize_units(cls, value: dict[str, str]) -> dict[str, str]:
+        return {
+            _normalize_required_text(metric, "Extracted operating unit metric"): _normalize_required_text(
+                unit, "Extracted operating unit"
+            )
+            for metric, unit in value.items()
+        }
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_archetype_defaults(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if data.get("archetype") is None:
+            return data
+        archetype = _coerce_operating_archetype(data["archetype"])
+        metrics = list(data.get("input_metrics") or _archetype_metrics(archetype))
+        data.setdefault("input_metrics", metrics)
+        data.setdefault("required_inputs", list(data.get("required_inputs") or metrics))
+        data.setdefault(
+            "units",
+            {
+                metric: "unspecified"
+                for metric in metrics
+            },
+        )
+        data.setdefault("formula_id", archetype.value)
+        return data
+
+    @model_validator(mode="after")
+    def validate_definition_shape(self) -> "ExtractedOperatingDriverDefinition":
+        input_metrics = self.input_metrics or _archetype_metrics(self.archetype)
+        required = self.required_inputs or input_metrics
+        if not set(required).issubset(input_metrics):
+            raise ValueError("Extracted required inputs must be listed in input_metrics")
+        if not set(self.optional_inputs).issubset(input_metrics):
+            raise ValueError("Extracted optional inputs must be listed in input_metrics")
+        if set(required) & set(self.optional_inputs):
+            raise ValueError("Extracted required and optional inputs must be disjoint")
+        if self.units and not set(input_metrics).issubset(self.units):
+            raise ValueError("Extracted operating definition requires units for all inputs")
+        return self
+
+
+class ExtractedOperatingObservation(BaseModel):
+    """Untrusted structured output for a reported operating fact.
+
+    Only observations are allowed here.  There is deliberately no forecast,
+    growth-path, or consensus field in this contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    segment_id: str
+    driver_id: str
+    fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
+    fiscal_period: str = "FY"
+    value: float | None = None
+    low: float | None = None
+    high: float | None = None
+    unit: str
+    currency: str | None = None
+    basis: str | None = None
+    origin: Literal[
+        "reported", "first_party_observation", "management_guidance"
+    ] = "reported"
+    supporting_text: str
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("segment_id", "driver_id", "fiscal_period", "unit", "basis", "supporting_text")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted operating observation text")
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not _CURRENCY_PATTERN.fullmatch(normalized):
+            raise ValueError("Extracted operating observation currency must be a three-letter ISO code")
+        return normalized
+
+    @field_validator("value", "low", "high")
+    @classmethod
+    def validate_number(cls, value: float | None) -> float | None:
+        if value is not None:
+            _finite_decimal(Decimal(str(value)), "Extracted operating observations")
+        return value
+
+    @field_validator("value", "low", "high")
+    @classmethod
+    def reject_negative_values(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Extracted operating observations cannot be negative")
+        return value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @model_validator(mode="after")
+    def require_value(self) -> "ExtractedOperatingObservation":
+        if self.value is None and self.low is None and self.high is None:
+            raise ValueError("Extracted operating observation requires a value or range")
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("Extracted operating observation low cannot exceed high")
+        if self.value is not None:
+            if self.low is not None and self.value < self.low:
+                raise ValueError("Extracted operating observation value cannot be below low")
+            if self.high is not None and self.value > self.high:
+                raise ValueError("Extracted operating observation value cannot exceed high")
+        return self
+
+
+class ExtractedOperatingInvestmentProgram(BaseModel):
+    """Untrusted output for a first-party investment-program fact.
+
+    A program may be announced or planned and may describe capacity or spend,
+    but it is never a revenue forecast.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    program_id: str
+    name: str
+    segment_id: str | None = None
+    fiscal_year: int | None = Field(
+        default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
+    )
+    fiscal_period: str = "FY"
+    value: float | None = None
+    low: float | None = None
+    high: float | None = None
+    unit: str = "unspecified"
+    currency: str | None = None
+    status: Literal[
+        "announced",
+        "planned",
+        "in_progress",
+        "under_construction",
+        "completed",
+        "reported",
+        "unknown",
+    ] = "reported"
+    purpose: str | None = None
+    supporting_text: str
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("program_id", "name", "segment_id", "fiscal_period", "unit", "purpose", "supporting_text")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Extracted investment-program text")
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not _CURRENCY_PATTERN.fullmatch(normalized):
+            raise ValueError("Extracted investment-program currency must be a three-letter ISO code")
+        return normalized
+
+    @field_validator("value", "low", "high")
+    @classmethod
+    def validate_number(cls, value: float | None) -> float | None:
+        if value is not None:
+            _finite_decimal(Decimal(str(value)), "Extracted investment-program values")
+        return value
+
+    @field_validator("value", "low", "high")
+    @classmethod
+    def reject_negative_values(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Extracted investment-program values cannot be negative")
+        return value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ExtractedOperatingInvestmentProgram":
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("Extracted investment-program low cannot exceed high")
+        if self.value is not None:
+            if self.low is not None and self.value < self.low:
+                raise ValueError("Extracted investment-program value cannot be below low")
+            if self.high is not None and self.value > self.high:
+                raise ValueError("Extracted investment-program value cannot exceed high")
+        return self
+
+
+class ExtractedOperatingEvidenceResponse(BaseModel):
+    """Structured OpenAI response containing evidence only.
+
+    ``extra='forbid'`` is a hard boundary: a response containing a forecast,
+    consensus estimate, or other unapproved section cannot validate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    segments: list[ExtractedOperatingSegment] = Field(default_factory=list)
+    definitions: list[ExtractedOperatingDriverDefinition] = Field(default_factory=list)
+    observations: list[ExtractedOperatingObservation] = Field(default_factory=list)
+    investment_programs: list[ExtractedOperatingInvestmentProgram] = Field(
+        default_factory=list
+    )
+
+
+class OperatingEvidenceRejection(BaseModel):
+    """Audit record for an extracted item rejected by deterministic checks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record_type: Literal[
+        "segment", "definition", "observation", "investment_program", "response"
+    ]
+    reason: str
+    item: (
+        ExtractedOperatingSegment
+        | ExtractedOperatingDriverDefinition
+        | ExtractedOperatingObservation
+        | ExtractedOperatingInvestmentProgram
+        | None
+    ) = None
+    unsupported_evidence: bool = False
+    missing_evidence: bool = False
+    source: str | None = None
+    confidence: Literal["high", "medium", "low"] | None = None
+
+    @field_validator("reason", "source")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating evidence rejection text")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(getattr(value, "value", value)).strip().casefold()
+
+
+class OperatingDocumentAudit(BaseModel):
+    """Content-free diagnostics for one inspected SEC document."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    filing_form: str
+    filing_date: datetime.date
+    accession_number: str
+    filename: str
+    document_type: str
+    is_primary: bool = False
+    cleaned_size: int = Field(default=0, ge=0)
+    bounded_context_size: int = Field(default=0, ge=0)
+    keyword_hits: dict[str, int] = Field(default_factory=dict)
+    accepted_segments: int = Field(default=0, ge=0)
+    accepted_definitions: int = Field(default=0, ge=0)
+    accepted_observations: int = Field(default=0, ge=0)
+    accepted_investment_programs: int = Field(default=0, ge=0)
+    rejected_records: int = Field(default=0, ge=0)
+    unsupported_evidence: int = Field(default=0, ge=0)
+    missing_evidence: int = Field(default=0, ge=0)
+
+    @field_validator("filing_form", "accession_number", "filename", "document_type")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _normalize_required_text(value, "Operating document audit text")
+
+    @field_validator("keyword_hits")
+    @classmethod
+    def validate_keyword_hits(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(count < 0 for count in value.values()):
+            raise ValueError("Operating keyword hit counts cannot be negative")
+        return dict(value)
+
+    @property
+    def segments(self) -> int:
+        return self.accepted_segments
+
+    @property
+    def definitions(self) -> int:
+        return self.accepted_definitions
+
+    @property
+    def observations(self) -> int:
+        return self.accepted_observations
+
+    @property
+    def investment_programs(self) -> int:
+        return self.accepted_investment_programs
+
+
+class OperatingEvidenceAuditRecord(BaseModel):
+    """Concise, content-free debug record for normalized operating evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record_type: Literal[
+        "segment", "definition", "observation", "investment_program"
+    ]
+    segment_id: str | None = None
+    segment_name: str | None = None
+    driver_id: str | None = None
+    archetype: OperatingArchetype | None = None
+    fiscal_year: int | None = Field(
+        default=None, ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR
+    )
+    fiscal_period: str | None = None
+    values: dict[str, Decimal] = Field(default_factory=dict)
+    unit: str | None = None
+    source: str
+    confidence: Literal["high", "medium", "low"]
+
+    @field_validator(
+        "segment_id", "segment_name", "driver_id", "fiscal_period", "unit", "source"
+    )
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating evidence audit text")
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, value: dict[str, Decimal]) -> dict[str, Decimal]:
+        normalized: dict[str, Decimal] = {}
+        for key, item in value.items():
+            normalized[_normalize_required_text(key, "Operating audit value name")] = (
+                _finite_decimal(item, "Operating audit values")
+            )
+        return normalized
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+
+class OperatingEvidenceExtractionResult(BaseModel):
+    """Provider-neutral normalized evidence returned by one extraction."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    segments: tuple[OperatingSegment, ...] = ()
+    definitions: tuple[OperatingDriverDefinition, ...] = ()
+    observations: tuple[OperatingDriverObservation, ...] = ()
+    investment_programs: tuple[OperatingInvestmentProgram, ...] = ()
+    audit_records: tuple[OperatingEvidenceAuditRecord, ...] = ()
+    rejected: tuple[OperatingEvidenceRejection, ...] = ()
+    unsupported_evidence: tuple[str, ...] = ()
+    missing_evidence: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @field_validator("unsupported_evidence", "missing_evidence", "warnings")
+    @classmethod
+    def normalize_diagnostics(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            _normalize_required_text(item, "Operating extraction diagnostic")
+            for item in value
+        )
+
+    @property
+    def extracted_records(self) -> int:
+        return (
+            len(self.segments)
+            + len(self.definitions)
+            + len(self.observations)
+            + len(self.investment_programs)
+        )
+
+    @property
+    def rejected_records(self) -> int:
+        return len(self.rejected)
+
+    @property
+    def audits(self) -> tuple[OperatingEvidenceAuditRecord, ...]:
+        """Concise alias used by audit-oriented callers."""
+
+        return self.audit_records
+
+
+class OperatingExtractionCacheEntry(OperatingEvidenceExtractionResult):
+    """Versioned, deterministic post-validation extraction artifact."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    extracted_at: datetime.datetime
+    model: str
+    reasoning_effort: str
+    prompt_version: str
+    schema_version: str
+    content_hash: str
+    accession_number: str
+    document_filename: str
+    @field_validator(
+        "model",
+        "reasoning_effort",
+        "prompt_version",
+        "schema_version",
+        "content_hash",
+        "accession_number",
+        "document_filename",
+    )
+    @classmethod
+    def normalize_cache_text(cls, value: str) -> str:
+        return _normalize_required_text(value, "Operating extraction cache text")
+
+# Descriptive aliases keep the extraction boundary discoverable without
+# creating parallel schema implementations.
+OperatingEvidenceExtractionResponse = ExtractedOperatingEvidenceResponse
+OperatingExtractionResult = OperatingEvidenceExtractionResult
+OperatingEvidenceAudit = OperatingDocumentAudit
+OperatingEvidenceResult = OperatingEvidenceExtractionResult
+OperatingDriverExtractionResult = OperatingEvidenceExtractionResult
+ExtractedOperatingResponse = ExtractedOperatingEvidenceResponse
+ExtractedOperatingDriverObservation = ExtractedOperatingObservation
+ExtractedInvestmentProgram = ExtractedOperatingInvestmentProgram
+OperatingExtractionRejection = OperatingEvidenceRejection
 
 
 class OperatingDriverForecast(BaseModel):
@@ -513,6 +1154,62 @@ def _normalize_required_text(value: str, label: str) -> str:
     return normalized
 
 
+def _coerce_operating_archetype(value: OperatingArchetype | str) -> OperatingArchetype:
+    """Normalize the small vocabulary accepted at the extraction boundary."""
+
+    if isinstance(value, OperatingArchetype):
+        return value
+    normalized = (
+        str(getattr(value, "value", value))
+        .strip()
+        .casefold()
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("×", "_times_")
+    )
+    aliases = {
+        "volume_times_price": OperatingArchetype.VOLUME_PRICE,
+        "volume_and_price": OperatingArchetype.VOLUME_PRICE,
+        "subscriber_arpu": OperatingArchetype.SUBSCRIBERS_ARPU,
+        "subscribers_and_arpu": OperatingArchetype.SUBSCRIBERS_ARPU,
+        "capacity_utilization_and_price": OperatingArchetype.CAPACITY_UTILIZATION_PRICE,
+        "capacity_times_utilization_times_price": OperatingArchetype.CAPACITY_UTILIZATION_PRICE,
+        "transactions_and_take_rate": OperatingArchetype.TRANSACTIONS_TAKE_RATE,
+        "backlog_and_conversion": OperatingArchetype.BACKLOG_CONVERSION,
+        "store_count_and_sales_per_store": OperatingArchetype.STORE_COUNT_SALES_PER_STORE,
+        "segment_growth": OperatingArchetype.GENERIC_SEGMENT_GROWTH,
+    }
+    aliased = aliases.get(normalized)
+    if aliased is not None:
+        return aliased
+    try:
+        return OperatingArchetype(normalized)
+    except ValueError as error:
+        raise ValueError(f"Unsupported operating archetype: {value}") from error
+
+
+def _archetype_metrics(archetype: OperatingArchetype) -> tuple[str, ...]:
+    """Return canonical input names for an extracted archetype mapping."""
+
+    return {
+        OperatingArchetype.VOLUME_PRICE: ("volume", "price"),
+        OperatingArchetype.SUBSCRIBERS_ARPU: ("subscribers", "arpu"),
+        OperatingArchetype.CAPACITY_UTILIZATION_PRICE: (
+            "capacity",
+            "utilization",
+            "price",
+        ),
+        OperatingArchetype.TRANSACTIONS_TAKE_RATE: ("transactions", "take_rate"),
+        OperatingArchetype.BACKLOG_CONVERSION: ("backlog", "conversion_rate"),
+        OperatingArchetype.STORE_COUNT_SALES_PER_STORE: (
+            "store_count",
+            "sales_per_store",
+        ),
+        OperatingArchetype.GENERIC_SEGMENT_GROWTH: ("growth",),
+    }[archetype]
+
+
 def _normalize_optional_text(value: str | None, label: str) -> str | None:
     if value is None:
         return None
@@ -591,10 +1288,30 @@ def _validate_growth_consistency(
 __all__ = [
     "CompanyOperatingForecast",
     "EvidenceReference",
+    "ExtractedOperatingDriverDefinition",
+    "ExtractedOperatingDriverObservation",
+    "ExtractedOperatingEvidenceResponse",
+    "ExtractedOperatingResponse",
+    "ExtractedInvestmentProgram",
+    "ExtractedOperatingInvestmentProgram",
+    "ExtractedOperatingObservation",
+    "ExtractedOperatingSegment",
     "OperatingArchetype",
     "OperatingDriverDefinition",
     "OperatingDriverForecast",
     "OperatingDriverObservation",
+    "OperatingEvidenceAudit",
+    "OperatingEvidenceExtractionResponse",
+    "OperatingEvidenceExtractionResult",
+    "OperatingEvidenceResult",
+    "OperatingDriverExtractionResult",
+    "OperatingEvidenceRejection",
+    "OperatingExtractionRejection",
+    "OperatingInvestmentProgram",
+    "OperatingDocumentAudit",
+    "OperatingEvidenceAuditRecord",
+    "OperatingExtractionCacheEntry",
+    "OperatingExtractionResult",
     "OperatingSegment",
     "SegmentRevenueForecast",
 ]

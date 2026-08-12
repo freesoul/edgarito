@@ -30,6 +30,26 @@ GUIDANCE_TERMS = (
     "capacity",
     "forecasting",
     "target",
+    # Operating-driver evidence uses the same bounded SEC context seam as
+    # management guidance.  These terms improve recall without interpreting
+    # any value or creating a forecast.
+    "volume",
+    "price",
+    "subscriber",
+    "users",
+    "arpu",
+    "average revenue per user",
+    "utilization",
+    "transactions",
+    "take rate",
+    "store count",
+    "sales per store",
+    "production",
+    "shipments",
+    "deliveries",
+    "investment",
+    "facility",
+    "data center",
 )
 
 GUIDANCE_CONTEXT_MAX_CHARS = 24_000
@@ -69,6 +89,23 @@ _GUIDANCE_CONTEXT_PATTERNS = (
     (r"\boperating cash flow\b", 2),
     (r"\bbookings?\b", 2),
     (r"\bbacklog\b", 2),
+    (r"\bvolumes?\b", 4),
+    (r"\bprices?\b", 3),
+    (r"\bsubscribers?\b", 5),
+    (r"\busers?\b", 4),
+    (r"\barpu\b", 6),
+    (r"\baverage revenue per user\b", 6),
+    (r"\butili[sz]ation\b", 5),
+    (r"\btransactions?\b", 4),
+    (r"\btake rate\b", 5),
+    (r"\bstore count\b", 4),
+    (r"\bsales per store\b", 5),
+    (r"\bproduction\b", 4),
+    (r"\bshipments?\b", 4),
+    (r"\bdeliveries\b", 4),
+    (r"\binvestments?\b", 3),
+    (r"\bfacilit(?:y|ies)\b", 3),
+    (r"\bdata cent(?:er|re)s?\b", 3),
     (r"\beps\b", 2),
 )
 
@@ -126,12 +163,6 @@ def guidance_keyword_hits(text: str) -> dict[str, int]:
         keyword: len(re.findall(pattern, text, flags=re.IGNORECASE))
         for keyword, pattern in _GUIDANCE_AUDIT_PATTERNS.items()
     }
-
-
-def is_periodic_filing(filing: SecFiling) -> bool:
-    """Return whether a filing is one of the periodic guidance forms."""
-
-    return filing.form.upper() in _PERIODIC_REPORT_FORMS
 
 
 def extract_guidance_context(

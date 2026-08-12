@@ -1,6 +1,17 @@
 from edgarito.services.operating.discovery import (
+    OperatingDriverDiscoveryService,
+    OperatingEvidenceDiscovery,
+    OperatingEvidenceDiscoveryService,
     OperatingForecastDiscovery,
     OperatingForecastDiscoveryResult,
+    OperatingForecastDiscoveryService,
+)
+from edgarito.services.operating.extraction import (
+    OpenAIOperatingEvidenceExtractor,
+    OperatingDriverExtractor,
+    OperatingEvidenceExtractionError,
+    OperatingEvidenceExtractor,
+    OperatingForecastExtractor,
 )
 from edgarito.services.operating.forecast import (
     DeterministicOperatingForecastService,
@@ -49,6 +60,15 @@ __all__ = [
     "OperatingForecastIntegrationService",
     "OperatingForecastDiscovery",
     "OperatingForecastDiscoveryResult",
+    "OperatingForecastDiscoveryService",
+    "OperatingDriverDiscoveryService",
+    "OperatingEvidenceDiscovery",
+    "OperatingEvidenceDiscoveryService",
+    "OpenAIOperatingEvidenceExtractor",
+    "OperatingDriverExtractor",
+    "OperatingEvidenceExtractionError",
+    "OperatingEvidenceExtractor",
+    "OperatingForecastExtractor",
     "OperatingForecastReconciler",
     "OperatingForecastService",
     "OperatingFormulaRegistry",
