@@ -262,6 +262,44 @@ def test_ytd_dcf_discounts_remaining_stub_before_later_full_year_observations():
     assert second.period == Decimal(508) / Decimal(365)
     assert result.terminal_value.final_cash_flow == forecast.observations[-1].fcff
     assert result.terminal_present_value.period == Decimal(508) / Decimal(365)
+    assert not any("before remaining stub start" in item for item in result.warnings)
+
+
+def test_ytd_dcf_allows_an_earlier_capital_bridge_with_an_explicit_date_warning():
+    forecast = _ytd_forecast()
+    bridge = _ytd_capital_bridge().model_copy(
+        update={"period_end": datetime.date(2025, 12, 31)}
+    )
+
+    result = FcffDcfService().value(
+        forecast,
+        FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+        bridge,
+        valuation_date=datetime.date(2026, 8, 10),
+    )
+
+    assert any(
+        "Capital bridge is dated 2025-12-31 before remaining stub start 2026-06-30"
+        in item
+        for item in result.warnings
+    )
+    assert result.explicit_forecast_present_value.cash_flows[0].amount == Decimal(
+        "8.45"
+    )
+
+
+def test_ytd_dcf_rejects_a_capital_bridge_after_the_remaining_stub_start():
+    bridge = _ytd_capital_bridge().model_copy(
+        update={"period_end": datetime.date(2026, 7, 1)}
+    )
+
+    with pytest.raises(ValueError, match="must match or precede"):
+        FcffDcfService().value(
+            _ytd_forecast(),
+            FcffDcfParameters(wacc="10", perpetual_growth_rate="2"),
+            bridge,
+            valuation_date=datetime.date(2026, 8, 10),
+        )
 
 
 def test_ytd_dcf_rejects_a_missing_remaining_stub_instead_of_using_full_year_fcff():
