@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import datetime
 import logging
+import time
+from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -166,6 +168,27 @@ from edgarito.settings import (
     OPENFIGI_API_KEY,
     PROVIDER_CONFIGURATION,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _valuation_step(name: str):
+    """Log progress for valuation stages, including elapsed time."""
+    started = time.perf_counter()
+    logger.warning("Valuation: %s...", name)
+    try:
+        yield
+    except Exception:
+        logger.exception(
+            "Valuation: %s failed after %.1fs", name, time.perf_counter() - started
+        )
+        raise
+    else:
+        logger.warning(
+            "Valuation: %s completed in %.1fs", name, time.perf_counter() - started
+        )
 
 # Optional provider-neutral injection seam.  Production discovery is not
 # enabled here: callers/tests may supply normalized structured operating
@@ -1116,6 +1139,7 @@ def _equity_relative_valuation(
 
 
 async def _run_valuation(args: argparse.Namespace) -> int:
+    logger.warning("Valuation: starting for %s", args.ticker or "profile")
     generated_profile_path = None
     should_generate_profile = False
     peer_report = None
@@ -1205,33 +1229,36 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             FinancialConcept.STOCKHOLDERS_EQUITY,
         }
     )
-    financials = await _retrieve_financials(
-        args,
-        None,
-        required_concepts,
-    )
+    with _valuation_step("retrieving financial data"):
+        financials = await _retrieve_financials(
+            args,
+            None,
+            required_concepts,
+        )
     valuation_date = datetime.date.today()
     additional_warnings.extend(_financial_snapshot_warnings(financials, args))
-    forecast = forecast_service.forecast(
-        financials,
-        forecast_parameters,
-        as_of=valuation_date,
-        availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-    )
+    with _valuation_step("building historical forecast"):
+        forecast = forecast_service.forecast(
+            financials,
+            forecast_parameters,
+            as_of=valuation_date,
+            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+        )
     guidance_overlay: GuidanceOverlayResult | None = None
     if OPENAI_API_KEY:
         original_forecast_parameters = forecast_parameters
         try:
-            (
-                candidate_parameters,
-                candidate_overlay,
-            ) = await _management_guidance_overlay(
-                args,
-                financials,
-                original_forecast_parameters,
-                forecast,
-                valuation_date,
-            )
+            with _valuation_step("retrieving management guidance"):
+                (
+                    candidate_parameters,
+                    candidate_overlay,
+                ) = await _management_guidance_overlay(
+                    args,
+                    financials,
+                    original_forecast_parameters,
+                    forecast,
+                    valuation_date,
+                )
             additional_warnings.extend(candidate_overlay.warnings)
             candidate_forecast = forecast
             if candidate_overlay.applications:
@@ -1263,11 +1290,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             "configured; standard FCFF forecast retained"
         )
     else:
-        operating_evidence, operating_warnings = await _retrieve_operating_evidence(
-            financials,
-            forecast,
-            valuation_date,
-        )
+        with _valuation_step("retrieving operating evidence"):
+            operating_evidence, operating_warnings = await _retrieve_operating_evidence(
+                financials,
+                forecast,
+                valuation_date,
+            )
         additional_warnings.extend(operating_warnings)
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
@@ -1313,15 +1341,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         and args.terminal_growth is None
         and terminal_configuration.perpetual_growth_rate is None
     )
-    automatic_inputs = await _retrieve_automatic_assumption_inputs(
-        args,
-        financials,
-        forecast.unit,
-        needs_wacc=needs_automatic_wacc,
-        needs_terminal=needs_automatic_terminal,
-        sector_override=profile.model_selection.sector,
-        industry_override=profile.model_selection.industry,
-    )
+    with _valuation_step("retrieving automatic valuation assumptions"):
+        automatic_inputs = await _retrieve_automatic_assumption_inputs(
+            args,
+            financials,
+            forecast.unit,
+            needs_wacc=needs_automatic_wacc,
+            needs_terminal=needs_automatic_terminal,
+            sector_override=profile.model_selection.sector,
+            industry_override=profile.model_selection.industry,
+        )
     resolved = ValuationAssumptionResolver().resolve(
         financials=financials,
         capital_bridge=capital_bridge,
@@ -1377,15 +1406,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 target_symbol,
             )
             try:
-                comparable_bundle = await _build_comparable_report(
-                    args,
-                    profile,
-                    target_symbol,
-                    peer_symbols,
-                    peer_source=peer_source,
-                    as_of=valuation_date,
-                    availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-                )
+                with _valuation_step("retrieving comparable-company data"):
+                    comparable_bundle = await _build_comparable_report(
+                        args,
+                        profile,
+                        target_symbol,
+                        peer_symbols,
+                        peer_source=peer_source,
+                        as_of=valuation_date,
+                        availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+                    )
             except (RuntimeError, ValueError) as exc:
                 comparable_error = str(exc)
 
@@ -1494,13 +1524,14 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 "Adaptive multistage projection with an exit multiple requires "
                 "valuation.multistage.stable_growth_rate in the profile"
             )
-        forward_estimate_result = await _retrieve_forward_estimates(
-            args,
-            financials,
-            forecast,
-            use_cache=not args.refresh,
-            make_cache=True,
-        )
+        with _valuation_step("retrieving forward estimates"):
+            forward_estimate_result = await _retrieve_forward_estimates(
+                args,
+                financials,
+                forecast,
+                use_cache=not args.refresh,
+                make_cache=True,
+            )
         additional_warnings.extend(forward_estimate_result.warnings)
         forecast_parameters = _materialize_forward_revenue_anchors(
             forecast_parameters,
@@ -1679,15 +1710,16 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             "Buyback price or rate assumptions require --buyback-cash or a "
             "profile repurchase schedule"
         )
-    result = FcffDcfService().value(
-        forecast,
-        parameters,
-        capital_bridge,
-        resolved.assumption_set,
-        multistage_plan,
-        valuation_date,
-        share_repurchase_parameters,
-    )
+    with _valuation_step("calculating FCFF DCF valuation"):
+        result = FcffDcfService().value(
+            forecast,
+            parameters,
+            capital_bridge,
+            resolved.assumption_set,
+            multistage_plan,
+            valuation_date,
+            share_repurchase_parameters,
+        )
     asset_life_warnings = (
         asset_life_resolution.warnings if asset_life_resolution is not None else ()
     )
@@ -1918,11 +1950,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 fair_value_band=decision_configuration.fair_value_band,
                 sensitivity_size=decision_configuration.sensitivity_size,
             )
-            decision_result = DecisionValuationService(decision_policy).build(
-                decision_context,
-                current_price,
-                relative_result or provider_relative_result,
-            )
+            with _valuation_step("running decision and sensitivity analysis"):
+                decision_result = DecisionValuationService(decision_policy).build(
+                    decision_context,
+                    current_price,
+                    relative_result or provider_relative_result,
+                )
         except ValueError as exc:
             additional_warnings.append(f"Decision analysis unavailable: {exc}")
     elif current_price is None and decision_configuration.enabled:
