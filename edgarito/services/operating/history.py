@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from edgarito.schemas.operating import (
+    EvidenceReference,
     OperatingDriverDefinition,
     OperatingDriverObservation,
     OperatingSegment,
@@ -30,6 +31,31 @@ _COUNT_METRICS = frozenset(
 )
 _PERIOD_RANK = {"FY": 4, "LTM": 3, "YTD": 2, "FQ": 1}
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _source_references(*observations: OperatingDriverObservation) -> tuple[EvidenceReference, ...]:
+    references: dict[tuple[str | None, str | None, str | None], EvidenceReference] = {}
+    for observation in observations:
+        for reference in (*observation.source_provenance, observation.evidence):
+            if reference is not None:
+                references[(reference.accession, reference.document_name, reference.source_text_hash)] = reference
+    return tuple(references[key] for key in sorted(references, key=lambda item: tuple(value or "" for value in item)))
+
+
+def _source_document(observation: OperatingDriverObservation) -> str | None:
+    reference = observation.evidence or (observation.source_provenance[0] if observation.source_provenance else None)
+    if reference is None:
+        return None
+    return f"{reference.accession or ''}:{reference.document_name or ''}"
+
+
+def _economic_units_compatible(revenue_unit: str, volume_unit: str) -> bool:
+    """Reject clearly malformed cross-document pairs without changing formulas."""
+    revenue = revenue_unit.casefold()
+    volume = volume_unit.casefold()
+    return any(token in revenue for token in ("usd", "eur", "gbp", "currency", "dollar")) and not any(
+        token in volume for token in ("usd", "eur", "gbp", "currency", "dollar")
+    )
 
 
 class OperatingHistoryAssembler:
@@ -58,6 +84,10 @@ class OperatingHistoryAssembler:
         by_key: dict[
             tuple[str, str, int, str, str | None], OperatingDriverObservation
         ] = {}
+        join_attempts = 0
+        join_accepted = 0
+        join_rejections: dict[str, int] = defaultdict(int)
+        join_diagnostics: list[str] = []
 
         for observation in source:
             key = self._key(observation)
@@ -93,7 +123,14 @@ class OperatingHistoryAssembler:
             accepted.append(observation)
 
         accepted.sort(key=self._sort_key)
-        derived, derived_warnings = self._derive_revenue_and_volume(accepted)
+        (
+            derived,
+            derived_warnings,
+            join_attempts,
+            join_accepted,
+            join_rejections,
+            join_diagnostics,
+        ) = self._derive_revenue_and_volume(accepted)
         annualized, annualized_warnings = self._annualize_quarterly_observations(
             accepted
         )
@@ -191,6 +228,16 @@ class OperatingHistoryAssembler:
             derived_observations=len(derived),
             historical_revenue_pairs=history_pairs,
             warnings=warnings,
+            joins_attempted=join_attempts,
+            joins_accepted=join_accepted,
+            joins_rejected=sum(join_rejections.values()),
+            join_rejections_by_reason=dict(sorted(join_rejections.items())),
+            join_diagnostics=tuple(join_diagnostics),
+            source_document_count=len({
+                (ref.accession, ref.document_name)
+                for item in all_observations
+                for ref in (*item.source_provenance, item.evidence) if ref is not None
+            }),
         )
         return OperatingTimeSeries(
             company_id=company_id,
@@ -506,6 +553,42 @@ class OperatingHistoryAssembler:
             ][item.driver_id.casefold()] = item
         derived = []
         warnings = []
+        join_attempts = 0
+        join_accepted = 0
+        join_rejections: dict[str, int] = defaultdict(int)
+        join_diagnostics: list[str] = []
+        candidates: dict[tuple[str, int], dict[str, list[OperatingDriverObservation]]] = defaultdict(
+            lambda: {"revenue": [], "volume": []}
+        )
+        for item in observations:
+            metric = OperatingHistoryAssembler._canonical_metric(item.driver_id)
+            if metric in {"revenue", "volume"}:
+                candidates[(item.segment_id, item.fiscal_year)][metric].append(item)
+        # Inspect all same-year candidates before grouping by period. This makes
+        # an FY/FQ or 6M/Q mismatch visible instead of silently looking missing.
+        for (segment, year), pair in sorted(candidates.items()):
+            for revenue in pair["revenue"]:
+                for volume in pair["volume"]:
+                    revenue_doc = _source_document(revenue)
+                    volume_doc = _source_document(volume)
+                    if not revenue_doc or not volume_doc or revenue_doc == volume_doc:
+                        continue
+                    join_attempts += 1
+                    reason = None
+                    if not _economic_units_compatible(revenue.unit, volume.unit):
+                        reason = "incompatible_units"
+                    elif not operating_periods_compatible(
+                        revenue.fiscal_period,
+                        volume.fiscal_period,
+                        revenue.period_key,
+                        volume.period_key,
+                    ):
+                        reason = "incompatible_period"
+                    if reason:
+                        join_rejections[reason] += 1
+                        join_diagnostics.append(
+                            f"{segment}/FY{year}: rejected cross-document join ({reason})"
+                        )
         for (segment, year, period, period_key), values in grouped.items():
             revenue = next(
                 (item for key, item in values.items() if key in _REVENUE_METRICS), None
@@ -521,6 +604,9 @@ class OperatingHistoryAssembler:
                     and item.origin == "reported"
                 ),
                 None,
+            )
+            subscribers = next(
+                (item for key, item in values.items() if key in _COUNT_METRICS), None
             )
             if revenue is None and volume is not None and price is not None:
                 derived.append(
@@ -563,8 +649,45 @@ class OperatingHistoryAssembler:
                     )
                 )
                 continue
+            if revenue is not None and subscribers is not None and subscribers.normalized_value != 0:
+                if operating_periods_compatible(
+                    revenue.fiscal_period,
+                    subscribers.fiscal_period,
+                    revenue.period_key,
+                    subscribers.period_key,
+                ):
+                    revenue_doc = _source_document(revenue)
+                    subscribers_doc = _source_document(subscribers)
+                    derived.append(
+                        OperatingDriverObservation(
+                            segment_id=segment,
+                            driver_id="implied_arpu",
+                            fiscal_year=year,
+                            fiscal_period=period,
+                            period_key=period_key,
+                            value=revenue.normalized_value / subscribers.normalized_value,
+                            unit=f"{revenue.unit}/{subscribers.unit}",
+                            original_unit=f"{revenue.original_unit or revenue.unit}/{subscribers.original_unit or subscribers.unit}",
+                            origin="derived",
+                            confidence="medium",
+                            method=(
+                                "derived_from_reported_revenue_and_subscribers_cross_document"
+                                if revenue_doc and subscribers_doc and revenue_doc != subscribers_doc
+                                else "derived_from_reported_revenue_and_subscribers"
+                            ),
+                            evidence=revenue.evidence or subscribers.evidence,
+                            source_provenance=_source_references(revenue, subscribers),
+                        )
+                    )
             if revenue is None or volume is None or volume.normalized_value == 0:
+                if (revenue is None) != (volume is None):
+                    join_rejections["missing_side"] += 1
+                    join_diagnostics.append(
+                        f"{segment}/FY{year}/{period}: rejected join (missing_side)"
+                )
                 continue
+            revenue_doc = _source_document(revenue)
+            volume_doc = _source_document(volume)
             if not operating_periods_compatible(
                 revenue.fiscal_period,
                 volume.fiscal_period,
@@ -589,11 +712,22 @@ class OperatingHistoryAssembler:
                     original_unit=f"{revenue.original_unit or revenue.unit}/{volume.original_unit or volume.unit}",
                     origin="derived",
                     confidence="medium",
-                    method="derived_from_reported_revenue_and_volume",
+                    method=(
+                        "derived_from_reported_revenue_and_volume_cross_document"
+                        if revenue_doc and volume_doc and revenue_doc != volume_doc
+                        else "derived_from_reported_revenue_and_volume"
+                    ),
                     evidence=revenue.evidence or volume.evidence,
+                    source_provenance=_source_references(revenue, volume),
                 )
             )
-        return derived, warnings
+            if revenue_doc and volume_doc and revenue_doc != volume_doc:
+                join_accepted += 1
+                join_diagnostics.append(
+                    f"{segment}/FY{year}/{period}: accepted cross-document join "
+                    f"revenue={revenue_doc} volume={volume_doc} method=derived_from_reported_revenue_and_volume"
+                )
+        return derived, warnings, join_attempts, join_accepted, join_rejections, join_diagnostics
 
     @staticmethod
     def _annualize_quarterly_observations(observations):

@@ -30,6 +30,12 @@ class OperatingHistoryAudit(BaseModel):
     derived_observations: int = Field(default=0, ge=0)
     historical_revenue_pairs: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    joins_attempted: int = Field(default=0, ge=0)
+    joins_accepted: int = Field(default=0, ge=0)
+    joins_rejected: int = Field(default=0, ge=0)
+    join_rejections_by_reason: dict[str, int] = Field(default_factory=dict)
+    join_diagnostics: tuple[str, ...] = ()
+    source_document_count: int = Field(default=0, ge=0)
 
     @field_validator(
         "accepted_periods",
@@ -39,6 +45,7 @@ class OperatingHistoryAudit(BaseModel):
         "unit_failures",
         "historical_revenue_pairs",
         "warnings",
+        "join_diagnostics",
     )
     @classmethod
     def normalize_texts(cls, value: tuple[str, ...]) -> tuple[str, ...]:

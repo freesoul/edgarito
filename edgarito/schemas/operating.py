@@ -308,6 +308,10 @@ class OperatingDriverObservation(BaseModel):
     confidence: Literal["high", "medium", "low"]
     provenance: AssumptionProvenance | EvidenceReference | None = None
     evidence: EvidenceReference | None = None
+    # A derived observation may combine compatible facts from multiple SEC
+    # documents. Keep every source instead of reducing the audit trail to the
+    # first evidence pointer.
+    source_provenance: tuple[EvidenceReference, ...] = ()
 
     @field_validator("driver_id")
     @classmethod
@@ -2129,7 +2133,37 @@ def _canonical_segment_text(value: str) -> str:
         text,
     )
     text = re.sub(r"\band\b", " ", text)
-    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    tokens = set(text.split())
+    # These are deliberately exact token aliases. Similar-looking labels such
+    # as vehicle logistics or energy services must remain separate segments.
+    if tokens <= {
+        "automotive",
+        "automobiles",
+        "vehicle",
+        "vehicles",
+        "car",
+        "cars",
+        "revenue",
+        "revenues",
+        "sales",
+    }:
+        return "automotive"
+    if tokens <= {
+        "energy",
+        "storage",
+        "generation",
+        "solar",
+        "megapack",
+        "powerwall",
+        "deployment",
+        "deployments",
+        "revenue",
+        "revenues",
+        "sales",
+    }:
+        return "energy"
+    return text
 
 
 def _canonical_segment_display(value: str) -> str:

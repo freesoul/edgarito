@@ -423,6 +423,15 @@ class FcffDcfConsolePresenter:
                             + str(history_audit.deduplicated_observations),
                             "Derived observations: "
                             + str(history_audit.derived_observations),
+                            "Cross-document joins: "
+                            + f"{history_audit.joins_accepted}/"
+                            + f"{history_audit.joins_attempted} accepted/attempted",
+                            "Rejected joins by reason: "
+                            + str(history_audit.join_rejections_by_reason or {}),
+                            "Join diagnostics: "
+                            + "; ".join(history_audit.join_diagnostics or ("none",)),
+                            "Source documents: "
+                            + str(history_audit.source_document_count),
                             "Usable reconstruction periods: "
                             + str(len(history_audit.historical_revenue_pairs)),
                         ]
