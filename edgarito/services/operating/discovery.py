@@ -31,6 +31,7 @@ from edgarito.services.operating.extraction import (
     operating_keyword_hits,
 )
 from edgarito.services.operating.history import OperatingHistoryAssembler
+from edgarito.services.operating.vocabulary import KpiVocabularyProvider
 from edgarito.services.providers.edgar import EdgarClient
 
 
@@ -56,6 +57,8 @@ class OperatingForecastDiscoveryResult:
     cache_misses: int = 0
     filings_inspected: int = 0
     documents_inspected: int = 0
+    vocabulary_audit: Any | None = None
+    vocabulary_terms: tuple[Any, ...] = ()
 
     @property
     def drivers(self) -> tuple[OperatingDriverDefinition, ...]:
@@ -140,6 +143,7 @@ class OperatingEvidenceDiscoveryService:
         max_documents_per_filing: int = 4,
         max_documents: int = 12,
         history_assembler: OperatingHistoryAssembler | None = None,
+        vocabulary_provider: KpiVocabularyProvider | None = None,
     ) -> None:
         self._edgar = edgar
         self._extractor = extractor
@@ -149,6 +153,7 @@ class OperatingEvidenceDiscoveryService:
         self.max_documents_per_filing = max(0, max_documents_per_filing)
         self.max_documents = max(0, max_documents)
         self._history_assembler = history_assembler or OperatingHistoryAssembler()
+        self._vocabulary = vocabulary_provider
 
     async def discover(
         self,
@@ -161,6 +166,8 @@ class OperatingEvidenceDiscoveryService:
         refresh_sec: bool = False,
         valuation_date: datetime.date | None = None,
         fiscal_years: tuple[int, ...] | None = None,
+        industry: str | None = None,
+        business_archetype: Any | None = None,
     ) -> OperatingForecastDiscoveryResult:
         """Return evidence for one valuation date, isolating provider failures."""
 
@@ -260,6 +267,8 @@ class OperatingEvidenceDiscoveryService:
         rejected: list[OperatingEvidenceRejection] = []
         audit_records: list[OperatingEvidenceAuditRecord] = []
         document_audits: list[OperatingDocumentAudit] = []
+        vocabulary_terms: list[Any] = []
+        vocabulary_audits: list[Any] = []
         unsupported: list[str] = []
         missing: list[str] = []
         unusable: list[str] = []
@@ -329,6 +338,25 @@ class OperatingEvidenceDiscoveryService:
                 documents_inspected += 1
                 clean_text = clean_document_text(document.content)
                 context_text = extract_operating_context(clean_text)
+                if self._vocabulary is not None:
+                    try:
+                        discovered, vocabulary_audit = await self._vocabulary.discover(
+                            context=context_text,
+                            source_document=document.filename,
+                            source_text=clean_text,
+                            industry=industry,
+                            business_archetype=business_archetype,
+                            as_of=as_of,
+                        )
+                        vocabulary_terms.extend(discovered)
+                        vocabulary_audits.append(vocabulary_audit)
+                        if discovered:
+                            context_text += (
+                                "\n\nAdditional grounded KPI terminology: "
+                                + ", ".join(item.raw_term for item in discovered)
+                            )
+                    except Exception as exc:
+                        warnings.append(f"KPI vocabulary discovery skipped: {exc}")
                 audit = OperatingDocumentAudit(
                     filing_form=filing.form,
                     filing_date=filing.filing_date,
@@ -511,6 +539,8 @@ class OperatingEvidenceDiscoveryService:
             cache_misses=misses,
             filings_inspected=filings_inspected,
             documents_inspected=documents_inspected,
+            vocabulary_audit=_merge_vocabulary_audits(vocabulary_audits),
+            vocabulary_terms=tuple(vocabulary_terms),
         )
 
     async def retrieve(self, **kwargs: Any) -> OperatingForecastDiscoveryResult:
@@ -566,6 +596,31 @@ def _merge_segment_identity(
     if current.name == current.segment_id:
         return previous
     return previous.model_copy(update={"name": current.name})
+
+
+def _merge_vocabulary_audits(audits: list[Any]) -> Any | None:
+    if not audits:
+        return None
+    first = audits[0]
+    return first.model_copy(
+        update={
+            "global_count": max(item.global_count for item in audits),
+            "industry_count": max(item.industry_count for item in audits),
+            "discovered_count": sum(item.discovered_count for item in audits),
+            "rejected_count": sum(item.rejected_count for item in audits),
+            "cache_status": (
+                "hit" if any(item.cache_status == "hit" for item in audits) else "miss"
+            ),
+            "terms": tuple(
+                dict.fromkeys(term for item in audits for term in item.terms)
+            ),
+            "diagnostics": tuple(
+                dict.fromkeys(
+                    diagnostic for item in audits for diagnostic in item.diagnostics
+                )
+            ),
+        }
+    )
 
 
 # Descriptive aliases for the two common naming conventions.

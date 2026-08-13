@@ -58,6 +58,7 @@ from edgarito.services.operating.registry import (
     transactions_take_rate,
     volume_price,
 )
+from edgarito.services.operating.vocabulary import KpiVocabularyProvider
 
 __all__ = [
     "ARCHETYPE_FORMULAS",
@@ -106,4 +107,5 @@ __all__ = [
     "subscribers_arpu",
     "transactions_take_rate",
     "volume_price",
+    "KpiVocabularyProvider",
 ]

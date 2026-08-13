@@ -187,6 +187,8 @@ class OperatingForecastQualityResult:
     cache_misses: int = 0
     filings_inspected: int = 0
     documents_inspected: int = 0
+    vocabulary_audit: Any | None = None
+    vocabulary_terms: tuple[Any, ...] = ()
 
     @property
     def status(self) -> str:

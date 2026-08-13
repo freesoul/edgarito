@@ -401,6 +401,43 @@ class FcffDcfConsolePresenter:
                         + str(getattr(audit, "filings_inspected", 0)),
                         "SEC documents inspected: "
                         + str(getattr(audit, "documents_inspected", 0)),
+                        "KPI vocabulary cache: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "cache_status",
+                                "none",
+                            )
+                        ),
+                        "KPI vocabulary terms: "
+                        + ", ".join(
+                            item.raw_term
+                            for item in (getattr(audit, "vocabulary_terms", ()) or ())
+                        ),
+                        "KPI vocabulary global terms: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "global_count",
+                                0,
+                            )
+                        ),
+                        "KPI vocabulary industry terms: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "industry_count",
+                                0,
+                            )
+                        ),
+                        "KPI vocabulary LLM terms: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "discovered_count",
+                                0,
+                            )
+                        ),
                     ]
                 )
                 history_audit = getattr(audit, "history_audit", None)

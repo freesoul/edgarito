@@ -96,6 +96,7 @@ from edgarito.services.normalization.classification import (
 from edgarito.services.normalization.yahoo_market import YahooMarketNormalizer
 from edgarito.services.openai import OpenAIClient
 from edgarito.services.operating import (
+    KpiVocabularyProvider,
     OperatingEvidenceDiscoveryService,
     OperatingEvidenceExtractor,
     OperatingForecastPipelineService,
@@ -2303,6 +2304,8 @@ async def _retrieve_operating_evidence(
             "company_id": financials.company_id,
             "as_of": as_of,
             "fiscal_years": tuple(item.fiscal_year for item in forecast.observations),
+            "industry": getattr(financials, "industry", None),
+            "business_archetype": getattr(financials, "business_archetype", None),
         }
         if args is not None:
             resolver_kwargs.update(
@@ -2430,6 +2433,15 @@ def _operating_quality_audit(
             if value
             else getattr(evidence, "documents_inspected", 0)
         ),
+        vocabulary_audit=(
+            value.get("vocabulary_audit")
+            if value
+            else getattr(evidence, "vocabulary_audit", None)
+        ),
+        vocabulary_terms=tuple(
+            (value.get("vocabulary_terms", ()) if value else getattr(evidence, "vocabulary_terms", ()))
+            or ()
+        ),
     )
 
 
@@ -2470,6 +2482,7 @@ async def _operating_evidence_provider(
                 OperatingEvidenceDiscoveryService(
                     edgar,
                     OperatingEvidenceExtractor(openai_client, cache),
+                    vocabulary_provider=KpiVocabularyProvider(openai_client, cache),
                 ),
                 None,
             )

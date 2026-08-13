@@ -86,6 +86,11 @@ from edgarito.schemas.valuation import (
     ValuationAssumptionSet,
     ValuationScenario,
 )
+from edgarito.schemas.vocabulary import (
+    DiscoveredKpiTerm,
+    DiscoveredKpiVocabularyResponse,
+    KpiVocabularyAudit,
+)
 
 __all__ = [
     "AssumptionOrigin",
@@ -115,6 +120,9 @@ __all__ = [
     "ForwardRevenueEstimateResolution",
     "ForwardRevenueEstimateResult",
     "ForwardRevenueEstimatesResult",
+    "DiscoveredKpiTerm",
+    "DiscoveredKpiVocabularyResponse",
+    "KpiVocabularyAudit",
     "IndustryBeta",
     "IndustryBetaSnapshot",
     "MarketDataFrequency",
