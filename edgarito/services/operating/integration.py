@@ -588,6 +588,8 @@ class OperatingForecastPipelineService:
             cache_misses=int(values.get("cache_misses", 0) or 0),
             filings_inspected=int(values.get("filings_inspected", 0) or 0),
             documents_inspected=int(values.get("documents_inspected", 0) or 0),
+            vocabulary_audit=values.get("vocabulary_audit"),
+            vocabulary_terms=tuple(values.get("vocabulary_terms") or ()),
         )
 
     def forecast_with_evidence_provider(
@@ -725,6 +727,8 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "cache_misses",
             "filings_inspected",
             "documents_inspected",
+            "vocabulary_audit",
+            "vocabulary_terms",
         )
         if hasattr(value, name)
     }

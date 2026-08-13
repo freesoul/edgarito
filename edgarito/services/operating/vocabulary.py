@@ -92,6 +92,8 @@ def normalize_vocabulary_key(value: object | None) -> str:
 class KpiVocabularyProvider:
     """Combines deterministic taxonomy terms and optionally grounded LLM terms."""
 
+    GLOBAL_KPI_TERMS = GLOBAL_KPI_TERMS
+
     def __init__(
         self,
         openai_client=None,

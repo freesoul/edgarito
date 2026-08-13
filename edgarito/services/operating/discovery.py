@@ -18,6 +18,7 @@ from edgarito.schemas.operating import (
     OperatingSegment,
 )
 from edgarito.schemas.operating_history import OperatingHistoryAudit
+from edgarito.schemas.vocabulary import KpiVocabularyAudit
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     clean_document_text,
@@ -167,6 +168,7 @@ class OperatingEvidenceDiscoveryService:
         valuation_date: datetime.date | None = None,
         fiscal_years: tuple[int, ...] | None = None,
         industry: str | None = None,
+        sector: str | None = None,
         business_archetype: Any | None = None,
     ) -> OperatingForecastDiscoveryResult:
         """Return evidence for one valuation date, isolating provider failures."""
@@ -186,6 +188,13 @@ class OperatingEvidenceDiscoveryService:
                 )
             )
         warnings: list[str] = []
+        if self._vocabulary is not None:
+            vocabulary_context = self._vocabulary.normal_terms(
+                industry=industry,
+                business_archetype=business_archetype,
+            )
+            if not vocabulary_context:
+                warnings.append("KPI vocabulary is explicitly disabled")
         if cik is None:
             if not ticker:
                 return OperatingForecastDiscoveryResult(
@@ -269,6 +278,22 @@ class OperatingEvidenceDiscoveryService:
         document_audits: list[OperatingDocumentAudit] = []
         vocabulary_terms: list[Any] = []
         vocabulary_audits: list[Any] = []
+        if self._vocabulary is not None:
+            normal = self._vocabulary.normal_terms(industry, business_archetype)
+            vocabulary_audits.append(
+                KpiVocabularyAudit(
+                    global_count=len(self._vocabulary.GLOBAL_KPI_TERMS)
+                    if hasattr(self._vocabulary, "GLOBAL_KPI_TERMS")
+                    else 0,
+                    industry_count=max(
+                        0,
+                        len(normal)
+                        - len(getattr(self._vocabulary, "GLOBAL_KPI_TERMS", ())),
+                    ),
+                    terms=tuple(term for term, _metric in normal),
+                    cache_status="not_needed",
+                )
+            )
         unsupported: list[str] = []
         missing: list[str] = []
         unusable: list[str] = []

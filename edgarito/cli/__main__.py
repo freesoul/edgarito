@@ -1307,6 +1307,25 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             )
             additional_warnings.append(provider_rejection)
         if provider_rejection is None:
+            classification = None
+            if not profile.model_selection.industry:
+                try:
+                    classification = await _retrieve_classification(
+                        args, provider=None, crosscheck=False
+                    )
+                except Exception as exc:
+                    additional_warnings.append(
+                        f"Operating vocabulary classification unavailable: {exc}"
+                    )
+            operating_metadata = {
+                "industry": profile.model_selection.industry
+                or getattr(classification, "industry", None)
+                or getattr(financials, "industry", None),
+                "sector": profile.model_selection.sector
+                or getattr(classification, "sector", None)
+                or getattr(financials, "sector", None),
+                "business_archetype": profile.model_selection.business_archetype,
+            }
             with _valuation_step("retrieving operating evidence"):
                 (
                     operating_evidence,
@@ -1317,6 +1336,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     valuation_date,
                     provider=provider,
                     args=args,
+                    metadata=operating_metadata,
                 )
             additional_warnings.extend(operating_warnings)
             if operating_evidence is not None:
@@ -1658,7 +1678,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
             except OperatingForecastQualityError as exc:
-                operating_audit = exc.result
+                operating_audit = _retain_operating_audit_metadata(
+                    exc.result, operating_audit
+                )
                 operating_evidence = None
                 additional_warnings.append(
                     f"{exc.result.reason}; standard consensus/historical forecast retained"
@@ -1679,7 +1701,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
             else:
-                operating_audit = pipeline_result.quality or operating_audit
+                operating_audit = _retain_operating_audit_metadata(
+                    pipeline_result.quality or operating_audit, operating_audit
+                )
                 forecast = pipeline_result.forecast
                 multistage_plan = pipeline_result.adaptive_plan
                 forecast_parameters = pipeline_result.integration.parameters
@@ -1710,13 +1734,15 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
             )
         except OperatingForecastQualityError as exc:
-            operating_audit = exc.result
+            operating_audit = _retain_operating_audit_metadata(exc.result, operating_audit)
             operating_evidence = None
             additional_warnings.append(
                 f"{exc.result.reason}; standard FCFF forecast retained"
             )
         else:
-            operating_audit = pipeline_result.quality or operating_audit
+            operating_audit = _retain_operating_audit_metadata(
+                pipeline_result.quality or operating_audit, operating_audit
+            )
             forecast = pipeline_result.forecast
             forecast_parameters = pipeline_result.integration.parameters
             additional_warnings.extend(pipeline_result.warnings)
@@ -2282,6 +2308,7 @@ async def _retrieve_operating_evidence(
     *,
     provider=None,
     args: argparse.Namespace | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> tuple[object | None, tuple[str, ...]]:
     """Resolve structured operating evidence without making it valuation-critical."""
 
@@ -2306,6 +2333,7 @@ async def _retrieve_operating_evidence(
             "fiscal_years": tuple(item.fiscal_year for item in forecast.observations),
             "industry": getattr(financials, "industry", None),
             "business_archetype": getattr(financials, "business_archetype", None),
+            **(metadata or {}),
         }
         if args is not None:
             resolver_kwargs.update(
@@ -2439,10 +2467,25 @@ def _operating_quality_audit(
             else getattr(evidence, "vocabulary_audit", None)
         ),
         vocabulary_terms=tuple(
-            (value.get("vocabulary_terms", ()) if value else getattr(evidence, "vocabulary_terms", ()))
+            (
+                value.get("vocabulary_terms", ())
+                if value
+                else getattr(evidence, "vocabulary_terms", ())
+            )
             or ()
         ),
     )
+
+
+def _retain_operating_audit_metadata(current, discovered):
+    if discovered is None:
+        return current
+    updates = {}
+    for field in ("vocabulary_audit", "vocabulary_terms"):
+        value = getattr(discovered, field, None)
+        if value:
+            updates[field] = value
+    return replace(current, **updates) if updates else current
 
 
 @asynccontextmanager
