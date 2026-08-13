@@ -18,6 +18,11 @@ from edgarito.services.operating.forecast import (
     OperatingForecastEngine,
     OperatingForecastService,
 )
+from edgarito.services.operating.history import (
+    NormalizedOperatingHistoryService,
+    OperatingHistoryAssembler,
+    OperatingTimeSeriesService,
+)
 from edgarito.services.operating.integration import (
     OperatingForecastIntegration,
     OperatingForecastIntegrationResult,
@@ -67,6 +72,9 @@ __all__ = [
     "OperatingForecastPipelineService",
     "OperatingForecastQualityError",
     "OperatingForecastQualityResult",
+    "OperatingHistoryAssembler",
+    "NormalizedOperatingHistoryService",
+    "OperatingTimeSeriesService",
     "merge_operating_growth_evidence",
     "OperatingForecastDiscovery",
     "OperatingForecastDiscoveryResult",

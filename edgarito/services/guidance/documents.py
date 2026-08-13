@@ -514,21 +514,32 @@ class GuidanceDocumentSelector:
         ]
 
         selected: list[SecFiling] = []
-        # Keep a small current-report allowance for quantitative exhibits, then
-        # reserve space for historical annual and quarterly tables.
-        selected.extend(current[: min(2, limit)])
+        # Historical reconstruction needs several report periods, not merely
+        # the latest 8-K. Reserve up to five slots for annual/quarterly filings;
+        # ensure both periodic classes participate when available, then use any
+        # remaining slot for a relevant current-report exhibit.
+        periodic_target = min(5, limit)
+
+        def add(item: SecFiling) -> None:
+            identity = (item.cik, item.accession_number)
+            if len(selected) < periodic_target and not any(
+                (existing.cik, existing.accession_number) == identity
+                for existing in selected
+            ):
+                selected.append(item)
+
+        if quarterly:
+            add(quarterly[0])
+        if annual:
+            add(annual[0])
         for bucket in (quarterly, annual, periodic):
             for filing in bucket:
-                if len(selected) >= limit:
+                if len(selected) >= periodic_target:
                     break
-                identity = (filing.cik, filing.accession_number)
-                if any(
-                    (item.cik, item.accession_number) == identity for item in selected
-                ):
-                    continue
-                selected.append(filing)
-            if len(selected) >= limit:
+                add(filing)
+            if len(selected) >= periodic_target:
                 break
+        selected.extend(current[: max(0, limit - len(selected))])
         return selected[:limit]
 
     def _rank_unique_filings(self, filings: list[SecFiling]) -> list[SecFiling]:

@@ -2350,6 +2350,11 @@ def _operating_quality_audit(
             )
             or ()
         ),
+        "history_audit": (
+            value.get("history_audit")
+            if value
+            else getattr(evidence, "history_audit", None)
+        ),
     }
     # Discovery only supplies driver evidence. Coverage, reconstruction error,
     # and confidence are produced by the deterministic engine, so do not reject
@@ -2401,6 +2406,29 @@ def _operating_quality_audit(
                 else getattr(evidence, "unusable_evidence", ())
             )
             or ()
+        ),
+        history_audit=(
+            value.get("history_audit")
+            if value
+            else getattr(evidence, "history_audit", None)
+        ),
+        cache_hits=int(
+            value.get("cache_hits", 0) if value else getattr(evidence, "cache_hits", 0)
+        ),
+        cache_misses=int(
+            value.get("cache_misses", 0)
+            if value
+            else getattr(evidence, "cache_misses", 0)
+        ),
+        filings_inspected=int(
+            value.get("filings_inspected", 0)
+            if value
+            else getattr(evidence, "filings_inspected", 0)
+        ),
+        documents_inspected=int(
+            value.get("documents_inspected", 0)
+            if value
+            else getattr(evidence, "documents_inspected", 0)
         ),
     )
 

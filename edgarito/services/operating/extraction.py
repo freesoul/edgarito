@@ -41,8 +41,8 @@ from edgarito.services.guidance.documents import (
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "operating-evidence-v2"
-SCHEMA_VERSION = "operating-evidence-schema-v2"
+PROMPT_VERSION = "operating-evidence-v4"
+SCHEMA_VERSION = "operating-evidence-schema-v4"
 CONTEXT_VERSION = "operating-context-v2"
 
 OPERATING_PROMPT_VERSION = PROMPT_VERSION
@@ -69,7 +69,8 @@ segment's revenue but not a generic driver relationship, emit a
 `generic_segment_growth` definition only when the filing explicitly describes
 segment growth or the historical revenue rows support that fallback; never
 invent a growth value. Include period_key such as Q1, Q2, Q3, or Q4 where the
-filing identifies a quarter, and use only compatible FY, FQ, or YTD periods.
+    filing identifies a quarter, and use only compatible FY, FQ, YTD, or LTM periods.
+    Labels such as FY2025 and trailing twelve months are valid period descriptions.
 Investment programs are first-party announced, planned, in-progress,
 under-construction, completed, or reported facts; they may contain spend,
 capacity, facility, production, or timing facts, but they are not revenue
@@ -619,6 +620,8 @@ class OperatingEvidenceExtractor:
             high=self._decimal(item.high),
             unit=item.unit,
             scale=self._decimal(item.scale) or Decimal(1),
+            original_unit=item.original_unit or item.unit,
+            original_scale=self._decimal(item.original_scale) or Decimal(1),
             currency=item.currency,
             basis=item.basis,
             origin=origin,

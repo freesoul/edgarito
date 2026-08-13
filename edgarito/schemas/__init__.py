@@ -50,6 +50,12 @@ from edgarito.schemas.operating import (
     operating_periods_compatible,
     operating_units_compatible,
 )
+from edgarito.schemas.operating_history import (
+    NormalizedOperatingTimeSeries,
+    OperatingHistory,
+    OperatingHistoryAudit,
+    OperatingTimeSeries,
+)
 from edgarito.schemas.red_flags import (
     RedFlag,
     RedFlagCategory,
@@ -123,6 +129,10 @@ __all__ = [
     "OperatingDriverExtractionResult",
     "OperatingExtractionCacheEntry",
     "OperatingInvestmentProgram",
+    "OperatingHistory",
+    "OperatingHistoryAudit",
+    "OperatingTimeSeries",
+    "NormalizedOperatingTimeSeries",
     "OperatingSegment",
     "PriceBar",
     "ReferenceMarketSeries",

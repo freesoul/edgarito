@@ -17,6 +17,7 @@ from edgarito.schemas.operating import (
     OperatingInvestmentProgram,
     OperatingSegment,
 )
+from edgarito.schemas.operating_history import OperatingHistoryAudit
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     clean_document_text,
@@ -29,6 +30,7 @@ from edgarito.services.operating.extraction import (
     OperatingEvidenceExtractor,
     operating_keyword_hits,
 )
+from edgarito.services.operating.history import OperatingHistoryAssembler
 from edgarito.services.providers.edgar import EdgarClient
 
 
@@ -42,6 +44,7 @@ class OperatingForecastDiscoveryResult:
     investment_programs: tuple[OperatingInvestmentProgram, ...] = ()
     management_constraints: tuple[OperatingDriverObservation, ...] = ()
     historical_revenue: Mapping[Any, Any] | None = None
+    history_audit: OperatingHistoryAudit | None = None
     rejected: tuple[OperatingEvidenceRejection, ...] = ()
     warnings: tuple[str, ...] = ()
     unsupported_evidence: tuple[str, ...] = ()
@@ -105,6 +108,7 @@ class OperatingForecastDiscoveryResult:
             "observations": self.observations,
             "management_constraints": self.management_constraints,
             "historical_revenue": self.historical_revenue,
+            "history_audit": self.history_audit,
             "audit_records": self.audit_records,
             "document_audits": self.document_audits,
             "unusable_evidence": self.unusable_evidence,
@@ -135,6 +139,7 @@ class OperatingEvidenceDiscoveryService:
         max_filings: int = 6,
         max_documents_per_filing: int = 4,
         max_documents: int = 12,
+        history_assembler: OperatingHistoryAssembler | None = None,
     ) -> None:
         self._edgar = edgar
         self._extractor = extractor
@@ -143,6 +148,7 @@ class OperatingEvidenceDiscoveryService:
         self.max_filings = max(0, max_filings)
         self.max_documents_per_filing = max(0, max_documents_per_filing)
         self.max_documents = max(0, max_documents)
+        self._history_assembler = history_assembler or OperatingHistoryAssembler()
 
     async def discover(
         self,
@@ -229,6 +235,22 @@ class OperatingEvidenceDiscoveryService:
             *[filing for filing in selected_filings if is_periodic_filing(filing)],
             *[filing for filing in selected_filings if not is_periodic_filing(filing)],
         ]
+        extraction_years = (
+            tuple(
+                sorted(
+                    {
+                        *(fiscal_years or ()),
+                        *(
+                            filing.report_date.year
+                            for filing in selected_filings
+                            if filing.report_date is not None
+                        ),
+                        *(filing.filing_date.year for filing in selected_filings),
+                    }
+                )
+            )
+            or fiscal_years
+        )
 
         segments: list[OperatingSegment] = []
         definitions: list[OperatingDriverDefinition] = []
@@ -343,7 +365,7 @@ class OperatingEvidenceDiscoveryService:
                         valuation_date=as_of,
                         source_text=clean_text,
                         context_text=context_text,
-                        fiscal_years=fiscal_years,
+                        fiscal_years=extraction_years,
                     )
                 except OpenAIAuthenticationError as exc:
                     # Discovery is optional.  Unlike the existing valuation
@@ -365,6 +387,9 @@ class OperatingEvidenceDiscoveryService:
                 hits += int(cache_hit)
                 misses += int(not cache_hit)
                 for item in entry.segments:
+                    item = _merge_segment_identity(
+                        seen_segments.get(item.segment_id), item
+                    )
                     self._append_unique(
                         segments,
                         seen_segments,
@@ -434,6 +459,27 @@ class OperatingEvidenceDiscoveryService:
                 for reason in entry.unusable_reasons:
                     warnings.append(f"Operating evidence unusable: {reason}")
 
+        history = self._history_assembler.assemble(
+            observations,
+            segments=segments,
+            definitions=definitions,
+            company_id=str(company_id or cik or "company"),
+        )
+        # The assembler canonicalizes names and deduplicates repeated filing
+        # identities. Keep the same canonical segment set for the downstream
+        # forecast boundary; otherwise the raw per-document list can reintroduce
+        # duplicate IDs after history assembly.
+        segments = list(history.segments)
+        definitions = list(history.definitions)
+        observations = list(history.observations)
+        historical_revenue = history.engine_historical_revenue
+        warnings.extend(history.audit.warnings)
+        if history.audit.missing_pairs:
+            warnings.append(
+                "Operating history missing required KPI pairs: "
+                + ", ".join(history.audit.missing_pairs)
+            )
+
         if unsupported:
             warnings.append(
                 f"Operating evidence rejected {len(set(unsupported))} unsupported claim(s)"
@@ -452,6 +498,8 @@ class OperatingEvidenceDiscoveryService:
             observations=tuple(observations),
             investment_programs=tuple(programs),
             management_constraints=tuple(management_constraints),
+            historical_revenue=historical_revenue,
+            history_audit=history.audit,
             rejected=tuple(rejected),
             warnings=tuple(dict.fromkeys(warnings)),
             unsupported_evidence=tuple(dict.fromkeys(unsupported)),
@@ -507,6 +555,17 @@ class OperatingEvidenceDiscoveryService:
         if previous != item:
             warnings.append(f"Conflicting duplicate {label} retained from first source")
         return False
+
+
+def _merge_segment_identity(
+    previous: OperatingSegment | None,
+    current: OperatingSegment,
+) -> OperatingSegment:
+    if previous is None or previous.name != previous.segment_id:
+        return current
+    if current.name == current.segment_id:
+        return previous
+    return previous.model_copy(update={"name": current.name})
 
 
 # Descriptive aliases for the two common naming conventions.

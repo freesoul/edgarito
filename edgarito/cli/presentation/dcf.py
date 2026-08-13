@@ -383,6 +383,7 @@ class FcffDcfConsolePresenter:
                 getattr(audit, "warnings", ())
                 or getattr(audit, "audit_records", ())
                 or getattr(audit, "document_audits", ())
+                or getattr(audit, "history_audit", None) is not None
             ):
                 lines.extend(
                     [
@@ -392,8 +393,40 @@ class FcffDcfConsolePresenter:
                         + str(len(getattr(audit, "audit_records", ()) or ())),
                         "SEC document audits: "
                         + str(len(getattr(audit, "document_audits", ()) or ())),
+                        "Extraction cache hits: "
+                        + str(getattr(audit, "cache_hits", 0)),
+                        "Extraction cache misses: "
+                        + str(getattr(audit, "cache_misses", 0)),
+                        "SEC filings inspected: "
+                        + str(getattr(audit, "filings_inspected", 0)),
+                        "SEC documents inspected: "
+                        + str(getattr(audit, "documents_inspected", 0)),
                     ]
                 )
+                history_audit = getattr(audit, "history_audit", None)
+                if history_audit is not None:
+                    lines.extend(
+                        [
+                            "OPERATING KPI HISTORY",
+                            "Accepted periods: "
+                            + ", ".join(history_audit.accepted_periods or ("none",)),
+                            "Accepted metrics: "
+                            + ", ".join(history_audit.accepted_metrics or ("none",)),
+                            "Missing KPI pairs: "
+                            + ", ".join(history_audit.missing_pairs or ("none",)),
+                            "Period failures: "
+                            + str(len(history_audit.period_failures)),
+                            "Unit failures: " + str(len(history_audit.unit_failures)),
+                            "Historical revenue pairs: "
+                            + str(len(history_audit.historical_revenue_pairs)),
+                            "Deduplicated observations: "
+                            + str(history_audit.deduplicated_observations),
+                            "Derived observations: "
+                            + str(history_audit.derived_observations),
+                            "Usable reconstruction periods: "
+                            + str(len(history_audit.historical_revenue_pairs)),
+                        ]
+                    )
         if result.operating_driver_coverage is not None:
             lines.extend(
                 [

@@ -153,12 +153,34 @@ class OperatingForecastService:
         """
 
         years = _normalize_years(fiscal_years)
-        normalized_segments = tuple(_coerce_segment(item) for item in segments)
+        normalized_segments_by_id: dict[str, OperatingSegment] = {}
+        for item in segments:
+            segment = _coerce_segment(item)
+            previous = normalized_segments_by_id.get(segment.segment_id)
+            if previous is None or (
+                previous.name == previous.segment_id
+                and segment.name != segment.segment_id
+            ):
+                normalized_segments_by_id[segment.segment_id] = segment
+        normalized_segments = tuple(normalized_segments_by_id.values())
         normalized_definitions = tuple(_coerce_definition(item) for item in definitions)
+        for definition in normalized_definitions:
+            if definition.segment_id not in normalized_segments_by_id:
+                normalized_segments_by_id[definition.segment_id] = OperatingSegment(
+                    segment_id=definition.segment_id,
+                    name=definition.segment_id.replace("_", " ").title(),
+                    scope="segment",
+                    source="first_party_filing",
+                    confidence="medium",
+                )
+        normalized_segments = tuple(normalized_segments_by_id.values())
         normalized_observations = tuple(
             _coerce_observation(item) for item in observations
         )
 
+        normalized_segments = tuple(
+            {segment.segment_id: segment for segment in normalized_segments}.values()
+        )
         segment_ids = [segment.segment_id for segment in normalized_segments]
         if len(segment_ids) != len(set(segment_ids)):
             raise ValueError("Operating segments must have unique segment IDs")
@@ -168,9 +190,23 @@ class OperatingForecastService:
             if definition.segment_id not in set(segment_ids)
         }
         if unknown_definition_segments:
-            raise ValueError(
-                "Operating definitions reference unknown segments: "
-                + ", ".join(sorted(unknown_definition_segments))
+            # Definitions may arrive from a filing whose segment identity was
+            # normalized after the segment collection was assembled. Materialize
+            # a generic segment rather than aborting the valuation.
+            for segment_id in sorted(unknown_definition_segments):
+                normalized_segments += (
+                    OperatingSegment(
+                        segment_id=segment_id,
+                        name=segment_id.replace("_", " ").title(),
+                        scope="segment",
+                        source="first_party_filing",
+                        confidence="medium",
+                    ),
+                )
+            normalized_segments = tuple(
+                {
+                    segment.segment_id: segment for segment in normalized_segments
+                }.values()
             )
 
         consolidation = _select_consolidation_segments(normalized_segments)

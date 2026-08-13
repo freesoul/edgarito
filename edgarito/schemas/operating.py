@@ -31,7 +31,7 @@ _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _MIN_FISCAL_YEAR = 1900
 _MAX_FISCAL_YEAR = 2200
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
-_OPERATING_PERIODS = {"FY", "FQ", "YTD"}
+_OPERATING_PERIODS = {"FY", "FQ", "YTD", "LTM"}
 _UNIT_SCALES = {
     "thousand": Decimal("1000"),
     "thousands": Decimal("1000"),
@@ -293,6 +293,10 @@ class OperatingDriverObservation(BaseModel):
     currency: str | None = None
     basis: str | None = None
     scale: Decimal = Decimal(1)
+    # ``unit`` and ``scale`` are canonical formula inputs.  These fields retain
+    # the source declaration so cross-filing normalization remains auditable.
+    original_unit: str | None = None
+    original_scale: Decimal = Decimal(1)
     method: str | None = None
     origin: Literal[
         "reported",
@@ -325,7 +329,7 @@ class OperatingDriverObservation(BaseModel):
     def normalize_period_key(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating observation period key")
 
-    @field_validator("unit", "basis", "method")
+    @field_validator("unit", "original_unit", "basis", "method")
     @classmethod
     def normalize_period_and_units(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating observation text")
@@ -366,6 +370,10 @@ class OperatingDriverObservation(BaseModel):
         data = dict(data)
         if data.get("segment_id") is not None:
             data["segment_id"] = canonical_operating_segment_id(data["segment_id"])
+        raw_unit = data.get("original_unit") or data.get("unit", "unit")
+        raw_scale = data.get("original_scale", data.get("scale", 1))
+        data["original_unit"] = raw_unit
+        data["original_scale"] = Decimal(str(raw_scale))
         unit, unit_scale = normalize_operating_unit(
             data.get("unit", "unit"), data.get("driver_id")
         )
@@ -384,6 +392,14 @@ class OperatingDriverObservation(BaseModel):
         normalized = _finite_decimal(value, "Operating observation scale")
         if normalized is None or normalized <= 0:
             raise ValueError("Operating observation scale must be positive")
+        return normalized
+
+    @field_validator("original_scale")
+    @classmethod
+    def validate_original_scale(cls, value: Decimal) -> Decimal:
+        normalized = _finite_decimal(value, "Original operating observation scale")
+        if normalized is None or normalized <= 0:
+            raise ValueError("Original operating observation scale must be positive")
         return normalized
 
     @model_validator(mode="after")
@@ -412,6 +428,18 @@ class OperatingDriverObservation(BaseModel):
         if self.high is not None:
             return self.high * self.scale
         raise ValueError("Operating observation has no usable value")
+
+    @property
+    def source_unit(self) -> str | None:
+        """Compatibility alias for the unit declared by the source."""
+
+        return self.original_unit
+
+    @property
+    def source_scale(self) -> Decimal:
+        """Compatibility alias for the scale declared by the source."""
+
+        return self.original_scale
 
 
 class OperatingInvestmentProgram(BaseModel):
@@ -718,20 +746,20 @@ class ExtractedOperatingDriverDefinition(BaseModel):
         input_metrics = tuple(
             dict.fromkeys((*input_metrics, *canonical_metrics, *self.optional_inputs))
         )
-        if not set(required).issubset(input_metrics):
-            raise ValueError(
-                "Extracted required inputs must be listed in input_metrics"
-            )
-        if not set(self.optional_inputs).issubset(input_metrics):
-            raise ValueError(
-                "Extracted optional inputs must be listed in input_metrics"
-            )
-        if set(required) & set(self.optional_inputs):
+        input_metrics = tuple(dict.fromkeys((*input_metrics, *required)))
+        optional_inputs = tuple(
+            item for item in self.optional_inputs if item not in required
+        )
+        input_metrics = tuple(dict.fromkeys((*input_metrics, *optional_inputs)))
+        if set(required) & set(optional_inputs):
             raise ValueError("Extracted required and optional inputs must be disjoint")
-        if self.units and not set(self.input_metrics).issubset(self.units):
-            raise ValueError(
-                "Extracted operating definition requires units for all inputs"
-            )
+        units = {
+            metric: self.units.get(metric, "unspecified") for metric in input_metrics
+        }
+        self.input_metrics = list(input_metrics)
+        self.required_inputs = list(required)
+        self.optional_inputs = list(optional_inputs)
+        self.units = units
         return self
 
 
@@ -754,6 +782,8 @@ class ExtractedOperatingObservation(BaseModel):
     high: float | None = None
     unit: str
     scale: float = 1
+    original_unit: str | None = None
+    original_scale: float = 1
     currency: str | None = None
     basis: str | None = None
     origin: Literal["reported", "first_party_observation", "management_guidance"] = (
@@ -762,7 +792,14 @@ class ExtractedOperatingObservation(BaseModel):
     supporting_text: str
     confidence: Literal["high", "medium", "low"] = "medium"
 
-    @field_validator("segment_id", "driver_id", "unit", "basis", "supporting_text")
+    @field_validator(
+        "segment_id",
+        "driver_id",
+        "unit",
+        "original_unit",
+        "basis",
+        "supporting_text",
+    )
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Extracted operating observation text")
@@ -803,6 +840,15 @@ class ExtractedOperatingObservation(BaseModel):
             raise ValueError("Extracted operating observation scale must be positive")
         return value
 
+    @field_validator("original_scale")
+    @classmethod
+    def validate_original_scale(cls, value: float) -> float:
+        if value <= 0 or not Decimal(str(value)).is_finite():
+            raise ValueError(
+                "Extracted original operating observation scale must be positive"
+            )
+        return value
+
     @field_validator("value", "low", "high")
     @classmethod
     def reject_negative_values(cls, value: float | None) -> float | None:
@@ -832,6 +878,8 @@ class ExtractedOperatingObservation(BaseModel):
         if not isinstance(data, Mapping):
             return data
         data = dict(data)
+        data["original_unit"] = data.get("original_unit") or data.get("unit", "unit")
+        data["original_scale"] = data.get("original_scale", data.get("scale", 1))
         unit, unit_scale = normalize_operating_unit(
             data.get("unit", "unit"), data.get("driver_id")
         )
@@ -1917,11 +1965,11 @@ def canonical_operating_segment_identity(
 
 
 def normalize_operating_fiscal_period(value: str | None) -> str:
-    """Normalize supported evidence periods to FY, FQ, or YTD.
+    """Normalize supported evidence periods to FY, FQ, YTD, or LTM.
 
     Quarter labels are retained in ``period_key`` by the input coercion helper,
-    while the period class remains deliberately small.  TTM/LTM, H1/H2 and
-    other incompatible periods are rejected rather than silently mixed.
+    while the period class remains deliberately small.  H1/H2 and other
+    incompatible periods are rejected rather than silently mixed.
     """
 
     if value is None:
@@ -1934,14 +1982,38 @@ def normalize_operating_fiscal_period(value: str | None) -> str:
         .replace("_", " ")
     )
     compact = re.sub(r"\s+", " ", normalized)
-    if compact in {"fy", "annual", "annually", "full year", "year"}:
+    if compact in {
+        "fy",
+        "annual",
+        "annually",
+        "full year",
+        "fiscal year",
+        "year",
+    }:
+        return "FY"
+    if re.fullmatch(r"(?:19|20|21|22)\d{2}", compact):
+        return "FY"
+    if re.fullmatch(r"fy\s*\d{4}", compact) or re.fullmatch(
+        r"fiscal year\s*\d{4}", compact
+    ):
         return "FY"
     if compact in {"fq", "quarter", "quarterly", "fiscal quarter"}:
         return "FQ"
     if re.fullmatch(r"q[1-4]", compact):
         return "FQ"
+    if re.fullmatch(r"q[1-4]\s+(?:19|20|21|22)\d{2}", compact):
+        return "FQ"
+    if compact in {
+        "first quarter",
+        "second quarter",
+        "third quarter",
+        "fourth quarter",
+    }:
+        return "FQ"
     if compact in {"ytd", "year to date", "year-to-date"}:
         return "YTD"
+    if compact in {"ltm", "last twelve months", "trailing twelve months", "ttm"}:
+        return "LTM"
     if re.search(r"three months? ended|three months? ending", compact):
         return "FQ"
     if re.search(r"(?:six|nine) months? ended|(?:six|nine) months? ending", compact):
@@ -2056,6 +2128,7 @@ def _canonical_segment_text(value: str) -> str:
         " ",
         text,
     )
+    text = re.sub(r"\band\b", " ", text)
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
 
 
@@ -2092,6 +2165,25 @@ def _coerce_operating_period_fields(value: Any) -> Any:
         r"q[1-4]", raw_period.strip(), re.I
     ):
         data.setdefault("period_key", raw_period.strip().upper())
+    elif isinstance(raw_period, str) and re.fullmatch(
+        r"q[1-4]\s+(?:19|20|21|22)\d{2}", raw_period.strip(), re.I
+    ):
+        data.setdefault("period_key", raw_period.strip()[:2].upper())
+    elif isinstance(raw_period, str) and raw_period.strip().casefold() in {
+        "first quarter",
+        "second quarter",
+        "third quarter",
+        "fourth quarter",
+    }:
+        data.setdefault(
+            "period_key",
+            {
+                "first quarter": "Q1",
+                "second quarter": "Q2",
+                "third quarter": "Q3",
+                "fourth quarter": "Q4",
+            }[raw_period.strip().casefold()],
+        )
     elif isinstance(raw_period, str) and raw_period.strip().casefold() in {
         "quarter",
         "quarterly",

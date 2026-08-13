@@ -13,6 +13,7 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
+from edgarito.schemas.operating_history import OperatingHistoryAudit
 from edgarito.services.financial_observation_availability import (
     ObservationAvailabilityMode,
 )
@@ -181,6 +182,11 @@ class OperatingForecastQualityResult:
     audit_records: tuple[Any, ...] = ()
     document_audits: tuple[Any, ...] = ()
     unusable_evidence: tuple[str, ...] = ()
+    history_audit: OperatingHistoryAudit | None = None
+    cache_hits: int = 0
+    cache_misses: int = 0
+    filings_inspected: int = 0
+    documents_inspected: int = 0
 
     @property
     def status(self) -> str:
@@ -233,7 +239,49 @@ class OperatingForecastIntegrationService:
         parameters = fcff_parameters or parameters
         if parameters is None:
             raise TypeError("fcff_parameters is required")
-        segments = tuple(segments)
+        # Discovery may combine several filing identities before reaching this
+        # provider-neutral seam. Canonicalize repeated segment declarations once
+        # more at the boundary so downstream Pydantic contracts never see
+        # duplicate IDs.
+        unique_segments: dict[str, OperatingSegment] = {}
+        for item in segments:
+            segment = (
+                item
+                if isinstance(item, OperatingSegment)
+                else OperatingSegment.model_validate(item)
+            )
+            previous = unique_segments.get(segment.segment_id)
+            if previous is None or (
+                previous.name == previous.segment_id
+                and segment.name != segment.segment_id
+            ):
+                unique_segments[segment.segment_id] = segment
+        segments = tuple(unique_segments.values())
+        known_segment_ids = {item.segment_id for item in segments}
+        normalized_definitions = []
+        seen_definition_keys: set[tuple[str, str]] = set()
+        for item in definitions:
+            definition = (
+                item
+                if isinstance(item, OperatingDriverDefinition)
+                else OperatingDriverDefinition.model_validate(item)
+            )
+            key = (definition.segment_id, definition.driver_id)
+            if key in seen_definition_keys:
+                continue
+            seen_definition_keys.add(key)
+            normalized_definitions.append(definition)
+            if definition.segment_id not in known_segment_ids:
+                unique_segments[definition.segment_id] = OperatingSegment(
+                    segment_id=definition.segment_id,
+                    name=definition.segment_id.replace("_", " ").title(),
+                    scope="segment",
+                    source="first_party_filing",
+                    confidence="medium",
+                )
+                segments = tuple(unique_segments.values())
+                known_segment_ids.add(definition.segment_id)
+        definitions = tuple(normalized_definitions)
         if (
             historical_revenue is not None
             and not isinstance(historical_revenue, Mapping)
@@ -533,6 +581,11 @@ class OperatingForecastPipelineService:
             audit_records=tuple(values.get("audit_records") or ()),
             document_audits=tuple(values.get("document_audits") or ()),
             unusable_evidence=tuple(values.get("unusable_evidence") or ()),
+            history_audit=values.get("history_audit"),
+            cache_hits=int(values.get("cache_hits", 0) or 0),
+            cache_misses=int(values.get("cache_misses", 0) or 0),
+            filings_inspected=int(values.get("filings_inspected", 0) or 0),
+            documents_inspected=int(values.get("documents_inspected", 0) or 0),
         )
 
     def forecast_with_evidence_provider(
@@ -665,6 +718,11 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "audit_records",
             "document_audits",
             "unusable_evidence",
+            "history_audit",
+            "cache_hits",
+            "cache_misses",
+            "filings_inspected",
+            "documents_inspected",
         )
         if hasattr(value, name)
     }
