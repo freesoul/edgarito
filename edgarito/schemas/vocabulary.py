@@ -59,6 +59,14 @@ class KpiVocabularyAudit(BaseModel):
     cache_status: str = "miss"
     terms: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    raw_industry: str = ""
+    normalized_industry: str = ""
+    selected_archetype: str = ""
+    fallback_triggered: bool = False
+    fallback_reason: str = ""
+    retry: bool = False
+    new_observations: int = 0
+    validated_terms: tuple[str, ...] = ()
 
 
 class DiscoveredKpiVocabularyResponse(BaseModel):

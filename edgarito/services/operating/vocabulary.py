@@ -82,11 +82,48 @@ INDUSTRY_KPI_TERMS = {
     "project_pipeline": (("bookings", "bookings"), ("backlog", "backlog")),
 }
 
+# Provider labels are intentionally mapped here rather than spread across CLI
+# and classification adapters.  The original label remains available for audit.
+INDUSTRY_ALIASES = {
+    "automobile": "automotive",
+    "automobiles": "automotive",
+    "auto": "automotive",
+    "auto_manufacturers": "automotive",
+    "automobile_manufacturers": "automotive",
+    "consumer_cyclical_automobiles": "automotive",
+    "consumer_cyclical_auto_manufacturers": "automotive",
+    "semiconductor": "semiconductors",
+    "semiconductors": "semiconductors",
+    "software": "cloud_software",
+    "software_cloud": "cloud_software",
+    "cloud_software": "cloud_software",
+    "software_infrastructure": "cloud_software",
+    "software_application": "cloud_software",
+    "software_systems": "cloud_software",
+    "cloud_computing": "cloud_software",
+    "banking": "bank",
+    "banks": "bank",
+    "bank": "bank",
+    "energy_storage": "energy_storage",
+    "energy_storage_systems": "energy_storage",
+    "energy_and_storage": "energy_storage",
+    "renewable_energy_storage": "energy_storage",
+    "energy_storage_and_batteries": "energy_storage",
+    "storage": "energy_storage",
+    "semiconductor_equipment": "semiconductors",
+}
+
 
 def normalize_vocabulary_key(value: object | None) -> str:
     return re.sub(
         r"[^a-z0-9]+", "_", str(getattr(value, "value", value) or "").casefold()
     ).strip("_")
+
+
+def normalize_industry_namespace(value: object | None) -> str:
+    """Return the stable vocabulary namespace for a provider industry label."""
+    key = normalize_vocabulary_key(value)
+    return INDUSTRY_ALIASES.get(key, key)
 
 
 class KpiVocabularyProvider:
@@ -108,7 +145,7 @@ class KpiVocabularyProvider:
     def normal_terms(
         self, industry: object | None = None, business_archetype: object | None = None
     ) -> tuple[tuple[str, str], ...]:
-        key = normalize_vocabulary_key(industry)
+        key = normalize_industry_namespace(industry)
         archetype = normalize_vocabulary_key(business_archetype)
         additions = (
             *INDUSTRY_KPI_TERMS.get(key, ()),
@@ -121,6 +158,22 @@ class KpiVocabularyProvider:
             raw for raw, _ in self.normal_terms(industry, business_archetype)
         )
 
+    def industry_term_count(
+        self, industry: object | None = None, business_archetype: object | None = None
+    ) -> int:
+        key = normalize_industry_namespace(industry)
+        archetype = normalize_vocabulary_key(business_archetype)
+        return len(
+            tuple(
+                dict.fromkeys(
+                    (
+                        *INDUSTRY_KPI_TERMS.get(key, ()),
+                        *INDUSTRY_KPI_TERMS.get(archetype, ()),
+                    )
+                )
+            )
+        )
+
     async def discover(
         self,
         *,
@@ -131,6 +184,8 @@ class KpiVocabularyProvider:
         business_archetype=None,
         as_of: datetime.date,
         document_hash: str | None = None,
+        force: bool = False,
+        fallback_reason: str | None = None,
     ) -> tuple[tuple[DiscoveredKpiTerm, ...], KpiVocabularyAudit]:
         normal = self.normal_terms(industry, business_archetype)
         hits = {
@@ -143,26 +198,38 @@ class KpiVocabularyProvider:
             industry_count=max(0, len(normal) - len(GLOBAL_KPI_TERMS)),
             terms=tuple(raw for raw, _ in normal),
             cache_status="not_needed",
+            raw_industry=str(industry or ""),
+            normalized_industry=normalize_industry_namespace(industry),
+            selected_archetype=normalize_vocabulary_key(business_archetype),
+            fallback_triggered=force,
+            fallback_reason=fallback_reason or "",
         )
-        if len(hits) >= 2 or self.openai is None or self.cache is None:
+        if (len(hits) >= 2 and not force) or self.openai is None or self.cache is None:
             return (), base
         digest = document_hash or hashlib.sha256(source_text.encode()).hexdigest()
         key = hashlib.sha256(
             f"{digest}|{self.model}|{VOCABULARY_PROMPT_VERSION}|{VOCABULARY_SCHEMA_VERSION}".encode()
         ).hexdigest()
-        path = f"kpi-vocabulary/{normalize_vocabulary_key(industry) or normalize_vocabulary_key(business_archetype) or 'unresolved'}/{key}.json"
+        path = f"kpi-vocabulary/{normalize_industry_namespace(industry) or normalize_vocabulary_key(business_archetype) or 'unresolved'}/{key}.json"
         cached = self.cache.read(path)
         if cached is not None:
             terms = tuple(
                 DiscoveredKpiTerm.model_validate(item) for item in json.loads(cached)
             )
-            return terms, base.model_copy(
-                update={
-                    "discovered_count": len(terms),
-                    "cache_status": "hit",
-                    "terms": tuple(item.raw_term for item in terms),
-                }
-            )
+            # An earlier deterministic pass may have cached an empty result.
+            # An evidence-quality retry must be allowed to ask the terminology
+            # model again rather than treating that empty cache as a discovery hit.
+            if force and not terms:
+                cached = None
+            else:
+                return terms, base.model_copy(
+                    update={
+                        "discovered_count": len(terms),
+                        "cache_status": "hit",
+                        "terms": tuple(item.raw_term for item in terms),
+                        "validated_terms": tuple(item.raw_term for item in terms),
+                    }
+                )
         from edgarito.schemas.vocabulary import DiscoveredKpiVocabularyResponse
 
         instructions = "Return terminology only. No values, forecasts, or estimates. Every term must be copied from the source and rationale/support must be grounded in it."
@@ -180,7 +247,7 @@ class KpiVocabularyProvider:
             accepted.append(
                 item.model_copy(
                     update={
-                        "industry": normalize_vocabulary_key(industry),
+                        "industry": normalize_industry_namespace(industry),
                         "business_archetype": normalize_vocabulary_key(
                             business_archetype
                         ),
@@ -203,6 +270,11 @@ class KpiVocabularyProvider:
                 "rejected_count": rejected,
                 "cache_status": "miss",
                 "terms": tuple(item.raw_term for item in accepted),
+                "validated_terms": tuple(item.raw_term for item in accepted),
+                "raw_industry": str(industry or ""),
+                "normalized_industry": normalize_industry_namespace(industry),
+                "selected_archetype": normalize_vocabulary_key(business_archetype),
+                "fallback_reason": fallback_reason or "",
             }
         )
 

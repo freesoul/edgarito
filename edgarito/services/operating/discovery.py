@@ -32,7 +32,10 @@ from edgarito.services.operating.extraction import (
     operating_keyword_hits,
 )
 from edgarito.services.operating.history import OperatingHistoryAssembler
-from edgarito.services.operating.vocabulary import KpiVocabularyProvider
+from edgarito.services.operating.vocabulary import (
+    KpiVocabularyProvider,
+    normalize_industry_namespace,
+)
 from edgarito.services.providers.edgar import EdgarClient
 
 
@@ -278,6 +281,8 @@ class OperatingEvidenceDiscoveryService:
         document_audits: list[OperatingDocumentAudit] = []
         vocabulary_terms: list[Any] = []
         vocabulary_audits: list[Any] = []
+        retry_documents: list[tuple[Any, Any, str]] = []
+        discovered_by_document: dict[str, tuple[Any, ...]] = {}
         if self._vocabulary is not None:
             normal = self._vocabulary.normal_terms(industry, business_archetype)
             vocabulary_audits.append(
@@ -285,13 +290,16 @@ class OperatingEvidenceDiscoveryService:
                     global_count=len(self._vocabulary.GLOBAL_KPI_TERMS)
                     if hasattr(self._vocabulary, "GLOBAL_KPI_TERMS")
                     else 0,
-                    industry_count=max(
-                        0,
-                        len(normal)
-                        - len(getattr(self._vocabulary, "GLOBAL_KPI_TERMS", ())),
+                    industry_count=self._vocabulary.industry_term_count(
+                        industry, business_archetype
                     ),
                     terms=tuple(term for term, _metric in normal),
                     cache_status="not_needed",
+                    raw_industry=str(industry or ""),
+                    normalized_industry=normalize_industry_namespace(industry),
+                    selected_archetype=str(
+                        getattr(business_archetype, "value", business_archetype) or ""
+                    ),
                 )
             )
         unsupported: list[str] = []
@@ -363,6 +371,7 @@ class OperatingEvidenceDiscoveryService:
                 documents_inspected += 1
                 clean_text = clean_document_text(document.content)
                 context_text = extract_operating_context(clean_text)
+                retry_documents.append((filing, document, clean_text))
                 if self._vocabulary is not None:
                     try:
                         discovered, vocabulary_audit = await self._vocabulary.discover(
@@ -374,6 +383,7 @@ class OperatingEvidenceDiscoveryService:
                             as_of=as_of,
                         )
                         vocabulary_terms.extend(discovered)
+                        discovered_by_document[document.filename] = tuple(discovered)
                         vocabulary_audits.append(vocabulary_audit)
                         if discovered:
                             context_text += (
@@ -533,6 +543,179 @@ class OperatingEvidenceDiscoveryService:
                 + ", ".join(history.audit.missing_pairs)
             )
 
+        # Terminology discovery is evidence-quality aware.  A deterministic
+        # keyword hit is not sufficient when extraction produced no usable
+        # operating history, so retry the same documents with grounded terms.
+        non_revenue = sum(
+            1
+            for item in observations
+            if item.driver_id
+            not in {
+                "revenue",
+                "segment_revenue",
+                "sales",
+                "net_sales",
+                "total_revenue",
+                "revenue_growth",
+                "sales_growth",
+            }
+        )
+        retry_reason = ""
+        if not observations or non_revenue == 0:
+            retry_reason = "accepted non-revenue observations are zero"
+        elif not history.audit.accepted_pairs or history.audit.missing_pairs:
+            retry_reason = "usable reconstruction pairs or coverage unavailable"
+        if self._vocabulary is not None and retry_reason and retry_documents:
+            retry_terms: list[Any] = []
+            for filing, document, clean_text in retry_documents:
+                try:
+                    discovered = discovered_by_document.get(document.filename)
+                    if not discovered:
+                        discovered, audit = await self._vocabulary.discover(
+                            context=extract_operating_context(clean_text),
+                            source_document=document.filename,
+                            source_text=clean_text,
+                            industry=industry,
+                            business_archetype=business_archetype,
+                            as_of=as_of,
+                            force=True,
+                            fallback_reason=retry_reason,
+                        )
+                    else:
+                        discovered = tuple(discovered)
+                    audit = KpiVocabularyAudit(
+                        global_count=len(self._vocabulary.GLOBAL_KPI_TERMS),
+                        terms=tuple(
+                            term
+                            for term, _ in self._vocabulary.normal_terms(
+                                industry, business_archetype
+                            )
+                        ),
+                        raw_industry=str(industry or ""),
+                        normalized_industry=normalize_industry_namespace(industry),
+                        selected_archetype=str(
+                            getattr(business_archetype, "value", business_archetype)
+                            or ""
+                        ),
+                        fallback_triggered=True,
+                        fallback_reason=retry_reason,
+                        retry=True,
+                        discovered_count=len(discovered),
+                        validated_terms=tuple(item.raw_term for item in discovered),
+                        cache_status="retry",
+                    )
+                    retry_terms.extend(discovered)
+                    vocabulary_audits.append(audit)
+                    if not discovered:
+                        continue
+                    context_text = (
+                        extract_operating_context(clean_text)
+                        + "\n\nAdditional grounded KPI terminology: "
+                        + ", ".join(item.raw_term for item in discovered)
+                    )
+                    entry, cache_hit = await self._extractor.extract(
+                        filing,
+                        document,
+                        clean_text,
+                        valuation_date=as_of,
+                        source_text=clean_text,
+                        context_text=context_text,
+                        fiscal_years=extraction_years,
+                    )
+                    hits += int(cache_hit)
+                    misses += int(not cache_hit)
+                    for item in entry.segments:
+                        item = _merge_segment_identity(
+                            seen_segments.get(item.segment_id), item
+                        )
+                        self._append_unique(
+                            segments,
+                            seen_segments,
+                            item.segment_id,
+                            item,
+                            warnings,
+                            "segment",
+                        )
+                    for item in entry.definitions:
+                        self._append_unique(
+                            definitions,
+                            seen_definitions,
+                            (item.segment_id, item.driver_id),
+                            item,
+                            warnings,
+                            "driver definition",
+                        )
+                    for item in entry.observations:
+                        key = (
+                            item.segment_id,
+                            item.driver_id,
+                            item.fiscal_year,
+                            item.fiscal_period,
+                            item.period_key,
+                        )
+                        if (
+                            self._append_unique(
+                                observations,
+                                seen_observations,
+                                key,
+                                item,
+                                warnings,
+                                "operating observation",
+                            )
+                            and item.origin == "management_guidance"
+                        ):
+                            management_constraints.append(item)
+                    rejected.extend(entry.rejected)
+                    unsupported.extend(entry.unsupported_evidence)
+                    missing.extend(entry.missing_evidence)
+                    unusable.extend(entry.unusable_reasons)
+                    audit_records.extend(entry.audit_records)
+                except Exception as exc:
+                    warnings.append(
+                        f"KPI vocabulary retry skipped for {document.filename}: {exc}"
+                    )
+            if retry_terms:
+                vocabulary_terms.extend(retry_terms)
+                vocabulary_audits.append(
+                    KpiVocabularyAudit(
+                        global_count=len(self._vocabulary.GLOBAL_KPI_TERMS),
+                        industry_count=self._vocabulary.industry_term_count(
+                            industry, business_archetype
+                        ),
+                        terms=tuple(
+                            item[0]
+                            for item in self._vocabulary.normal_terms(
+                                industry, business_archetype
+                            )
+                        ),
+                        discovered_count=len(retry_terms),
+                        validated_terms=tuple(item.raw_term for item in retry_terms),
+                        raw_industry=str(industry or ""),
+                        normalized_industry=normalize_industry_namespace(industry),
+                        selected_archetype=str(
+                            getattr(business_archetype, "value", business_archetype)
+                            or ""
+                        ),
+                        fallback_triggered=True,
+                        fallback_reason=retry_reason,
+                        retry=True,
+                        new_observations=len(observations)
+                        - history.audit.accepted_observations,
+                        cache_status="retry",
+                    )
+                )
+
+            history = self._history_assembler.assemble(
+                observations,
+                segments=segments,
+                definitions=definitions,
+                company_id=str(company_id or cik or "company"),
+            )
+            segments = list(history.segments)
+            definitions = list(history.definitions)
+            observations = list(history.observations)
+            historical_revenue = history.engine_historical_revenue
+
         if unsupported:
             warnings.append(
                 f"Operating evidence rejected {len(set(unsupported))} unsupported claim(s)"
@@ -565,7 +748,9 @@ class OperatingEvidenceDiscoveryService:
             filings_inspected=filings_inspected,
             documents_inspected=documents_inspected,
             vocabulary_audit=_merge_vocabulary_audits(vocabulary_audits),
-            vocabulary_terms=tuple(vocabulary_terms),
+            vocabulary_terms=tuple(
+                item for item in vocabulary_terms if hasattr(item, "raw_term")
+            ),
         )
 
     async def retrieve(self, **kwargs: Any) -> OperatingForecastDiscoveryResult:
@@ -643,6 +828,30 @@ def _merge_vocabulary_audits(audits: list[Any]) -> Any | None:
                 dict.fromkeys(
                     diagnostic for item in audits for diagnostic in item.diagnostics
                 )
+            ),
+            "raw_industry": next(
+                (item.raw_industry for item in audits if item.raw_industry), ""
+            ),
+            "normalized_industry": next(
+                (
+                    item.normalized_industry
+                    for item in audits
+                    if item.normalized_industry
+                ),
+                "",
+            ),
+            "selected_archetype": next(
+                (item.selected_archetype for item in audits if item.selected_archetype),
+                "",
+            ),
+            "fallback_triggered": any(item.fallback_triggered for item in audits),
+            "fallback_reason": next(
+                (item.fallback_reason for item in audits if item.fallback_reason), ""
+            ),
+            "retry": any(item.retry for item in audits),
+            "new_observations": sum(item.new_observations for item in audits),
+            "validated_terms": tuple(
+                dict.fromkeys(term for item in audits for term in item.validated_terms)
             ),
         }
     )

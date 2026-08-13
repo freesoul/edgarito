@@ -67,6 +67,7 @@ from edgarito.schemas.valuation.relative import (
     RelativeNumeratorBasis,
 )
 from edgarito.schemas.valuation.specialized import SpecializedInputType
+from edgarito.schemas.vocabulary import KpiVocabularyAudit
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.export import (
     CompanyAnalysisReportService,
@@ -103,6 +104,7 @@ from edgarito.services.operating import (
     OperatingForecastQualityError,
     OperatingForecastQualityResult,
 )
+from edgarito.services.operating.vocabulary import normalize_industry_namespace
 from edgarito.services.providers.damodaran import DamodaranClient
 from edgarito.services.providers.ecb import EcbClient
 from edgarito.services.providers.edgar import EdgarClient
@@ -1295,6 +1297,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
     operating_audit = OperatingForecastQualityResult(
         accepted=False,
         reason="Operating forecast inactive: provider not configured",
+        vocabulary_audit=_default_operating_vocabulary_audit(profile),
     )
     async with _operating_evidence_provider(args, financials) as (
         provider,
@@ -1304,6 +1307,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             operating_audit = OperatingForecastQualityResult(
                 accepted=False,
                 reason=provider_rejection,
+                vocabulary_audit=_default_operating_vocabulary_audit(profile),
             )
             additional_warnings.append(provider_rejection)
         if provider_rejection is None:
@@ -1356,6 +1360,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                         else "Operating forecast rejected: discovery returned no usable evidence"
                     ),
                     warnings=operating_warnings,
+                    vocabulary_audit=_default_operating_vocabulary_audit(profile),
                 )
         else:
             operating_evidence = None
@@ -1734,7 +1739,9 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                 availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
             )
         except OperatingForecastQualityError as exc:
-            operating_audit = _retain_operating_audit_metadata(exc.result, operating_audit)
+            operating_audit = _retain_operating_audit_metadata(
+                exc.result, operating_audit
+            )
             operating_evidence = None
             additional_warnings.append(
                 f"{exc.result.reason}; standard FCFF forecast retained"
@@ -2483,9 +2490,30 @@ def _retain_operating_audit_metadata(current, discovered):
     updates = {}
     for field in ("vocabulary_audit", "vocabulary_terms"):
         value = getattr(discovered, field, None)
+        if field == "vocabulary_audit" and value is not None:
+            if getattr(value, "global_count", 0) == 0:
+                continue
         if value:
             updates[field] = value
     return replace(current, **updates) if updates else current
+
+
+def _default_operating_vocabulary_audit(profile) -> KpiVocabularyAudit:
+    industry = getattr(profile.model_selection, "industry", None)
+    archetype = getattr(profile.model_selection, "business_archetype", None)
+    from edgarito.services.operating.vocabulary import KpiVocabularyProvider
+
+    provider = KpiVocabularyProvider()
+    terms = provider.normal_terms(industry, archetype)
+    return KpiVocabularyAudit(
+        global_count=len(provider.GLOBAL_KPI_TERMS),
+        industry_count=max(0, len(terms) - len(provider.GLOBAL_KPI_TERMS)),
+        terms=tuple(term for term, _metric in terms),
+        raw_industry=str(industry or ""),
+        normalized_industry=normalize_industry_namespace(industry),
+        selected_archetype=str(getattr(archetype, "value", archetype) or ""),
+        cache_status="not_needed",
+    )
 
 
 @asynccontextmanager

@@ -411,7 +411,7 @@ class FcffDcfConsolePresenter:
                         ),
                         "KPI vocabulary terms: "
                         + ", ".join(
-                            item.raw_term
+                            item.raw_term if hasattr(item, "raw_term") else str(item)
                             for item in (getattr(audit, "vocabulary_terms", ()) or ())
                         ),
                         "KPI vocabulary global terms: "
@@ -437,6 +437,51 @@ class FcffDcfConsolePresenter:
                                 "discovered_count",
                                 0,
                             )
+                        ),
+                        "KPI vocabulary raw industry: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "raw_industry",
+                                "",
+                            )
+                            or "unavailable"
+                        ),
+                        "KPI vocabulary normalized industry: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "normalized_industry",
+                                "",
+                            )
+                            or "unavailable"
+                        ),
+                        "KPI vocabulary archetype: "
+                        + str(
+                            getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "selected_archetype",
+                                "",
+                            )
+                            or "unavailable"
+                        ),
+                        "KPI vocabulary fallback: "
+                        + (
+                            "triggered"
+                            if getattr(
+                                getattr(audit, "vocabulary_audit", None),
+                                "fallback_triggered",
+                                False,
+                            )
+                            else "not triggered"
+                        ),
+                        "KPI vocabulary retry: "
+                        + (
+                            "yes"
+                            if getattr(
+                                getattr(audit, "vocabulary_audit", None), "retry", False
+                            )
+                            else "no"
                         ),
                     ]
                 )
