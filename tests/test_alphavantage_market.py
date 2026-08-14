@@ -1,10 +1,10 @@
 import asyncio
 import datetime
-import json
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
+from support.http import FakeSession
 
 from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.providers.alphavantage.market import (
@@ -92,36 +92,10 @@ def _market_responses():
     }
 
 
-class _FakeResponse:
-    def __init__(self, data: dict, status: int = 200):
-        self._data = data
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def text(self) -> str:
-        return json.dumps(self._data)
-
-
-class _FakeSession:
-    def __init__(self, responses: dict[str, dict]):
-        self.responses = responses
-        self.calls: list[dict] = []
-
-    def get(self, url: str, params: dict, timeout: int):
-        self.calls.append(dict(params))
-        response = self.responses[params["function"]]
-        if isinstance(response, list):
-            response = response.pop(0)
-        return _FakeResponse(response)
-
-
 def test_client_retrieves_and_caches_only_scoped_market_endpoints(tmp_path):
-    session = _FakeSession(_market_responses())
+    session = FakeSession(
+        _market_responses(), key=lambda _url, kwargs: kwargs["params"]["function"]
+    )
     client = AlphaVantageClient(
         FileSystemCache(tmp_path),
         "secret-api-key",
@@ -140,13 +114,13 @@ def test_client_retrieves_and_caches_only_scoped_market_endpoints(tmp_path):
     assert daily.time_series[datetime.date(2026, 8, 5)].close == Decimal("212.00")
     assert dividends.data[1].declaration_date is None
     assert splits.data[0].split_factor == Decimal("4.0")
-    assert [call["function"] for call in session.calls] == [
+    assert [call["params"]["function"] for call in session.calls] == [
         "TIME_SERIES_DAILY",
         "GLOBAL_QUOTE",
         "DIVIDENDS",
         "SPLITS",
     ]
-    assert "outputsize" not in session.calls[0]
+    assert "outputsize" not in session.calls[0]["params"]
     cached_files = sorted(
         path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*.json")
     )
@@ -161,7 +135,10 @@ def test_client_retrieves_and_caches_only_scoped_market_endpoints(tmp_path):
 
 def test_full_daily_history_is_explicit_and_uses_a_separate_cache(tmp_path):
     responses = _market_responses()
-    session = _FakeSession({"TIME_SERIES_DAILY": responses["TIME_SERIES_DAILY"]})
+    session = FakeSession(
+        {"TIME_SERIES_DAILY": responses["TIME_SERIES_DAILY"]},
+        key=lambda _url, kwargs: kwargs["params"]["function"],
+    )
     client = AlphaVantageClient(
         FileSystemCache(tmp_path),
         "secret-api-key",
@@ -171,7 +148,7 @@ def test_full_daily_history_is_explicit_and_uses_a_separate_cache(tmp_path):
 
     asyncio.run(client.get_daily_prices("AAPL", AlphaVantageOutputSize.FULL))
 
-    assert session.calls[0]["outputsize"] == "full"
+    assert session.calls[0]["params"]["outputsize"] == "full"
     assert (
         tmp_path / "providers/alphavantage/AAPL/time_series_daily_full.json"
     ).is_file()

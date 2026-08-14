@@ -5,6 +5,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from support.http import FakeResponse, FakeSession
 
 from edgarito.schemas.market import (
     MarketDataFrequency,
@@ -19,39 +20,6 @@ from edgarito.services.providers.fred import FredClient
 from edgarito.services.providers.treasury import TreasuryClient
 
 UTC = datetime.timezone.utc
-
-
-class _FakeResponse:
-    def __init__(self, content: str, status: int = 200, headers=None):
-        self._content = content
-        self.status = status
-        self.headers = headers or {}
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def text(self) -> str:
-        return self._content
-
-
-class _FakeSession:
-    def __init__(self, responses: list[_FakeResponse]):
-        self.responses = list(responses)
-        self.calls = []
-
-    def get(self, url, params=None, headers=None, timeout=None):
-        self.calls.append(
-            {
-                "url": url,
-                "params": params or {},
-                "headers": headers or {},
-                "timeout": timeout,
-            }
-        )
-        return self.responses.pop(0)
 
 
 TREASURY_XML = """<?xml version="1.0" encoding="utf-8"?>
@@ -71,7 +39,7 @@ TREASURY_XML = """<?xml version="1.0" encoding="utf-8"?>
 
 
 def test_treasury_normalizes_yields_and_reuses_the_raw_year_cache(tmp_path):
-    session = _FakeSession([_FakeResponse(TREASURY_XML)])
+    session = FakeSession([FakeResponse(content=TREASURY_XML)])
     client = TreasuryClient(FileSystemCache(tmp_path), session=session)
 
     first = asyncio.run(client.get_par_yield(120, 2026))
@@ -89,7 +57,7 @@ def test_treasury_normalizes_yields_and_reuses_the_raw_year_cache(tmp_path):
 
 
 def test_treasury_rejects_unsupported_tenors_without_a_request(tmp_path):
-    session = _FakeSession([])
+    session = FakeSession([])
     client = TreasuryClient(FileSystemCache(tmp_path), session=session)
 
     with pytest.raises(ValueError, match="Unsupported Treasury tenor"):
@@ -117,8 +85,11 @@ def test_fred_normalizes_metadata_observations_and_vintage(tmp_path):
             {"date": "2026-08-06", "value": "4.19"},
         ]
     }
-    session = _FakeSession(
-        [_FakeResponse(json.dumps(metadata)), _FakeResponse(json.dumps(observations))]
+    session = FakeSession(
+        [
+            FakeResponse(content=json.dumps(metadata)),
+            FakeResponse(content=json.dumps(observations)),
+        ]
     )
     client = FredClient(FileSystemCache(tmp_path), "free-test-key", session=session)
     vintage = datetime.date(2026, 8, 6)
@@ -169,7 +140,9 @@ FM.D.U2.EUR.4F.KR.MRR_FR.LEV,D,U2,EUR,2026-01-02,2.15,Main refinancing operation
 
 
 def test_ecb_normalizes_sdmx_csv_and_preserves_http_revision(tmp_path):
-    session = _FakeSession([_FakeResponse(ECB_CSV, headers={"ETag": '"revision-42"'})])
+    session = FakeSession(
+        [FakeResponse(content=ECB_CSV, headers={"ETag": '"revision-42"'})]
+    )
     client = EcbClient(FileSystemCache(tmp_path), session=session)
 
     result = asyncio.run(
@@ -199,7 +172,7 @@ def test_ecb_rejects_a_query_returning_multiple_series(tmp_path):
         "FM.D.U2.EUR.4F.KR.DFR.LEV,D,U2,EUR,2026-01-02,2.00,Deposit facility,PCPA\n"
     )
     client = EcbClient(
-        FileSystemCache(tmp_path), session=_FakeSession([_FakeResponse(content)])
+        FileSystemCache(tmp_path), session=FakeSession([FakeResponse(content=content)])
     )
 
     with pytest.raises(RuntimeError, match="more than one series"):
@@ -211,7 +184,7 @@ def test_ecb_normalizes_monthly_periods_to_month_end(tmp_path):
 ICP.M.U2.N.000000.4.ANR,M,U2,EUR,2026-02,1.9,Euro area inflation,PC
 """
     client = EcbClient(
-        FileSystemCache(tmp_path), session=_FakeSession([_FakeResponse(content)])
+        FileSystemCache(tmp_path), session=FakeSession([FakeResponse(content=content)])
     )
 
     result = asyncio.run(
@@ -261,7 +234,7 @@ def _release(dataset: str, version: str, content: str, region: str):
 
 def test_damodaran_country_risk_is_typed_versioned_and_auditable(tmp_path):
     release = _release("country-risk-premiums", "2026-01-05", COUNTRY_HTML, "global")
-    session = _FakeSession([_FakeResponse(COUNTRY_HTML)])
+    session = FakeSession([FakeResponse(content=COUNTRY_HTML)])
     client = DamodaranClient(FileSystemCache(tmp_path), session=session)
 
     first = asyncio.run(client.get_country_risk_premiums(release))
@@ -283,7 +256,8 @@ def test_damodaran_country_risk_is_typed_versioned_and_auditable(tmp_path):
 def test_damodaran_industry_betas_preserve_percentage_point_units(tmp_path):
     release = _release("industry-betas", "2026-01-08", INDUSTRY_HTML, "US")
     client = DamodaranClient(
-        FileSystemCache(tmp_path), session=_FakeSession([_FakeResponse(INDUSTRY_HTML)])
+        FileSystemCache(tmp_path),
+        session=FakeSession([FakeResponse(content=INDUSTRY_HTML)]),
     )
 
     result = asyncio.run(client.get_industry_betas(release))
@@ -301,7 +275,7 @@ def test_damodaran_rejects_changed_content_before_caching(tmp_path):
     release = _release("country-risk-premiums", "2026-01-05", COUNTRY_HTML, "global")
     changed = COUNTRY_HTML.replace("4.59%", "4.60%")
     client = DamodaranClient(
-        FileSystemCache(tmp_path), session=_FakeSession([_FakeResponse(changed)])
+        FileSystemCache(tmp_path), session=FakeSession([FakeResponse(content=changed)])
     )
 
     with pytest.raises(RuntimeError, match="checksum"):

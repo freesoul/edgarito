@@ -3,6 +3,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from support.http import FakeSession
 
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli import main
@@ -63,33 +64,6 @@ def _api_responses() -> dict[tuple[str, str | None], list[dict]]:
     }
 
 
-class _FakeResponse:
-    def __init__(self, data, status: int = 200):
-        self._data = data
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def text(self) -> str:
-        return json.dumps(self._data)
-
-
-class _FakeSession:
-    def __init__(self, responses):
-        self.responses = responses
-        self.calls: list[tuple[str, str | None, str]] = []
-
-    def get(self, url: str, params: dict, timeout: int):
-        endpoint = url.rsplit("/", 1)[-1]
-        period = params.get("period")
-        self.calls.append((endpoint, period, params["symbol"]))
-        return _FakeResponse(self.responses[(endpoint, period)])
-
-
 def _company_financials() -> FmpCompanyFinancials:
     responses = _api_responses()
     return FmpCompanyFinancials(
@@ -104,7 +78,13 @@ def _company_financials() -> FmpCompanyFinancials:
 
 
 def test_provider_retrieves_and_caches_all_fmp_responses(tmp_path):
-    session = _FakeSession(_api_responses())
+    session = FakeSession(
+        _api_responses(),
+        key=lambda url, kwargs: (
+            url.rsplit("/", 1)[-1],
+            kwargs["params"].get("period"),
+        ),
+    )
     cache = FileSystemCache(tmp_path)
     client = FmpClient(cache, "secret-api-key", session=session)
 
@@ -130,7 +110,13 @@ def test_provider_retrieves_and_caches_all_fmp_responses(tmp_path):
 
 
 def test_provider_surfaces_an_api_error_without_caching_it(tmp_path):
-    session = _FakeSession({("profile", None): {"Error Message": "Invalid API KEY"}})
+    session = FakeSession(
+        {("profile", None): {"Error Message": "Invalid API KEY"}},
+        key=lambda url, kwargs: (
+            url.rsplit("/", 1)[-1],
+            kwargs["params"].get("period"),
+        ),
+    )
     client = FmpClient(FileSystemCache(tmp_path), "secret-api-key", session=session)
 
     with pytest.raises(RuntimeError, match="FMP: Invalid API KEY"):

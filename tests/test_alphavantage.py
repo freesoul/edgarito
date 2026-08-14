@@ -3,6 +3,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from support.http import FakeSession
 
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli import main
@@ -62,36 +63,10 @@ def _api_responses() -> dict[str, dict]:
     }
 
 
-class _FakeResponse:
-    def __init__(self, data: dict, status: int = 200):
-        self._data = data
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def text(self) -> str:
-        return json.dumps(self._data)
-
-
-class _FakeSession:
-    def __init__(self, responses: dict[str, dict]):
-        self.responses = responses
-        self.calls: list[tuple[str, str]] = []
-
-    def get(self, url: str, params: dict, timeout: int):
-        self.calls.append((params["function"], params["symbol"]))
-        response = self.responses[params["function"]]
-        if isinstance(response, list):
-            response = response.pop(0)
-        return _FakeResponse(response)
-
-
 def test_provider_retrieves_and_caches_all_fundamental_responses(tmp_path):
-    session = _FakeSession(_api_responses())
+    session = FakeSession(
+        _api_responses(), key=lambda _url, kwargs: kwargs["params"]["function"]
+    )
     cache = FileSystemCache(tmp_path)
     client = AlphaVantageClient(
         cache, "secret-api-key", session=session, min_request_interval=0
@@ -116,7 +91,10 @@ def test_provider_retrieves_and_caches_all_fundamental_responses(tmp_path):
 
 
 def test_provider_surfaces_api_information_without_caching_it(tmp_path):
-    session = _FakeSession({"INCOME_STATEMENT": {"Information": "API limit"}})
+    session = FakeSession(
+        {"INCOME_STATEMENT": {"Information": "API limit"}},
+        key=lambda _url, kwargs: kwargs["params"]["function"],
+    )
     client = AlphaVantageClient(
         FileSystemCache(tmp_path),
         "secret-api-key",
@@ -132,8 +110,9 @@ def test_provider_surfaces_api_information_without_caching_it(tmp_path):
 
 def test_provider_redacts_api_key_from_information_message(tmp_path):
     api_key = "private-api-key"
-    session = _FakeSession(
-        {"OVERVIEW": {"Information": f"The API key {api_key} has reached its limit"}}
+    session = FakeSession(
+        {"OVERVIEW": {"Information": f"The API key {api_key} has reached its limit"}},
+        key=lambda _url, kwargs: kwargs["params"]["function"],
     )
     client = AlphaVantageClient(
         FileSystemCache(tmp_path),
@@ -151,13 +130,15 @@ def test_provider_redacts_api_key_from_information_message(tmp_path):
 
 def test_provider_retries_a_per_second_burst_limit_once(tmp_path):
     responses = _api_responses()
-    session = _FakeSession(
+    session = FakeSession(
         {
             "INCOME_STATEMENT": [
                 {"Information": "Please use 1 request per second"},
                 responses["INCOME_STATEMENT"],
             ]
-        }
+        },
+        key=lambda _url, kwargs: kwargs["params"]["function"],
+        sequence_keys={"INCOME_STATEMENT"},
     )
     client = AlphaVantageClient(
         FileSystemCache(tmp_path),
@@ -169,7 +150,9 @@ def test_provider_retries_a_per_second_burst_limit_once(tmp_path):
     response = asyncio.run(client.get_income_statement("AAPL"))
 
     assert len(response.annual_reports) == 1
-    assert session.calls == [
+    assert [
+        (call["params"]["function"], call["params"]["symbol"]) for call in session.calls
+    ] == [
         ("INCOME_STATEMENT", "AAPL"),
         ("INCOME_STATEMENT", "AAPL"),
     ]

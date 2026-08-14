@@ -2,6 +2,8 @@ import asyncio
 import datetime
 from types import SimpleNamespace
 
+from support.http import FakeResponse, FakeSession
+
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import GuidanceDocumentSelector
@@ -23,32 +25,6 @@ SUBMISSION = """<SEC-DOCUMENT>
 <TEXT><html><body>We expect fiscal-year revenue of $10 billion.</body></html></TEXT>
 </DOCUMENT>
 </SEC-DOCUMENT>"""
-
-
-class _Response:
-    status = 200
-
-    def __init__(self, content):
-        self.content = content
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def text(self, **kwargs):
-        return self.content
-
-
-class _Session:
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
-
-    def get(self, url, **kwargs):
-        self.calls.append(url)
-        return self.responses.pop(0)
 
 
 def _filing() -> SecFiling:
@@ -76,7 +52,7 @@ def test_archive_url_and_sgml_document_metadata():
 
 
 def test_full_submission_and_parsed_documents_are_reused_from_cache(tmp_path):
-    session = _Session([_Response(SUBMISSION)])
+    session = FakeSession([FakeResponse(content=SUBMISSION)])
     client = EdgarClient(FileSystemCache(tmp_path), "Tester test@example.com", session)
 
     first = asyncio.run(client.get_filing_documents(_filing()))
@@ -84,7 +60,7 @@ def test_full_submission_and_parsed_documents_are_reused_from_cache(tmp_path):
 
     assert first == second
     assert len(first.documents) == 2
-    assert session.calls == [_filing().archive_url]
+    assert [call["url"] for call in session.calls] == [_filing().archive_url]
     cached = {path.name for path in tmp_path.rglob("*") if path.is_file()}
     assert {"full-submission.txt", "documents.json"} <= cached
 
@@ -92,7 +68,7 @@ def test_full_submission_and_parsed_documents_are_reused_from_cache(tmp_path):
 class _MetadataClient(EdgarClient):
     def __init__(self, rows, tmp_path):
         super().__init__(
-            FileSystemCache(tmp_path), "Tester test@example.com", _Session([])
+            FileSystemCache(tmp_path), "Tester test@example.com", FakeSession([])
         )
         self.rows = rows
 

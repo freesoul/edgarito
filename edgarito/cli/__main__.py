@@ -86,7 +86,9 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastParameters,
     SimplifiedFcfForecastService,
 )
-from edgarito.services.forward_estimates import ForwardRevenueEstimateService
+from edgarito.services.forecasting.forward_estimates import (
+    ForwardRevenueEstimateService,
+)
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     is_exhibit_document,

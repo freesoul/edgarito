@@ -1,32 +1,4 @@
-from edgarito.services.forecasting.fcff import (
-    FcffForecastService,
-    FreeCashFlowForecastService,
-)
-from edgarito.services.forecasting.free_cash_flow import SimplifiedFcfForecastService
-from edgarito.services.forecasting.models import (
-    AdaptiveMultistagePlan,
-    FcffForecast,
-    FcffForecastDcfStub,
-    FcffForecastDriver,
-    FcffForecastObservation,
-    FcffForecastParameters,
-    FcffForecastYtdAnchor,
-    ForecastAssumptionSource,
-    ForecastSeedType,
-    ForecastValue,
-    ForwardGrowthEvidence,
-    ForwardGrowthOutlook,
-    FreeCashFlowForecast,
-    FreeCashFlowForecastObservation,
-    FreeCashFlowForecastParameters,
-    MonetaryForecastConstraint,
-    SimplifiedFcfForecast,
-    SimplifiedFcfForecastObservation,
-    SimplifiedFcfForecastParameters,
-)
-from edgarito.services.forecasting.multistage import (
-    AdaptiveMultistageFcffForecastService,
-)
+from importlib import import_module
 
 __all__ = [
     "AdaptiveMultistageFcffForecastService",
@@ -60,29 +32,69 @@ __all__ = [
 ]
 
 
-def __getattr__(name):
-    """Load the optional provider resolver without creating an import cycle."""
+_LAZY_EXPORTS = {
+    name: ("edgarito.services.forecasting.models", name)
+    for name in {
+        "AdaptiveMultistagePlan",
+        "FcffForecast",
+        "FcffForecastDcfStub",
+        "FcffForecastDriver",
+        "FcffForecastObservation",
+        "FcffForecastParameters",
+        "FcffForecastYtdAnchor",
+        "ForecastAssumptionSource",
+        "ForecastSeedType",
+        "ForecastValue",
+        "ForwardGrowthEvidence",
+        "ForwardGrowthOutlook",
+        "FreeCashFlowForecast",
+        "FreeCashFlowForecastObservation",
+        "FreeCashFlowForecastParameters",
+        "MonetaryForecastConstraint",
+        "SimplifiedFcfForecast",
+        "SimplifiedFcfForecastObservation",
+        "SimplifiedFcfForecastParameters",
+    }
+}
+_LAZY_EXPORTS.update(
+    {
+        "FcffForecastService": (
+            "edgarito.services.forecasting.fcff",
+            "FcffForecastService",
+        ),
+        "FreeCashFlowForecastService": (
+            "edgarito.services.forecasting.fcff",
+            "FreeCashFlowForecastService",
+        ),
+        "SimplifiedFcfForecastService": (
+            "edgarito.services.forecasting.free_cash_flow",
+            "SimplifiedFcfForecastService",
+        ),
+        "AdaptiveMultistageFcffForecastService": (
+            "edgarito.services.forecasting.multistage",
+            "AdaptiveMultistageFcffForecastService",
+        ),
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("edgarito.services.forecasting.forward_estimates", name)
+        for name in {
+            "ForwardEstimateResolver",
+            "ForwardEstimateService",
+            "ForwardRevenueConsensusService",
+            "ForwardRevenueEstimateResolver",
+            "ForwardRevenueEstimateService",
+        }
+    }
+)
 
-    if name in {
-        "ForwardEstimateResolver",
-        "ForwardEstimateService",
-        "ForwardRevenueConsensusService",
-        "ForwardRevenueEstimateResolver",
-        "ForwardRevenueEstimateService",
-    }:
-        from edgarito.services.forward_estimates import (
-            ForwardEstimateResolver,
-            ForwardEstimateService,
-            ForwardRevenueConsensusService,
-            ForwardRevenueEstimateResolver,
-            ForwardRevenueEstimateService,
-        )
 
-        return {
-            "ForwardEstimateResolver": ForwardEstimateResolver,
-            "ForwardEstimateService": ForwardEstimateService,
-            "ForwardRevenueConsensusService": ForwardRevenueConsensusService,
-            "ForwardRevenueEstimateResolver": ForwardRevenueEstimateResolver,
-            "ForwardRevenueEstimateService": ForwardRevenueEstimateService,
-        }[name]
-    raise AttributeError(name)
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

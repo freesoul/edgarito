@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from support.http import FakeSession
 
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 from edgarito.services.cache.filesystem_cache import FileSystemCache
@@ -16,31 +17,6 @@ from edgarito.services.valuation import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "peer_discovery"
-
-
-class _Response:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, traceback):
-        return None
-
-    async def text(self):
-        return json.dumps(self._payload)
-
-
-class _Session:
-    def __init__(self, payload):
-        self.payload = payload
-        self.requests = []
-
-    def get(self, url, **kwargs):
-        self.requests.append((url, kwargs))
-        return _Response(self.payload)
 
 
 class _StaticProvider:
@@ -89,7 +65,7 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
     payload = json.loads(
         (FIXTURES / "massive_aapl_related.json").read_text(encoding="utf-8")
     )
-    session = _Session(payload)
+    session = FakeSession([payload])
     massive = MassiveRelatedCompaniesPeerDiscoveryProvider(
         FileSystemCache(tmp_path),
         "test-key",
@@ -116,8 +92,8 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
     )
     assert "AAPL" not in primary.candidate_tickers
     assert yahoo.calls == 1
-    assert session.requests[0][0].endswith("/v1/related-companies/AAPL")
-    assert session.requests[0][1]["params"] == {"apiKey": "test-key"}
+    assert session.calls[0]["url"].endswith("/v1/related-companies/AAPL")
+    assert session.calls[0]["params"] == {"apiKey": "test-key"}
     assert "not comparable evidence" in primary.methodology
     assert any("discovery hints only" in warning for warning in primary.warnings)
 
@@ -134,7 +110,12 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
     )
     assert fallback.provider == "massive-related+yahoo-screener"
     assert fallback.candidate_tickers == (
-        "GOOGL", "AMZN", "META", "NVDA", "ADBE", "MSFT"
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "ADBE",
+        "MSFT",
     )
     assert any("too few" in warning for warning in fallback.warnings)
     assert fallback_yahoo.calls == 1
@@ -143,7 +124,9 @@ def test_us_discovery_combines_massive_hints_with_yahoo_supplementation(tmp_path
         _result("yahoo-screener", "AAPL", ("MSFT", "AMZN", "META", "NVDA", "ADBE"))
     )
     outage = asyncio.run(
-        MarketAwarePeerDiscoveryProvider(outage_yahoo, _FailingProvider()).discover(target)
+        MarketAwarePeerDiscoveryProvider(outage_yahoo, _FailingProvider()).discover(
+            target
+        )
     )
     assert outage.provider == "yahoo-screener"
     assert outage.candidate_tickers == ("MSFT", "AMZN", "META", "NVDA", "ADBE")
