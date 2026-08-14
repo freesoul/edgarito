@@ -244,6 +244,24 @@ class EdgarClient:
             include_older_submissions=True,
         )
 
+    async def get_raw_operating_filings(
+        self,
+        cik: int,
+        *,
+        as_of: datetime.date,
+        lookback_days: int = 1825,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> list[SecFiling]:
+        """Return the complete operating filing inventory before selection."""
+        return await self.get_operating_filings(
+            cik,
+            as_of=as_of,
+            lookback_days=lookback_days,
+            use_cache=use_cache,
+            make_cache=make_cache,
+        )
+
     async def get_filing_documents(
         self,
         filing: SecFiling,
@@ -289,6 +307,29 @@ class EdgarClient:
                 ),
             )
         return filing.model_copy(update={"documents": documents})
+
+    async def get_filing_exhibits(
+        self,
+        filing: SecFiling,
+        *,
+        use_cache: bool = True,
+        make_cache: bool = True,
+    ) -> tuple[SecFilingDocument, ...]:
+        """Retrieve the parsed filing and expose its attachment inventory.
+
+        The full submission remains the cache boundary.  Exhibit ranking is a
+        selector concern, so this method intentionally does not duplicate SEC
+        requests or introduce issuer-specific URLs.
+        """
+
+        populated = await self.get_filing_documents(
+            filing, use_cache=use_cache, make_cache=make_cache
+        )
+        return tuple(
+            document
+            for document in populated.documents
+            if re.fullmatch(r"EX-99(?:\.\d+)?", document.document_type.strip(), re.I)
+        )
 
     @staticmethod
     def _mark_primary_documents(

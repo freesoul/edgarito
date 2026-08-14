@@ -43,6 +43,16 @@ def build_parser() -> argparse.ArgumentParser:
     valuation = subparsers.add_parser(
         "valuation", help="Calculate an intrinsic or relative valuation"
     )
+    inventory = subparsers.add_parser(
+        "sec-inventory", help="Inspect SEC operating filing inventory and exhibits"
+    )
+    _add_identifier_arguments(inventory)
+    inventory.add_argument("--refresh", action="store_true")
+    inventory.add_argument("--refresh-sec", action="store_true")
+    inventory.add_argument("--operating", action="store_true", help=argparse.SUPPRESS)
+    inventory.add_argument("--cache-dir", default=EDGARITO_CACHE_DIR)
+    inventory.add_argument("--user-agent", default=EDGARITO_USER_AGENT)
+    inventory.add_argument("--audit", action="store_true")
     valuation_models = subparsers.add_parser(
         "valuation-models",
         help="Rank suitable valuation models and report missing inputs",
@@ -686,6 +696,12 @@ def _add_retrieval_arguments(
             )
     command_parser.add_argument(
         "--refresh", action="store_true", help="Ignore cached provider snapshots"
+    )
+    command_parser.add_argument(
+        "--refresh-sec",
+        dest="refresh_sec",
+        action="store_true",
+        help="Bypass SEC filing inventory, submission, and attachment caches",
     )
     command_parser.add_argument(
         "--crosscheck",

@@ -187,8 +187,18 @@ class OperatingForecastQualityResult:
     cache_misses: int = 0
     filings_inspected: int = 0
     documents_inspected: int = 0
+    raw_filings_received: int = 0
+    raw_filings_in_range: int = 0
+    candidate_filings: int = 0
+    filing_inventory_cache_bypass: bool = False
+    filing_inventory_fetched_live: bool = False
+    filing_inventory_metadata: tuple[str, ...] = ()
     vocabulary_audit: Any | None = None
     vocabulary_terms: tuple[Any, ...] = ()
+    exhibits_found: int = 0
+    gaps_resolved_sec: tuple[Any, ...] = ()
+    gaps_resolved_ir: tuple[Any, ...] = ()
+    ir_diagnostic: str | None = None
 
     @property
     def status(self) -> str:
@@ -590,6 +600,10 @@ class OperatingForecastPipelineService:
             documents_inspected=int(values.get("documents_inspected", 0) or 0),
             vocabulary_audit=values.get("vocabulary_audit"),
             vocabulary_terms=tuple(values.get("vocabulary_terms") or ()),
+            exhibits_found=int(values.get("exhibits_found", 0) or 0),
+            gaps_resolved_sec=tuple(values.get("gaps_resolved_sec") or ()),
+            gaps_resolved_ir=tuple(values.get("gaps_resolved_ir") or ()),
+            ir_diagnostic=values.get("ir_diagnostic"),
         )
 
     def forecast_with_evidence_provider(
@@ -727,8 +741,21 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "cache_misses",
             "filings_inspected",
             "documents_inspected",
+            "raw_filings_received",
+            "raw_filings_in_range",
+            "candidate_filings",
+            "filing_inventory_cache_bypass",
+            "filing_inventory_fetched_live",
+            "filing_inventory_metadata",
             "vocabulary_audit",
             "vocabulary_terms",
+            "gaps_detected",
+            "gaps_resolved",
+            "gaps_unresolved",
+            "exhibits_found",
+            "gaps_resolved_sec",
+            "gaps_resolved_ir",
+            "ir_diagnostic",
         )
         if hasattr(value, name)
     }

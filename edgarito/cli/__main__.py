@@ -87,6 +87,10 @@ from edgarito.services.forecasting import (
     SimplifiedFcfForecastService,
 )
 from edgarito.services.forward_estimates import ForwardRevenueEstimateService
+from edgarito.services.guidance.documents import (
+    GuidanceDocumentSelector,
+    is_exhibit_document,
+)
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.guidance.service import ManagementGuidanceService
@@ -217,6 +221,45 @@ async def _run_financials(args: argparse.Namespace) -> int:
     financials = await _retrieve_financials(args, granularity, concepts)
 
     print(FinancialsConsolePresenter().render(financials, limit=args.limit))
+    return 0
+
+
+async def _run_sec_inventory(args: argparse.Namespace) -> int:
+    cache = FileSystemCache(Path(args.cache_dir))
+    async with EdgarClient(cache, args.user_agent) as client:
+        refresh = args.refresh or args.refresh_sec
+        cik = args.cik or await client.get_cik(
+            args.ticker, use_cache=not refresh, make_cache=True
+        )
+        filings = await client.get_raw_operating_filings(
+            cik,
+            as_of=datetime.date.today(),
+            use_cache=not refresh,
+            make_cache=True,
+        )
+        selector = GuidanceDocumentSelector()
+        candidates = selector.select_operating_filings(filings, limit=24)
+        attachment_count = 0
+        exhibit_count = 0
+        for filing in candidates:
+            populated = await client.get_filing_documents(
+                filing, use_cache=not refresh, make_cache=True
+            )
+            attachment_count += len(populated.documents)
+            exhibit_count += sum(
+                is_exhibit_document(document) for document in populated.documents
+            )
+        print("SEC OPERATING INVENTORY")
+        print(f"Cache bypass: {'yes' if refresh else 'no'}")
+        print(f"Raw filings: {len(filings)}")
+        print(f"Operating candidates: {len(candidates)}")
+        print(f"Attachments enumerated: {attachment_count}")
+        print(f"EX-99.x found: {exhibit_count}")
+        for item in filings:
+            print(
+                f"{item.filing_date.isoformat()} | {item.form} | "
+                f"{item.accession_number} | {item.primary_document}"
+            )
     return 0
 
 
@@ -2347,7 +2390,7 @@ async def _retrieve_operating_evidence(
                 {
                     "ticker": args.ticker or financials.ticker,
                     "cik": args.cik,
-                    "refresh_sec": args.refresh,
+                    "refresh_sec": args.refresh or getattr(args, "refresh_sec", False),
                 }
             )
         evidence = _call_with_supported_kwargs(resolver, resolver_kwargs)
@@ -2392,6 +2435,32 @@ def _operating_quality_audit(
             value.get("history_audit")
             if value
             else getattr(evidence, "history_audit", None)
+        ),
+        "exhibits_found": int(
+            value.get("exhibits_found", 0)
+            if value
+            else getattr(evidence, "exhibits_found", 0)
+        ),
+        "gaps_resolved_sec": tuple(
+            (
+                value.get("gaps_resolved_sec", ())
+                if value
+                else getattr(evidence, "gaps_resolved_sec", ())
+            )
+            or ()
+        ),
+        "gaps_resolved_ir": tuple(
+            (
+                value.get("gaps_resolved_ir", ())
+                if value
+                else getattr(evidence, "gaps_resolved_ir", ())
+            )
+            or ()
+        ),
+        "ir_diagnostic": (
+            value.get("ir_diagnostic")
+            if value
+            else getattr(evidence, "ir_diagnostic", None)
         ),
     }
     # Discovery only supplies driver evidence. Coverage, reconstruction error,
@@ -2468,6 +2537,36 @@ def _operating_quality_audit(
             if value
             else getattr(evidence, "documents_inspected", 0)
         ),
+        raw_filings_received=int(
+            value.get("raw_filings_received", 0)
+            if value
+            else getattr(evidence, "raw_filings_received", 0)
+        ),
+        raw_filings_in_range=int(
+            value.get("raw_filings_in_range", 0)
+            if value
+            else getattr(evidence, "raw_filings_in_range", 0)
+        ),
+        candidate_filings=int(
+            value.get("candidate_filings", 0)
+            if value
+            else getattr(evidence, "candidate_filings", 0)
+        ),
+        filing_inventory_cache_bypass=bool(
+            value.get("filing_inventory_cache_bypass", False)
+            if value
+            else getattr(evidence, "filing_inventory_cache_bypass", False)
+        ),
+        filing_inventory_fetched_live=bool(
+            value.get("filing_inventory_fetched_live", False)
+            if value
+            else getattr(evidence, "filing_inventory_fetched_live", False)
+        ),
+        filing_inventory_metadata=tuple(
+            value.get("filing_inventory_metadata", ())
+            if value
+            else getattr(evidence, "filing_inventory_metadata", ())
+        ),
         vocabulary_audit=(
             value.get("vocabulary_audit")
             if value
@@ -2481,6 +2580,10 @@ def _operating_quality_audit(
             )
             or ()
         ),
+        exhibits_found=int(values.get("exhibits_found", 0) or 0),
+        gaps_resolved_sec=tuple(values.get("gaps_resolved_sec") or ()),
+        gaps_resolved_ir=tuple(values.get("gaps_resolved_ir") or ()),
+        ir_diagnostic=values.get("ir_diagnostic"),
     )
 
 
@@ -2488,8 +2591,26 @@ def _retain_operating_audit_metadata(current, discovered):
     if discovered is None:
         return current
     updates = {}
-    for field in ("vocabulary_audit", "vocabulary_terms"):
+    for field in (
+        "vocabulary_audit",
+        "vocabulary_terms",
+        "raw_filings_received",
+        "raw_filings_in_range",
+        "candidate_filings",
+        "filing_inventory_cache_bypass",
+        "filing_inventory_fetched_live",
+        "filing_inventory_metadata",
+    ):
         value = getattr(discovered, field, None)
+        if field.startswith("raw_") or field in {
+            "candidate_filings",
+            "filing_inventory_cache_bypass",
+            "filing_inventory_fetched_live",
+            "filing_inventory_metadata",
+        }:
+            if value:
+                updates[field] = value
+            continue
         if field == "vocabulary_audit" and value is not None:
             if getattr(value, "global_count", 0) == 0:
                 continue
@@ -3259,6 +3380,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         if args.command == "financials":
             return asyncio.run(_run_financials(args))
+        if args.command == "sec-inventory":
+            return asyncio.run(_run_sec_inventory(args))
         if args.command == "metrics":
             return asyncio.run(_run_metrics(args))
         if args.command == "export":

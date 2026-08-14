@@ -399,8 +399,36 @@ class FcffDcfConsolePresenter:
                         + str(getattr(audit, "cache_misses", 0)),
                         "SEC filings inspected: "
                         + str(getattr(audit, "filings_inspected", 0)),
+                        "SEC raw filings received: "
+                        + str(getattr(audit, "raw_filings_received", 0)),
+                        "SEC operating candidate filings: "
+                        + str(getattr(audit, "candidate_filings", 0)),
+                        "SEC inventory cache bypass: "
+                        + (
+                            "yes"
+                            if getattr(audit, "filing_inventory_cache_bypass", False)
+                            else "no"
+                        ),
+                        "SEC inventory fetched live: "
+                        + (
+                            "yes"
+                            if getattr(audit, "filing_inventory_fetched_live", False)
+                            else "no"
+                        ),
+                        "SEC filings received by operating discovery: "
+                        + "; ".join(
+                            getattr(audit, "filing_inventory_metadata", ()) or ("none",)
+                        ),
                         "SEC documents inspected: "
                         + str(getattr(audit, "documents_inspected", 0)),
+                        "SEC exhibits found: "
+                        + str(getattr(audit, "exhibits_found", 0)),
+                        "Gaps resolved from SEC: "
+                        + str(len(getattr(audit, "gaps_resolved_sec", ()) or ())),
+                        "Gaps resolved from IR: "
+                        + str(len(getattr(audit, "gaps_resolved_ir", ()) or ())),
+                        "IR fallback diagnostic: "
+                        + str(getattr(audit, "ir_diagnostic", None) or "none"),
                         "KPI vocabulary cache: "
                         + str(
                             getattr(
@@ -516,6 +544,37 @@ class FcffDcfConsolePresenter:
                             + str(history_audit.source_document_count),
                             "Usable reconstruction periods: "
                             + str(len(history_audit.historical_revenue_pairs)),
+                            "Reconstruction candidates: "
+                            + "; ".join(
+                                history_audit.reconstruction_candidates or ("none",)
+                            ),
+                            "Reconstruction rejections: "
+                            + "; ".join(
+                                history_audit.reconstruction_rejections or ("none",)
+                            ),
+                            "Reconstruction note: "
+                            + (
+                                "compatible FQ/YTD candidates retained for validation; "
+                                "FY/LTM coverage remains unavailable"
+                                if history_audit.reconstruction_candidates
+                                and not history_audit.historical_revenue_pairs
+                                else "none"
+                            ),
+                            "OPERATING EVIDENCE GAPS",
+                            "Gaps detected: " + str(len(history_audit.gaps_detected)),
+                            "Gaps resolved: " + str(len(history_audit.gaps_resolved)),
+                            "Gaps unresolved: "
+                            + "; ".join(
+                                item.label for item in history_audit.gaps_unresolved
+                            )
+                            if history_audit.gaps_unresolved
+                            else "Gaps unresolved: none",
+                            "New FY periods: "
+                            + ", ".join(history_audit.new_fy_periods or ("none",)),
+                            "New LTM periods: "
+                            + ", ".join(history_audit.new_ltm_periods or ("none",)),
+                            "Gap diagnostics: "
+                            + "; ".join(history_audit.gap_diagnostics or ("none",)),
                         ]
                     )
         if result.operating_driver_coverage is not None:

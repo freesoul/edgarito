@@ -714,3 +714,182 @@ class _Edgar:
                 )
             }
         )
+
+
+def test_gap_targeted_retry_inspects_ranked_exhibit_outside_initial_document_budget(
+    tmp_path,
+):
+    filing = _filing().model_copy(
+        update={
+            "form": "10-K",
+            "documents": (
+                SecFilingDocument(
+                    filename="annual.htm",
+                    document_type="10-K",
+                    description="Annual report",
+                    content="The platform reported revenue of $100 million in FY2025.",
+                ),
+                SecFilingDocument(
+                    filename="kpi.htm",
+                    document_type="EX-99.1",
+                    description="Platform volume KPI",
+                    content="The platform reported 20 million units in FY2025.",
+                ),
+            ),
+        }
+    )
+
+    class _GapOpenAI(_FakeOpenAI):
+        async def extract_structured(self, **kwargs):
+            self.calls += 1
+            content = kwargs["content"]
+            self.contents.append(content)
+            if "20 million units" in content:
+                return ExtractedOperatingEvidenceResponse(
+                    observations=[
+                        ExtractedOperatingObservation(
+                            segment_id="platform",
+                            driver_id="volume",
+                            fiscal_year=2025,
+                            value=20,
+                            unit="million units",
+                            supporting_text="The platform reported 20 million units in FY2025.",
+                        )
+                    ]
+                )
+            return ExtractedOperatingEvidenceResponse(
+                observations=[
+                    ExtractedOperatingObservation(
+                        segment_id="platform",
+                        driver_id="revenue",
+                        fiscal_year=2025,
+                        value=100,
+                        unit="USD millions",
+                        supporting_text="The platform reported revenue of $100 million in FY2025.",
+                    )
+                ]
+            )
+
+    class _GapEdgar(_Edgar):
+        async def get_guidance_filings(self, cik, **kwargs):
+            return [filing]
+
+        async def get_filing_documents(self, filing, **kwargs):
+            return filing
+
+    ai = _GapOpenAI()
+    result = asyncio.run(
+        OperatingEvidenceDiscoveryService(
+            _GapEdgar(filing),
+            OperatingEvidenceExtractor(ai, FileSystemCache(tmp_path)),
+            max_filings=1,
+            max_documents_per_filing=1,
+            max_documents=1,
+        ).discover(cik=1, as_of=datetime.date(2026, 3, 1), fiscal_years=(2025,))
+    )
+
+    assert result.exhibits_found == 1
+    assert any(item.driver_id == "volume" for item in result.observations)
+    assert result.gaps_resolved_sec
+    assert any("20 million units" in content for content in ai.contents)
+
+
+def test_ir_fallback_requires_profile_url_and_records_provider_resolution(tmp_path):
+    filing = _filing().model_copy(
+        update={
+            "documents": (
+                SecFilingDocument(
+                    filename="annual.htm",
+                    document_type="10-K",
+                    description="Annual report",
+                    content="The platform reported revenue of $100 million in FY2025.",
+                ),
+            )
+        }
+    )
+
+    class _Ir:
+        def __init__(self):
+            self.urls = []
+
+        async def retrieve(self, *, url, gaps, as_of):
+            self.urls.append(url)
+            ir_text = "The platform reported 20 million units in FY2025."
+            return (
+                (
+                    filing,
+                    SecFilingDocument(
+                        filename="ir-kpi.htm",
+                        document_type="IR-KPI",
+                        description="Investor relations KPI release",
+                        content=ir_text,
+                    ),
+                    ir_text,
+                ),
+            )
+
+    class _IrEdgar(_Edgar):
+        async def get_filing_documents(self, filing, **kwargs):
+            return filing
+
+    text = "The platform reported revenue of $100 million in FY2025."
+    ai_response = ExtractedOperatingEvidenceResponse(
+        observations=[
+            ExtractedOperatingObservation(
+                segment_id="platform",
+                driver_id="revenue",
+                fiscal_year=2025,
+                value=100,
+                unit="USD millions",
+                supporting_text=text,
+            )
+        ]
+    )
+
+    class _IrOpenAI(_FakeOpenAI):
+        async def extract_structured(self, **kwargs):
+            self.calls += 1
+            content = kwargs["content"]
+            self.contents.append(content)
+            if "20 million units" in content:
+                return ExtractedOperatingEvidenceResponse(
+                    observations=[
+                        ExtractedOperatingObservation(
+                            segment_id="platform",
+                            driver_id="volume",
+                            fiscal_year=2025,
+                            value=20,
+                            unit="million units",
+                            supporting_text="The platform reported 20 million units in FY2025.",
+                        )
+                    ]
+                )
+            return ai_response
+
+    ir = _Ir()
+    result = asyncio.run(
+        OperatingEvidenceDiscoveryService(
+            _IrEdgar(filing),
+            OperatingEvidenceExtractor(
+                _IrOpenAI(),
+                FileSystemCache(tmp_path),
+            ),
+            ir_fallback=ir,
+            max_filings=1,
+            max_documents=1,
+        ).discover(
+            cik=1,
+            as_of=datetime.date(2026, 3, 1),
+            fiscal_years=(2025,),
+            profile_metadata={"investorWebsite": "https://example.test/investors"},
+        )
+    )
+
+    assert ir.urls == ["https://example.test/investors"]
+    assert result.ir_diagnostic is None
+    assert result.gaps_resolved_ir
+    assert not result.gaps_resolved_sec
+    assert any(
+        item.evidence is not None and item.evidence.provider == "company_ir"
+        for item in result.observations
+    )

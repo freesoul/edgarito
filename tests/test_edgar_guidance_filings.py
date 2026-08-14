@@ -278,3 +278,30 @@ def test_periodic_primary_document_is_selected_before_higher_ranked_exhibits():
     ]
     assert selected[0].is_primary
     assert not selected[1].is_primary
+
+
+def test_operating_selector_prefers_explicit_8k_exhibits_and_exposes_candidates():
+    wrapper = SecFilingDocument(
+        filename="wrapper.htm",
+        document_type="8-K",
+        description="Current report",
+        content="The attached release is incorporated by reference.",
+    )
+    exhibit = SecFilingDocument(
+        filename="release.htm",
+        document_type="EX-99.1",
+        description="Quarterly deliveries and revenue table",
+        content="Q2 2026 deliveries 20 and revenue 100.",
+    )
+    filing = _filing().model_copy(
+        update={
+            "form": "8-K",
+            "primary_document": "wrapper.htm",
+            "documents": (wrapper, exhibit),
+        }
+    )
+
+    selected = GuidanceDocumentSelector().select_operating_documents(filing, limit=1)
+
+    assert selected[0].document_type == "EX-99.1"
+    assert GuidanceDocumentSelector().select_exhibit_documents(filing) == [exhibit]
