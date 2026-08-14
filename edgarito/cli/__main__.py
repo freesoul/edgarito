@@ -1195,6 +1195,8 @@ def _equity_relative_valuation(
 
 async def _run_valuation(args: argparse.Namespace) -> int:
     logger.warning("Valuation: starting for %s", args.ticker or "profile")
+    market = _market_for_args(args)
+    sec_backed_evidence_allowed = market == Market.US
     generated_profile_path = None
     should_generate_profile = False
     peer_report = None
@@ -1300,7 +1302,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
         )
     guidance_overlay: GuidanceOverlayResult | None = None
-    if OPENAI_API_KEY:
+    if OPENAI_API_KEY and sec_backed_evidence_allowed:
         original_forecast_parameters = forecast_parameters
         try:
             with _valuation_step("retrieving management guidance"):
@@ -1313,6 +1315,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
                     original_forecast_parameters,
                     forecast,
                     valuation_date,
+                    market=market,
                 )
             additional_warnings.extend(candidate_overlay.warnings)
             candidate_forecast = forecast
@@ -1335,7 +1338,12 @@ async def _run_valuation(args: argparse.Namespace) -> int:
             guidance_overlay = None
     elif args.verbose or args.audit:
         additional_warnings.append(
-            "AI management-guidance extraction skipped because OpenAI is not configured"
+            (
+                "SEC/EDGAR management-guidance extraction skipped for the "
+                f"{market.value} market"
+            )
+            if not sec_backed_evidence_allowed
+            else "AI management-guidance extraction skipped because OpenAI is not configured"
         )
     seed_forecast = forecast
     operating_evidence = None
@@ -1344,7 +1352,7 @@ async def _run_valuation(args: argparse.Namespace) -> int:
         reason="Operating forecast inactive: provider not configured",
         vocabulary_audit=_default_operating_vocabulary_audit(profile),
     )
-    async with _operating_evidence_provider(args, financials) as (
+    async with _operating_evidence_provider(args, financials, market=market) as (
         provider,
         provider_rejection,
     ):
@@ -2643,8 +2651,18 @@ def _default_operating_vocabulary_audit(profile) -> KpiVocabularyAudit:
 async def _operating_evidence_provider(
     args: argparse.Namespace,
     financials: NormalizedCompanyFinancials,
+    *,
+    market: Market | str | None = None,
 ) -> AsyncIterator[tuple[object | None, str | None]]:
-    """Build the normal SEC/OpenAI provider only when optional config is ready."""
+    """Build the SEC/OpenAI provider only for US valuations."""
+
+    market = _market_for_args(args) if market is None else Market(market)
+    if market != Market.US:
+        yield (
+            None,
+            f"SEC-backed operating evidence skipped for the {market.value} market",
+        )
+        return
 
     if OPERATING_EVIDENCE_PROVIDER is not None:
         yield OPERATING_EVIDENCE_PROVIDER, None
@@ -2847,6 +2865,11 @@ def _granularity(period: str) -> Optional[Granularity]:
     return None if period == "all" else Granularity(period)
 
 
+def _market_for_args(args: argparse.Namespace) -> Market:
+    """Resolve the CLI market while retaining the historical US default."""
+    return Market(getattr(args, "market", Market.US.value))
+
+
 def _fcff_parameters(args: argparse.Namespace, configured) -> FcffForecastParameters:
     return FcffForecastParameters(
         forecast_years=(
@@ -2902,7 +2925,16 @@ async def _management_guidance_overlay(
     parameters: FcffForecastParameters,
     baseline,
     valuation_date: datetime.date,
+    *,
+    market: Market | str | None = None,
 ) -> tuple[FcffForecastParameters, GuidanceOverlayResult]:
+    market = _market_for_args(args) if market is None else Market(market)
+    if market != Market.US:
+        return parameters, GuidanceOverlayResult(
+            warnings=(
+                f"SEC/EDGAR management guidance skipped for the {market.value} market",
+            )
+        )
     if not args.user_agent:
         return parameters, GuidanceOverlayResult(
             warnings=(

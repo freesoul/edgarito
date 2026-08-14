@@ -9,6 +9,7 @@ import edgarito.cli.__main__ as cli_main
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.enums.market import Market
 from edgarito.schemas.forward import ForwardRevenueEstimate
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -286,6 +287,32 @@ def test_cli_missing_openai_configuration_returns_structured_operating_rejection
 
     assert provider is None
     assert rejection == "OpenAI API key missing"
+
+
+def test_cli_operating_provider_skips_sec_for_eu_market(monkeypatch, tmp_path):
+    class _ShouldNotConstruct:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("SEC/OpenAI operating clients must not be constructed")
+
+    monkeypatch.setattr(cli_main, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli_main, "OpenAIClient", _ShouldNotConstruct)
+    monkeypatch.setattr(cli_main, "EdgarClient", _ShouldNotConstruct)
+    args = SimpleNamespace(
+        market=Market.EU.value,
+        cache_dir=tmp_path,
+        user_agent="Tests (tests@example.com)",
+    )
+
+    async def resolve():
+        async with cli_main._operating_evidence_provider(
+            args, _fcff_financials()
+        ) as result:
+            return result
+
+    provider, rejection = asyncio.run(resolve())
+
+    assert provider is None
+    assert rejection == "SEC-backed operating evidence skipped for the eu market"
 
 
 def test_cli_operating_provider_factory_closes_openai_and_sec_clients(

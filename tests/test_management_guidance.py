@@ -7,6 +7,7 @@ import pytest
 
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli.presentation.valuation_report import ValuationReportConsolePresenter
+from edgarito.enums.market import Market
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
@@ -984,6 +985,40 @@ def test_guidance_counters_transfer_from_discovery_to_overlay(monkeypatch, tmp_p
     assert overlay.extracted_guidance_records == 5
     assert overlay.rejected_records == 2
     assert overlay.document_audits == (audit,)
+
+
+def test_management_guidance_skips_sec_for_eu_market(monkeypatch, tmp_path):
+    class _ShouldNotConstruct:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("SEC/OpenAI guidance clients must not be constructed")
+
+    monkeypatch.setattr(cli_module, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli_module, "OpenAIClient", _ShouldNotConstruct)
+    monkeypatch.setattr(cli_module, "EdgarClient", _ShouldNotConstruct)
+    parameters = FcffForecastParameters(forecast_years=2)
+
+    returned_parameters, overlay = asyncio.run(
+        cli_module._management_guidance_overlay(
+            SimpleNamespace(
+                market=Market.EU.value,
+                user_agent="test@example.com",
+                cache_dir=tmp_path,
+                ticker="TEST",
+                cik=1,
+                refresh=False,
+            ),
+            SimpleNamespace(ticker="TEST"),
+            parameters,
+            _baseline(),
+            datetime.date(2026, 8, 1),
+        )
+    )
+
+    assert returned_parameters is parameters
+    assert overlay.applications == ()
+    assert overlay.warnings == (
+        "SEC/EDGAR management guidance skipped for the eu market",
+    )
 
 
 def test_valuation_report_renders_audit_counters_without_source_records():
