@@ -6,8 +6,8 @@ import inspect
 
 from edgarito.cli.presentation.console import IndependentValuationModelsConsolePresenter
 from edgarito.cli.use_cases.context import ValuationDependencyContext
+from edgarito.schemas.valuation.selection import BusinessArchetype, ValuationModel
 from edgarito.services.valuation.execution import ValuationExecutor
-from edgarito.services.valuation.models import BusinessArchetype, ValuationModel
 
 
 def _resolve(dependencies, name: str, default):

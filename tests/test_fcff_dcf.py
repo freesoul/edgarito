@@ -13,6 +13,17 @@ from edgarito.cli.parser import build_parser
 from edgarito.cli.presentation.dcf import FcffDcfConsolePresenter
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import (
+    FcffForecast,
+    FcffForecastDcfStub,
+    FcffForecastDriver,
+    FcffForecastObservation,
+    FcffForecastParameters,
+    FcffForecastYtdAnchor,
+    ForecastAssumptionSource,
+    ForecastSeedType,
+    ForecastValue,
+)
 from edgarito.schemas.forward import (
     ForwardEstimateProviderDiagnostic,
     ForwardRevenueEstimateResult,
@@ -22,18 +33,8 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
 from edgarito.services.export import ValuationExcelRenderer
-from edgarito.services.forecasting import (
-    FcffForecast,
-    FcffForecastDriver,
-    FcffForecastObservation,
-    FcffForecastParameters,
-    FcffForecastYtdAnchor,
-    ForecastAssumptionSource,
-    ForecastSeedType,
-    ForecastValue,
-)
-from edgarito.services.forecasting.models import FcffForecastDcfStub
 from edgarito.services.valuation import (
     CashFlowTiming,
     CompanyTradingMultiples,
@@ -48,7 +49,6 @@ from edgarito.services.valuation import (
     PeerMultipleSummary,
     PeerSelectionParameters,
     PeerUniverse,
-    RelativeValuationBasis,
     ShareCountBasis,
     ShareRepurchaseParameters,
     TerminalMetric,

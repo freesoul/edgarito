@@ -2,19 +2,21 @@ import re
 from decimal import Decimal
 from statistics import median
 
+from edgarito.schemas.valuation.selection import (
+    BusinessArchetype,
+    PeerEvidenceGroup,
+    ValuationProfile,
+)
 from edgarito.services.valuation.issuer_identity import (
     issuer_identity_keys,
     normalize_issuer_name,
 )
 from edgarito.services.valuation.models import (
-    BusinessArchetype,
     CompanyTradingMultiples,
     PeerCandidateAssessment,
     PeerDiscoveryResult,
-    PeerEvidenceGroup,
     PeerSelectionParameters,
     PeerUniverse,
-    ValuationProfile,
 )
 
 

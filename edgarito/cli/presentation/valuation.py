@@ -10,13 +10,15 @@ from edgarito.cli.presentation._valuation_format import (
     section,
     subsection,
 )
+from edgarito.schemas.valuation.selection import (
+    ModelRole,
+    ModelSuitability,
+    ValuationSelection,
+)
 from edgarito.services.valuation import (
     ComparableImpliedValuation,
     ComparableMultiplesReport,
-    ModelRole,
-    ModelSuitability,
     MultipleStatus,
-    ValuationSelection,
 )
 
 

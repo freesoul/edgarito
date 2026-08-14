@@ -7,6 +7,11 @@ import pytest
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import (
+    FcffForecast,
+    FcffForecastParameters,
+    ForecastSeedType,
+)
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -14,18 +19,18 @@ from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
-from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.forecasting import (
-    AdaptiveMultistageFcffForecastService,
-    FcffForecast,
-    FcffForecastParameters,
-    FcffForecastService,
-    ForecastSeedType,
-)
-from edgarito.services.valuation import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
+    ValuationProfile,
+)
+from edgarito.services.cache.filesystem_cache import FileSystemCache
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.multistage import (
+    AdaptiveMultistageFcffForecastService,
+)
+from edgarito.services.valuation import (
     FcffDcfCapitalBridge,
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
@@ -34,7 +39,6 @@ from edgarito.services.valuation import (
     PeerSelectionParameters,
     PeerUniverseSelector,
     TerminalRoicResolver,
-    ValuationProfile,
     YahooScreenerPeerDiscoveryProvider,
 )
 

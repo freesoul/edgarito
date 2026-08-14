@@ -6,9 +6,7 @@ from pathlib import Path
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
 from edgarito.schemas.normalization.financials import FinancialConcept
-from edgarito.schemas.valuation.specialized import SpecializedInputType
-from edgarito.services.metrics import FinancialMetric
-from edgarito.services.valuation import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
@@ -16,6 +14,8 @@ from edgarito.services.valuation import (
     PeerEvidenceGroup,
     ValuationInput,
 )
+from edgarito.schemas.valuation.specialized import SpecializedInputType
+from edgarito.services.metrics import FinancialMetric
 from edgarito.settings import (
     CLASSIFICATION_PROVIDER_CONFIGURATION,
     EDGARITO_CACHE_DIR,

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,

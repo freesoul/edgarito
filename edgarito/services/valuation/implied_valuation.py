@@ -1,13 +1,13 @@
 import datetime
 from decimal import Decimal
 
-from edgarito.services.forecasting.models import FcffForecast
+from edgarito.schemas.forecasting import FcffForecast
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
 from edgarito.services.valuation.discounting import PresentValueService
 from edgarito.services.valuation.models import (
     ComparableImpliedValuation,
     ComparableImpliedValuationCase,
     FcffDcfCapitalBridge,
-    RelativeValuationBasis,
     ResolvedMultiple,
 )
 

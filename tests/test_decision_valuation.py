@@ -10,15 +10,15 @@ from edgarito.cli.presentation.valuation_report import (
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import FcffForecastParameters
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.forecasting import (
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.multistage import (
     AdaptiveMultistageFcffForecastService,
-    FcffForecastParameters,
-    FcffForecastService,
 )
 from edgarito.services.valuation import (
     DecisionScenario,

@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     MultipleConfidence,
     RelativeValuationBasis,
 )

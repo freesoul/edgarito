@@ -10,18 +10,20 @@ reconciler selects one value for each fiscal year.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from edgarito.schemas.forward import ForwardRevenueEstimate
-from edgarito.schemas.operating import CompanyOperatingForecast
-from edgarito.services.forecasting.models import (
+import edgarito.services.operating.contracts as _contracts
+from edgarito.schemas.forecasting import (
     FcffForecastParameters,
     ForecastAssumptionSource,
 )
+from edgarito.schemas.forward import ForwardRevenueEstimate
+from edgarito.schemas.operating import (
+    CompanyOperatingForecast,
+    _materialize_company_revenue_anchors,
+)
+from edgarito.schemas.operating import ResolvedRevenueYear as _ResolvedRevenueYear
 
 _YEAR_MIN = 1900
 _YEAR_MAX = 2200
@@ -56,175 +58,6 @@ _UNSUPPORTED_INDEPENDENT_SOURCES = {
 }
 
 
-class ResolvedRevenueYear(BaseModel):
-    """The selected revenue evidence for one fiscal year.
-
-    ``independent_revenue`` and ``consensus_revenue`` are retained even when
-    they lose precedence.  That makes the selection auditable without making
-    the FCFF/DCF layer aware of operating-forecast details.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    fiscal_year: int = Field(ge=_YEAR_MIN, le=_YEAR_MAX)
-    revenue: Decimal
-    source: str
-    confidence: str
-    independent_revenue: Decimal | None = None
-    independent_source: str | None = None
-    independent_confidence: str | None = None
-    consensus_revenue: Decimal | None = None
-    consensus_source: str | None = None
-    consensus_confidence: str | None = None
-    historical_revenue: Decimal | None = None
-    explicit_revenue: Decimal | None = None
-    management_revenue: Decimal | None = None
-    # Percentage variance of consensus against the independent value.
-    variance: Decimal | None = None
-
-    @field_validator(
-        "revenue",
-        "independent_revenue",
-        "consensus_revenue",
-        "historical_revenue",
-        "explicit_revenue",
-        "management_revenue",
-    )
-    @classmethod
-    def validate_revenue_values(cls, value: Decimal | None) -> Decimal | None:
-        if value is not None and (not value.is_finite() or value < 0):
-            raise ValueError("Resolved revenue values must be finite and non-negative")
-        return value
-
-    @field_validator("variance")
-    @classmethod
-    def validate_variance(cls, value: Decimal | None) -> Decimal | None:
-        if value is not None and not value.is_finite():
-            raise ValueError("Resolved revenue variance must be finite")
-        return value
-
-    @field_validator("source", "independent_source", "consensus_source")
-    @classmethod
-    def normalize_sources(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = str(getattr(value, "value", value)).strip()
-        return normalized or None
-
-    @field_validator(
-        "confidence",
-        "independent_confidence",
-        "consensus_confidence",
-        mode="before",
-    )
-    @classmethod
-    def normalize_confidences(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = str(getattr(value, "value", value)).strip().casefold()
-        if normalized not in _CONFIDENCE_RANK:
-            raise ValueError("Revenue confidence must be high, medium, or low")
-        return normalized
-
-    @property
-    def selected_revenue(self) -> Decimal:
-        """Descriptive alias for the selected absolute revenue."""
-
-        return self.revenue
-
-
-@dataclass(frozen=True)
-class RevenueForecastReconciliation:
-    """Detailed result retained alongside the public company forecast."""
-
-    forecast: CompanyOperatingForecast
-    resolved_years: tuple[ResolvedRevenueYear, ...]
-
-    @property
-    def company_forecast(self) -> CompanyOperatingForecast:
-        """Compatibility-friendly name for the selected company forecast."""
-
-        return self.forecast
-
-    @property
-    def selected_years(self) -> tuple[ResolvedRevenueYear, ...]:
-        """Alias emphasizing that each item is the selected value."""
-
-        return self.resolved_years
-
-    @property
-    def selected_revenue_by_year(self) -> dict[int, Decimal]:
-        return {item.fiscal_year: item.revenue for item in self.resolved_years}
-
-    @property
-    def revenue(self) -> tuple[Decimal, ...]:
-        return self.forecast.consolidated_revenue
-
-    @property
-    def consolidated_revenue(self) -> tuple[Decimal, ...]:
-        return self.forecast.consolidated_revenue
-
-    @property
-    def consolidated_growth(self) -> tuple[Decimal | None, ...]:
-        return self.forecast.consolidated_growth
-
-    @property
-    def fiscal_years(self) -> tuple[int, ...]:
-        return self.forecast.fiscal_years
-
-    @property
-    def source_by_year(self) -> dict[int, str]:
-        return self.forecast.source_by_year
-
-    @property
-    def confidence_by_year(self) -> dict[int, str]:
-        return self.forecast.confidence_by_year
-
-    @property
-    def explicit_years(self) -> tuple[int, ...]:
-        return self.forecast.explicit_years
-
-    @property
-    def transition_start_year(self) -> int | None:
-        return self.forecast.transition_start_year
-
-    @property
-    def warnings(self) -> tuple[str, ...]:
-        return self.forecast.warnings
-
-    @property
-    def own_supported_years(self) -> tuple[int, ...]:
-        """Years retained from the supported independent operating path."""
-
-        return self.forecast.own_supported_years
-
-    @property
-    def consensus_years(self) -> tuple[int, ...]:
-        """Years filled by analyst consensus after independent selection."""
-
-        return self.forecast.consensus_years
-
-    @property
-    def divergence_by_year(self) -> dict[int, Decimal]:
-        """Consensus-versus-independent revenue divergence by fiscal year."""
-
-        return self.forecast.divergence_by_year
-
-    @property
-    def divergence(self) -> Decimal | None:
-        """Mean absolute consensus-versus-independent divergence."""
-
-        return self.forecast.divergence
-
-    @property
-    def selected_source_by_year(self) -> dict[int, str]:
-        return self.forecast.selected_source_by_year
-
-    @property
-    def selected_confidence_by_year(self) -> dict[int, str]:
-        return self.forecast.selected_confidence_by_year
-
-
 class RevenueForecastReconciler:
     """Select one absolute revenue value per fiscal year.
 
@@ -251,7 +84,7 @@ class RevenueForecastReconciler:
                 "Minimum independent confidence must be high, medium, or low"
             )
         self.minimum_independent_confidence = normalized
-        self._last_resolved_years: tuple[ResolvedRevenueYear, ...] = ()
+        self._last_resolved_years: tuple[_ResolvedRevenueYear, ...] = ()
 
     @staticmethod
     def _independent_candidate(
@@ -264,7 +97,7 @@ class RevenueForecastReconciler:
         return _independent_candidate(forecast, index, year)
 
     @property
-    def last_resolved_years(self) -> tuple[ResolvedRevenueYear, ...]:
+    def last_resolved_years(self) -> tuple[_ResolvedRevenueYear, ...]:
         """Return details from the most recent reconciliation call."""
 
         return self._last_resolved_years
@@ -283,7 +116,7 @@ class RevenueForecastReconciler:
         | Any
         | None = None,
         return_details: bool = False,
-    ) -> CompanyOperatingForecast | RevenueForecastReconciliation:
+    ) -> CompanyOperatingForecast | _contracts.RevenueForecastReconciliation:
         """Reconcile an independent company forecast without provider logic.
 
         ``historical_revenue`` is a normalized ``{fiscal_year: value}`` mapping.
@@ -316,7 +149,7 @@ class RevenueForecastReconciler:
         estimates = _normalize_consensus(consensus)
         estimates_by_year = _select_consensus_by_year(estimates)
 
-        resolved: list[ResolvedRevenueYear] = []
+        resolved: list[_ResolvedRevenueYear] = []
         warnings = list(forecast.warnings)
         for index, year in enumerate(forecast.fiscal_years):
             independent_value, independent_source, independent_confidence = (
@@ -444,7 +277,9 @@ class RevenueForecastReconciler:
             }
         )
         self._last_resolved_years = resolved_years
-        details = RevenueForecastReconciliation(reconciled_forecast, resolved_years)
+        details = _contracts.RevenueForecastReconciliation(
+            reconciled_forecast, resolved_years
+        )
         return details if return_details else reconciled_forecast
 
     def reconcile_with_details(
@@ -460,7 +295,7 @@ class RevenueForecastReconciler:
         | Mapping[Any, Any]
         | Any
         | None = None,
-    ) -> RevenueForecastReconciliation:
+    ) -> _contracts.RevenueForecastReconciliation:
         """Return the selected forecast together with per-year audit details."""
 
         return self.reconcile(
@@ -488,7 +323,7 @@ class RevenueForecastReconciler:
         management_anchor: Any = None,
         independent_source: str | None = None,
         independent_confidence: str | None = None,
-    ) -> ResolvedRevenueYear:
+    ) -> _ResolvedRevenueYear:
         """Resolve one year for callers that do not need a whole path.
 
         The positional form mirrors the small resolver contract used by the
@@ -633,7 +468,7 @@ class RevenueForecastReconciler:
         ):
             variance = (consensus_revenue / independent_value - Decimal(1)) * _PERCENT
 
-        return ResolvedRevenueYear(
+        return _ResolvedRevenueYear(
             fiscal_year=resolved_year,
             revenue=selected_value,
             source=source,
@@ -663,7 +498,7 @@ class RevenueForecastReconciler:
         | Mapping[Any, Any]
         | Any
         | None = None,
-    ) -> tuple[ResolvedRevenueYear, ...]:
+    ) -> tuple[_ResolvedRevenueYear, ...]:
         """Return only per-year selections while using the normal path logic."""
 
         return self.reconcile_with_details(
@@ -694,7 +529,7 @@ class RevenueForecastReconciler:
         | Mapping[Any, Any]
         | Any
         | None = None,
-    ) -> RevenueForecastReconciliation:
+    ) -> _contracts.RevenueForecastReconciliation:
         """Descriptive alias for :meth:`reconcile_with_details`."""
 
         return self.reconcile_with_details(
@@ -711,9 +546,9 @@ class RevenueForecastReconciler:
     def materialize_revenue_anchors(
         parameters: FcffForecastParameters,
         selected_revenue: CompanyOperatingForecast
-        | RevenueForecastReconciliation
+        | _contracts.RevenueForecastReconciliation
         | Mapping[Any, Any]
-        | Iterable[ResolvedRevenueYear],
+        | Iterable[_ResolvedRevenueYear],
     ) -> FcffForecastParameters:
         """Materialize selected absolute revenue into FCFF anchor fields."""
 
@@ -725,9 +560,9 @@ class RevenueForecastReconciler:
 def materialize_revenue_anchors(
     parameters: FcffForecastParameters,
     selected_revenue: CompanyOperatingForecast
-    | RevenueForecastReconciliation
+    | _contracts.RevenueForecastReconciliation
     | Mapping[Any, Any]
-    | Iterable[ResolvedRevenueYear],
+    | Iterable[_ResolvedRevenueYear],
 ) -> FcffForecastParameters:
     """Copy selected revenue into ``FcffForecastParameters`` without FCFF changes.
 
@@ -742,6 +577,9 @@ def materialize_revenue_anchors(
         # An explicit percentage path is the existing higher-priority FCFF
         # input and must not be silently converted to absolute anchors.
         return parameters
+
+    if isinstance(selected_revenue, CompanyOperatingForecast):
+        return _materialize_company_revenue_anchors(parameters, selected_revenue)
 
     records = _selection_records(selected_revenue)
     if not records:
@@ -788,9 +626,9 @@ def materialize_revenue_anchors(
 def materialize_selected_revenue(
     parameters: FcffForecastParameters,
     selected_revenue: CompanyOperatingForecast
-    | RevenueForecastReconciliation
+    | _contracts.RevenueForecastReconciliation
     | Mapping[Any, Any]
-    | Iterable[ResolvedRevenueYear],
+    | Iterable[_ResolvedRevenueYear],
 ) -> FcffForecastParameters:
     """Alias for :func:`materialize_revenue_anchors`."""
 
@@ -964,11 +802,11 @@ def _estimate_confidence(estimate: ForwardRevenueEstimate) -> str:
 
 def _selection_records(
     selected_revenue: CompanyOperatingForecast
-    | RevenueForecastReconciliation
+    | _contracts.RevenueForecastReconciliation
     | Mapping[Any, Any]
-    | Iterable[ResolvedRevenueYear],
+    | Iterable[_ResolvedRevenueYear],
 ) -> tuple[tuple[int, Decimal, str], ...]:
-    if isinstance(selected_revenue, RevenueForecastReconciliation):
+    if isinstance(selected_revenue, _contracts.RevenueForecastReconciliation):
         return tuple(
             (item.fiscal_year, item.revenue, item.source)
             for item in selected_revenue.resolved_years
@@ -999,7 +837,7 @@ def _selection_records(
                 raise ValueError(
                     f"Selected revenue contains an invalid fiscal year: {raw_year}"
                 )
-            if isinstance(raw_value, ResolvedRevenueYear):
+            if isinstance(raw_value, _ResolvedRevenueYear):
                 records.append((year, raw_value.revenue, raw_value.source))
                 continue
             source = _INDEPENDENT_SOURCE
@@ -1018,8 +856,8 @@ def _selection_records(
         raise ValueError("Selected revenue must be a forecast or year mapping")
     records = []
     for item in selected_revenue:
-        if not isinstance(item, ResolvedRevenueYear):
-            item = ResolvedRevenueYear.model_validate(item)
+        if not isinstance(item, _ResolvedRevenueYear):
+            item = _ResolvedRevenueYear.model_validate(item)
         records.append((item.fiscal_year, item.revenue, item.source))
     return tuple(records)
 
@@ -1273,24 +1111,8 @@ def _selection_source_rank(value: Any) -> int:
     return 1
 
 
-# Names used by callers that describe the same seam in operating rather than
-# revenue terminology.  They are aliases, not separate implementations.
-OperatingRevenueReconciler = RevenueForecastReconciler
-OperatingForecastReconciler = RevenueForecastReconciler
-ResolvedOperatingRevenue = ResolvedRevenueYear
-OperatingRevenueReconciliation = RevenueForecastReconciliation
-materialize_operating_revenue = materialize_revenue_anchors
-
-
 __all__ = [
-    "OperatingForecastReconciler",
-    "OperatingRevenueReconciler",
-    "OperatingRevenueReconciliation",
-    "ResolvedOperatingRevenue",
-    "ResolvedRevenueYear",
-    "RevenueForecastReconciliation",
     "RevenueForecastReconciler",
-    "materialize_operating_revenue",
     "materialize_revenue_anchors",
     "materialize_selected_revenue",
 ]

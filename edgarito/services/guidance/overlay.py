@@ -3,6 +3,12 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
+from edgarito.schemas.forecasting import (
+    FcffForecast,
+    FcffForecastDriver,
+    FcffForecastParameters,
+    ForecastAssumptionSource,
+)
 from edgarito.schemas.guidance.management import (
     GuidanceApplication,
     GuidanceBasis,
@@ -15,12 +21,6 @@ from edgarito.schemas.guidance.management import (
     GuidanceValueKind,
     ManagementGuidance,
     MonetaryForecastConstraint,
-)
-from edgarito.services.forecasting.models import (
-    FcffForecast,
-    FcffForecastDriver,
-    FcffForecastParameters,
-    ForecastAssumptionSource,
 )
 
 _CONSOLIDATED_REVENUE_NAMES = frozenset(

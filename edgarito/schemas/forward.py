@@ -190,19 +190,9 @@ class ForwardRevenueEstimateResult(BaseModel):
         return tuple(item.fiscal_year for item in self.estimates)
 
 
-# Names used by callers that describe the same result as a resolution rather
-# than a retrieval result.  They are aliases, not parallel models.
-ForwardRevenueEstimatesResult = ForwardRevenueEstimateResult
-ForwardRevenueEstimateResolution = ForwardRevenueEstimateResult
-ForwardEstimateDiagnostics = ForwardEstimateProviderDiagnostic
-
-
 __all__ = [
-    "ForwardEstimateDiagnostics",
     "ForwardEstimateProviderDiagnostic",
     "ForwardEstimateProviderStatus",
     "ForwardRevenueEstimate",
-    "ForwardRevenueEstimateResolution",
     "ForwardRevenueEstimateResult",
-    "ForwardRevenueEstimatesResult",
 ]

@@ -9,26 +9,27 @@ from edgarito.cli import main
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
-from edgarito.schemas.normalization.financials import (
-    FinancialConcept,
-    FinancialObservation,
-    NormalizedCompanyFinancials,
-)
-from edgarito.services.forecasting import (
-    AdaptiveMultistageFcffForecastService,
+from edgarito.schemas.forecasting import (
     FcffForecast,
     FcffForecastDriver,
     FcffForecastParameters,
-    FcffForecastService,
     ForecastAssumptionSource,
     ForecastSeedType,
     ForecastValue,
     ForwardGrowthEvidence,
     ForwardGrowthOutlook,
-    FreeCashFlowForecastService,
-    MonetaryForecastConstraint,
     SimplifiedFcfForecastParameters,
-    SimplifiedFcfForecastService,
+)
+from edgarito.schemas.guidance.management import MonetaryForecastConstraint
+from edgarito.schemas.normalization.financials import (
+    FinancialConcept,
+    FinancialObservation,
+    NormalizedCompanyFinancials,
+)
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.free_cash_flow import SimplifiedFcfForecastService
+from edgarito.services.forecasting.multistage import (
+    AdaptiveMultistageFcffForecastService,
 )
 from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 from edgarito.services.valuation import (
@@ -1300,8 +1301,7 @@ def test_adaptive_capex_shock_rolls_d_and_a_forward_from_post_shock_capex():
     )
 
 
-def test_generic_forecast_service_is_the_fcff_default():
-    assert FreeCashFlowForecastService is FcffForecastService
+def test_fcff_service_exposes_required_concepts():
     assert FcffForecastService.required_concepts() == (
         FinancialMetricsService.required_concepts({FinancialMetric.FCFF})
         | {FinancialConcept.REVENUE}

@@ -7,7 +7,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     DataReadiness,
     ModelRole,
     ModelSuitability,

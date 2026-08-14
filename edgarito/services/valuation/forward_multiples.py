@@ -6,20 +6,20 @@ from decimal import Decimal
 from statistics import median
 from typing import TYPE_CHECKING
 
-from edgarito.services.financial_observation_availability import (
+from edgarito.schemas.forecasting import FcffForecastParameters
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting.models import FcffForecastParameters
 from edgarito.services.valuation.historical_multiples import HistoricalMultiplesService
 from edgarito.services.valuation.models import (
     ComparableMultiplesReport,
     PeerMultipleSummary,
-    RelativeValuationBasis,
 )
 from edgarito.services.valuation.multiple_resolver import MultipleResolver
 
 if TYPE_CHECKING:
-    from edgarito.services.forecasting.fcff import FcffForecastService
+    from edgarito.services.forecasting._fcff.service import FcffForecastService
 
 
 class ForwardPeerMultiplesService:
@@ -27,7 +27,7 @@ class ForwardPeerMultiplesService:
 
     def __init__(self, forecast_service: FcffForecastService | None = None):
         if forecast_service is None:
-            from edgarito.services.forecasting.fcff import FcffForecastService
+            from edgarito.services.forecasting._fcff.service import FcffForecastService
 
             forecast_service = FcffForecastService()
         self._forecast_service = forecast_service

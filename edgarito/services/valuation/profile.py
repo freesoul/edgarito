@@ -13,8 +13,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
@@ -24,6 +23,7 @@ from edgarito.services.valuation.models import (
     ValuationProfile,
     ValuationProfileOverrides,
 )
+from edgarito.services.metrics import FinancialMetric, FinancialMetricsService
 
 
 class ValuationProfileBuilder:

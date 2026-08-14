@@ -1,7 +1,8 @@
 from decimal import Decimal
 from statistics import median
 
-from edgarito.services.financial_observation_availability import (
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
+from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
@@ -9,7 +10,6 @@ from edgarito.services.valuation.models import (
     HistoricalMultipleObservation,
     HistoricalMultipleSummary,
     MultipleStatus,
-    RelativeValuationBasis,
 )
 from edgarito.services.valuation.multiples import LtmMultiplesService
 

@@ -25,6 +25,12 @@ from pydantic import (
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.forecasting import (
+    FcffForecastDriver,
+    ForecastAssumptionSource,
+    ForecastSeedType,
+    ForecastValue,
+)
 from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -33,14 +39,7 @@ from edgarito.schemas.normalization.financials import (
 )
 from edgarito.schemas.red_flags import RedFlagCategory, RedFlagSeverity
 from edgarito.schemas.valuation.intrinsic import ValuationConfidence, WarningSeverity
-from edgarito.services.forecasting.models import (
-    FcffForecastDriver,
-    ForecastAssumptionSource,
-    ForecastSeedType,
-    ForecastValue,
-)
-from edgarito.services.metrics.models import FinancialMetric
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
@@ -53,6 +52,7 @@ from edgarito.services.valuation.models import (
     ValuationInput,
     ValuationModel,
 )
+from edgarito.services.metrics.models import FinancialMetric
 
 from ._utils import snapshot
 

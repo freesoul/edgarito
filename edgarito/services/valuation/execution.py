@@ -20,14 +20,16 @@ from edgarito.schemas.valuation.intrinsic import (
     ValuationRunResult,
     WarningSeverity,
 )
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     DataReadiness,
-    FcffDcfResult,
     ModelRole,
     ValuationInput,
     ValuationModel,
     ValuationProfile,
     ValuationSelection,
+)
+from edgarito.services.valuation.models import (
+    FcffDcfResult,
 )
 
 ValuationRunner = Callable[

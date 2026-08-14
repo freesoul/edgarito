@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from edgarito.schemas.forecasting import ForwardGrowthEvidence
 from edgarito.schemas.forward import (
     ForwardEstimateProviderDiagnostic,
     ForwardEstimateProviderStatus,
@@ -22,7 +23,6 @@ from edgarito.schemas.providers.yahoo.fundamentals import (
     YahooRevenueEstimateResponse,
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.forecasting.models import ForwardGrowthEvidence
 from edgarito.services.normalization.alphavantage import AlphaVantageNormalizer
 from edgarito.services.normalization.yahoo import YahooFinancialsNormalizer
 from edgarito.services.providers.alphavantage import AlphaVantageClient
@@ -274,18 +274,6 @@ class ForwardRevenueEstimateService:
             warnings=tuple(warnings),
             fallback_reason=fallback_reason or "no usable forward revenue estimates",
         )
-
-    async def retrieve(self, *args, **kwargs) -> ForwardRevenueEstimateResult:
-        """Compatibility alias for resolver-style callers."""
-
-        return await self.resolve(*args, **kwargs)
-
-    async def get_revenue_estimates(
-        self, *args, **kwargs
-    ) -> ForwardRevenueEstimateResult:
-        """Descriptive alias for :meth:`resolve`."""
-
-        return await self.resolve(*args, **kwargs)
 
     @staticmethod
     def to_growth_evidence(
@@ -668,17 +656,4 @@ class ForwardRevenueEstimateService:
                 return
 
 
-# Public names used by callers that prefer the resolver terminology.
-ForwardRevenueEstimateResolver = ForwardRevenueEstimateService
-ForwardEstimateResolver = ForwardRevenueEstimateService
-ForwardRevenueConsensusService = ForwardRevenueEstimateService
-ForwardEstimateService = ForwardRevenueEstimateService
-
-
-__all__ = [
-    "ForwardEstimateResolver",
-    "ForwardEstimateService",
-    "ForwardRevenueConsensusService",
-    "ForwardRevenueEstimateResolver",
-    "ForwardRevenueEstimateService",
-]
+__all__ = ["ForwardRevenueEstimateService"]

@@ -3,17 +3,16 @@ from decimal import Decimal
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
-from edgarito.schemas.normalization.financials import (
-    FinancialConcept,
-    FinancialObservation,
-    NormalizedCompanyFinancials,
-)
-from edgarito.services.forecasting.fcff import FcffForecastService
-from edgarito.services.forecasting.models import (
+from edgarito.schemas.forecasting import (
     ForecastAssumptionSource,
     SimplifiedFcfForecast,
     SimplifiedFcfForecastObservation,
     SimplifiedFcfForecastParameters,
+)
+from edgarito.schemas.normalization.financials import (
+    FinancialConcept,
+    FinancialObservation,
+    NormalizedCompanyFinancials,
 )
 
 
@@ -210,8 +209,4 @@ class SimplifiedFcfForecastService:
             return base_date.replace(year=base_date.year + years, day=28)
 
 
-# Keep the historical module-level import pointed at the new default.
-FreeCashFlowForecastService = FcffForecastService
-
-
-__all__ = ["FreeCashFlowForecastService", "SimplifiedFcfForecastService"]
+__all__ = ["SimplifiedFcfForecastService"]

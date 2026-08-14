@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
+import edgarito.services.operating.contracts as _contracts
+from edgarito.schemas.forecasting import (
+    AdaptiveMultistagePlan,
+    FcffForecast,
+    FcffForecastParameters,
+    ForecastAssumptionSource,
+    ForwardGrowthEvidence,
+)
 from edgarito.schemas.forward import ForwardRevenueEstimate
 from edgarito.schemas.operating import (
     CompanyOperatingForecast,
@@ -13,204 +20,21 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
-from edgarito.schemas.operating_history import OperatingHistoryAudit
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting import (
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.multistage import (
     AdaptiveMultistageFcffForecastService,
-    AdaptiveMultistagePlan,
-    FcffForecast,
-    FcffForecastParameters,
-    FcffForecastService,
-    ForecastAssumptionSource,
-    ForwardGrowthEvidence,
 )
-from edgarito.services.operating.forecast import (
+from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
 )
 from edgarito.services.operating.reconciliation import (
     RevenueForecastReconciler,
-    RevenueForecastReconciliation,
     materialize_revenue_anchors,
 )
-
-
-@dataclass(frozen=True)
-class OperatingForecastIntegrationResult:
-    """Independent, selected, and FCFF-ready outputs from one composition."""
-
-    independent_forecast: CompanyOperatingForecast
-    reconciled_forecast: CompanyOperatingForecast
-    reconciliation: RevenueForecastReconciliation
-    parameters: FcffForecastParameters
-
-    @property
-    def company_forecast(self) -> CompanyOperatingForecast:
-        return self.reconciled_forecast
-
-    @property
-    def reconciled(self) -> CompanyOperatingForecast:
-        return self.reconciled_forecast
-
-    @property
-    def details(self) -> RevenueForecastReconciliation:
-        return self.reconciliation
-
-    @property
-    def materialized_parameters(self) -> FcffForecastParameters:
-        return self.parameters
-
-    @property
-    def fcff_parameters(self) -> FcffForecastParameters:
-        return self.parameters
-
-    @property
-    def own_supported_years(self) -> tuple[int, ...]:
-        return self.reconciled_forecast.own_supported_years
-
-    @property
-    def consensus_years(self) -> tuple[int, ...]:
-        return self.reconciled_forecast.consensus_years
-
-    @property
-    def divergence_by_year(self) -> dict[int, Decimal]:
-        return self.reconciled_forecast.divergence_by_year
-
-    @property
-    def divergence(self) -> Decimal | None:
-        return self.reconciled_forecast.divergence
-
-    @property
-    def audit_diagnostics(self) -> dict[str, object]:
-        return self.reconciled_forecast.audit_diagnostics
-
-    @property
-    def diagnostics(self) -> dict[str, object]:
-        return self.audit_diagnostics
-
-    def materialize_revenue_anchors(
-        self, parameters: FcffForecastParameters
-    ) -> FcffForecastParameters:
-        return self.reconciled_forecast.materialize_revenue_anchors(parameters)
-
-
-@dataclass(frozen=True)
-class OperatingForecastPipelineResult:
-    """Operating reconciliation composed into the ordinary FCFF path."""
-
-    integration: OperatingForecastIntegrationResult
-    seed_forecast: FcffForecast
-    forecast: FcffForecast
-    adaptive_plan: AdaptiveMultistagePlan | None = None
-    forward_growth: ForwardGrowthEvidence | None = None
-    quality: OperatingForecastQualityResult | None = None
-
-    @property
-    def independent_forecast(self) -> CompanyOperatingForecast:
-        return self.integration.independent_forecast
-
-    @property
-    def reconciled_forecast(self) -> CompanyOperatingForecast:
-        return self.integration.reconciled_forecast
-
-    @property
-    def reconciliation(self) -> RevenueForecastReconciliation:
-        return self.integration.reconciliation
-
-    @property
-    def parameters(self) -> FcffForecastParameters:
-        return self.forecast.parameters
-
-    @property
-    def fcff_forecast(self) -> FcffForecast:
-        return self.forecast
-
-    @property
-    def fcff(self) -> FcffForecast:
-        return self.forecast
-
-    @property
-    def adaptive_multistage_plan(self) -> AdaptiveMultistagePlan | None:
-        return self.adaptive_plan
-
-    @property
-    def forecast_parameters(self) -> FcffForecastParameters:
-        return self.parameters
-
-    @property
-    def plan(self) -> AdaptiveMultistagePlan | None:
-        return self.adaptive_plan
-
-    @property
-    def warnings(self) -> tuple[str, ...]:
-        return tuple(
-            dict.fromkeys(
-                (
-                    *self.integration.reconciled_forecast.warnings,
-                    *self.forecast.warnings,
-                )
-            )
-        )
-
-    @property
-    def audit_diagnostics(self) -> dict[str, object]:
-        return self.integration.audit_diagnostics
-
-    @property
-    def diagnostics(self) -> dict[str, object]:
-        return self.audit_diagnostics
-
-
-@dataclass(frozen=True)
-class OperatingForecastQualityResult:
-    """Deterministic activation decision for structured operating evidence."""
-
-    accepted: bool
-    reason: str
-    definitions_count: int = 0
-    observations_count: int = 0
-    driver_coverage: Decimal | None = None
-    modeled_revenue_share: Decimal | None = None
-    reconstruction_error: Decimal | None = None
-    confidence: str | None = None
-    own_supported_years: tuple[int, ...] = ()
-    consensus_years: tuple[int, ...] = ()
-    transition_start_year: int | None = None
-    warnings: tuple[str, ...] = ()
-    audit_records: tuple[Any, ...] = ()
-    document_audits: tuple[Any, ...] = ()
-    unusable_evidence: tuple[str, ...] = ()
-    history_audit: OperatingHistoryAudit | None = None
-    cache_hits: int = 0
-    cache_misses: int = 0
-    filings_inspected: int = 0
-    documents_inspected: int = 0
-    raw_filings_received: int = 0
-    raw_filings_in_range: int = 0
-    candidate_filings: int = 0
-    filing_inventory_cache_bypass: bool = False
-    filing_inventory_fetched_live: bool = False
-    filing_inventory_metadata: tuple[str, ...] = ()
-    vocabulary_audit: Any | None = None
-    vocabulary_terms: tuple[Any, ...] = ()
-    exhibits_found: int = 0
-    gaps_resolved_sec: tuple[Any, ...] = ()
-    gaps_resolved_ir: tuple[Any, ...] = ()
-    ir_diagnostic: str | None = None
-
-    @property
-    def status(self) -> str:
-        return "active" if self.accepted else "rejected"
-
-
-class OperatingForecastQualityError(ValueError):
-    """Raised when structured operating evidence fails the activation gate."""
-
-    def __init__(self, result: OperatingForecastQualityResult) -> None:
-        self.result = result
-        super().__init__(result.reason)
 
 
 class OperatingForecastIntegrationService:
@@ -245,7 +69,7 @@ class OperatingForecastIntegrationService:
         *,
         fcff_parameters: FcffForecastParameters | None = None,
         company_id: str = "company",
-    ) -> OperatingForecastIntegrationResult:
+    ) -> _contracts.OperatingForecastIntegrationResult:
         if parameters is not None and fcff_parameters is not None:
             raise ValueError("Pass either parameters or fcff_parameters, not both")
         parameters = fcff_parameters or parameters
@@ -321,7 +145,7 @@ class OperatingForecastIntegrationService:
             management_anchors=management_anchors,
         )
         materialized = materialize_revenue_anchors(parameters, reconciliation)
-        return OperatingForecastIntegrationResult(
+        return _contracts.OperatingForecastIntegrationResult(
             independent_forecast=independent,
             reconciled_forecast=reconciliation.forecast,
             reconciliation=reconciliation,
@@ -331,9 +155,6 @@ class OperatingForecastIntegrationService:
     forecast = integrate
     compose = integrate
     run = integrate
-
-
-OperatingForecastIntegration = OperatingForecastIntegrationService
 
 
 class OperatingForecastPipelineService:
@@ -391,7 +212,7 @@ class OperatingForecastPipelineService:
             ObservationAvailabilityMode.POINT_IN_TIME
         ),
         company_id: str | None = None,
-    ) -> OperatingForecastPipelineResult:
+    ) -> _contracts.OperatingForecastPipelineResult:
         """Compose the operating selection before adaptive FCFF arithmetic."""
 
         if parameters is not None and fcff_parameters is not None:
@@ -422,7 +243,7 @@ class OperatingForecastPipelineService:
         values["observations"] = _as_items(values.get("observations") or ())
         initial_quality = self.quality_gate(values)
         if not initial_quality.accepted:
-            raise OperatingForecastQualityError(initial_quality)
+            raise _contracts.OperatingForecastQualityError(initial_quality)
         if consensus is not None:
             if consensus_estimates not in ((), None):
                 raise ValueError(
@@ -461,7 +282,7 @@ class OperatingForecastPipelineService:
         )
         quality = self.quality_gate(values, integration.reconciled_forecast)
         if not quality.accepted:
-            raise OperatingForecastQualityError(quality)
+            raise _contracts.OperatingForecastQualityError(quality)
         operating_seed = self.fcff_service.forecast(
             financials,
             integration.parameters,
@@ -484,7 +305,7 @@ class OperatingForecastPipelineService:
         )
 
         if terminal_growth_rate is None or adaptive_configuration is None:
-            return OperatingForecastPipelineResult(
+            return _contracts.OperatingForecastPipelineResult(
                 integration=integration,
                 seed_forecast=operating_seed,
                 forecast=operating_seed,
@@ -513,7 +334,7 @@ class OperatingForecastPipelineService:
             integration.reconciled_forecast,
             additional_warnings=tuple(values.get("warnings") or ()),
         )
-        return OperatingForecastPipelineResult(
+        return _contracts.OperatingForecastPipelineResult(
             integration=integration,
             seed_forecast=operating_seed,
             forecast=forecast,
@@ -526,7 +347,7 @@ class OperatingForecastPipelineService:
     def quality_gate(
         evidence: Any,
         operating_forecast=None,
-    ) -> OperatingForecastQualityResult:
+    ) -> _contracts.OperatingForecastQualityResult:
         """Return whether evidence is safe to activate in the FCFF path.
 
         The gate deliberately consumes the existing deterministic forecast audit
@@ -577,7 +398,7 @@ class OperatingForecastPipelineService:
         else:
             reason = "Operating forecast quality gate passed"
             accepted = True
-        return OperatingForecastQualityResult(
+        return _contracts.OperatingForecastQualityResult(
             accepted=accepted,
             reason=reason,
             definitions_count=definitions_count,
@@ -612,7 +433,7 @@ class OperatingForecastPipelineService:
         provider,
         parameters: FcffForecastParameters,
         **kwargs: Any,
-    ) -> OperatingForecastPipelineResult:
+    ) -> _contracts.OperatingForecastPipelineResult:
         """Resolve structured evidence from an injected provider and forecast.
 
         ``provider`` may expose either synchronous or asynchronous
@@ -641,7 +462,7 @@ class OperatingForecastPipelineService:
         provider,
         parameters: FcffForecastParameters,
         **kwargs: Any,
-    ) -> OperatingForecastPipelineResult:
+    ) -> _contracts.OperatingForecastPipelineResult:
         """Async counterpart for an injected discovery implementation."""
 
         retrieve = getattr(provider, "discover", None) or getattr(
@@ -804,7 +625,7 @@ def _anchors_by_source(
 
 
 def _reconciliation_growth_evidence(
-    reconciliation: RevenueForecastReconciliation,
+    reconciliation: _contracts.RevenueForecastReconciliation,
     *,
     base_revenue: Decimal,
 ) -> ForwardGrowthEvidence | None:
@@ -910,13 +731,8 @@ def _merge_operating_growth_evidence(
 merge_operating_growth_evidence = _merge_operating_growth_evidence
 
 __all__ = [
-    "OperatingForecastIntegration",
-    "OperatingForecastIntegrationResult",
     "OperatingForecastIntegrationService",
-    "OperatingForecastPipelineResult",
     "OperatingForecastPipelineService",
-    "OperatingForecastQualityError",
-    "OperatingForecastQualityResult",
     "merge_operating_growth_evidence",
 ]
 

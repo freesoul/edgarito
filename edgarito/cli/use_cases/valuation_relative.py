@@ -23,7 +23,11 @@ from edgarito.schemas.valuation.relative import (
     ForwardValuationMetric,
     RelativeNumeratorBasis,
 )
-from edgarito.services.financial_observation_availability import (
+from edgarito.schemas.valuation.selection import (
+    MultipleConfidence,
+    RelativeValuationBasis,
+)
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
 from edgarito.services.valuation import (
@@ -38,11 +42,7 @@ from edgarito.services.valuation.intrinsic import (
     SotpValuationInput,
     SotpValuationService,
 )
-from edgarito.services.valuation.models import (
-    MultipleConfidence,
-    RelativeValuationBasis,
-    ResolvedMultiple,
-)
+from edgarito.services.valuation.models import ResolvedMultiple
 from edgarito.services.valuation.relative import (
     EQUITY_RELATIVE_BASES,
     ProviderNeutralRelativeValuationService,

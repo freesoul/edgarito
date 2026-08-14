@@ -8,18 +8,18 @@ from copy import deepcopy
 from typing import Any
 
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.forecasting import (
+    AdaptiveMultistagePlan,
+    FcffForecast,
+    SimplifiedFcfForecast,
+)
 from edgarito.schemas.normalization.financials import (
     NormalizedCompanyFinancials,
 )
 from edgarito.schemas.red_flags import RedFlagsReport
 from edgarito.schemas.valuation.intrinsic import ValuationRunResult
-from edgarito.services.forecasting.models import (
-    AdaptiveMultistagePlan,
-    FcffForecast,
-    SimplifiedFcfForecast,
-)
+from edgarito.schemas.valuation.selection import ValuationProfile
 from edgarito.services.metrics.models import CompanyMetrics
-from edgarito.services.valuation.models import ValuationProfile
 
 from ._utils import max_period_end, snapshot
 from .models import (

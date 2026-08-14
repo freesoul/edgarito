@@ -34,8 +34,8 @@ from edgarito.schemas.valuation.intrinsic import (
     ValuedSotpComponent,
     WarningSeverity,
 )
+from edgarito.schemas.valuation.selection import ValuationModel
 from edgarito.services.valuation.discounting import PresentValueService
-from edgarito.services.valuation.models import ValuationModel
 
 _HUNDRED = Decimal(100)
 

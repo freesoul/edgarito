@@ -24,12 +24,13 @@ from edgarito.cli.use_cases.forward_assumptions import (
 )
 from edgarito.config.valuation import ForecastValuationProfile
 from edgarito.enums.market import Market
+from edgarito.schemas.forecasting import FcffForecastParameters
 from edgarito.schemas.guidance.management import GuidanceOverlayResult
 from edgarito.schemas.normalization.financials import FinancialConcept
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
+from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.valuation import (
     FcffDcfCapitalBridgeResolver,
     ValuationProfileBuilder,

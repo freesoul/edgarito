@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from edgarito.enums.edgar.period import FiscalPeriod
-from edgarito.services.forecasting.models import ForecastSeedType
+from edgarito.schemas.forecasting import ForecastSeedType
 
 PERCENT = Decimal(100)
 

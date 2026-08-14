@@ -19,18 +19,20 @@ from edgarito.config.valuation import (
 )
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
-from edgarito.services.valuation import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
     PeerEvidenceGroup,
-    PeerSelectionParameters,
     RelativeValuationBasis,
-    TerminalRoicResolver,
     ValuationInput,
     ValuationProfile,
     ValuationProfileOverrides,
+)
+from edgarito.services.valuation import (
+    PeerSelectionParameters,
+    TerminalRoicResolver,
 )
 
 ROOT = Path(__file__).parents[1]

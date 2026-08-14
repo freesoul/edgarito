@@ -12,7 +12,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.valuation.models import BusinessArchetype
+from edgarito.schemas.valuation.selection import BusinessArchetype
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from pathlib import Path
 from edgarito.cli import main
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import FcffForecastParameters
 from edgarito.schemas.guidance.management import (
     GuidanceBasis,
     GuidanceMetric,
@@ -20,7 +21,7 @@ from edgarito.schemas.normalization.financials import (
     ObservationDerivationKind,
 )
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts
-from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
+from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.normalization.sec_us_gaap import SecUsGaapNormalizer
 

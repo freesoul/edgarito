@@ -85,36 +85,43 @@ from edgarito.schemas.valuation.relative import (
     ForwardValuationMetric,
     RelativeNumeratorBasis,
 )
+from edgarito.schemas.valuation.selection import (
+    BusinessArchetype,
+    CompanyLifecycle,
+    Cyclicality,
+    EconomicTrait,
+    MultipleConfidence,
+    RelativeValuationBasis,
+    ValuationInput,
+    ValuationModel,
+    ValuationProfileOverrides,
+)
 from edgarito.schemas.valuation.specialized import SpecializedInputType
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.export import (
     ValuationExcelRenderer,
 )
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting import (
-    AdaptiveMultistageFcffForecastService,
-    FcffForecastService,
-)
+from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.forward_estimates import (
     ForwardRevenueEstimateService,
 )
-from edgarito.services.operating import (
-    OperatingForecastPipelineService,
+from edgarito.services.forecasting.multistage import (
+    AdaptiveMultistageFcffForecastService,
+)
+from edgarito.services.operating.contracts import (
     OperatingForecastQualityError,
     OperatingForecastQualityResult,
 )
+from edgarito.services.operating.integration import OperatingForecastPipelineService
 from edgarito.services.providers.edgar import EdgarClient
 from edgarito.services.valuation import (
-    BusinessArchetype,
     CashFlowTiming,
-    CompanyLifecycle,
     ComparableImpliedValuationService,
-    Cyclicality,
     DecisionScenarioPolicy,
     DecisionValuationService,
-    EconomicTrait,
     FcffDcfCapitalBridgeResolver,
     FcffDcfParameters,
     FcffDcfService,
@@ -122,17 +129,14 @@ from edgarito.services.valuation import (
     HistoricalMultiplesService,
     IntrinsicDecisionContext,
     MultipleResolver,
-    RelativeValuationBasis,
     ShareRepurchaseParameters,
     SpecializedValuationExtractor,
     TerminalMetric,
     TerminalRoicResolver,
     TerminalValueMethod,
     ValuationAssumptionResolver,
-    ValuationInput,
     ValuationModelSelector,
     ValuationProfileBuilder,
-    ValuationProfileOverrides,
 )
 from edgarito.services.valuation.assumptions import CostOfEquityResolver
 from edgarito.services.valuation.execution import ValuationExecutor
@@ -146,11 +150,7 @@ from edgarito.services.valuation.intrinsic import (
     ResourceNavAdapter,
     SotpValuationService,
 )
-from edgarito.services.valuation.models import (
-    MultipleConfidence,
-    ResolvedMultiple,
-    ValuationModel,
-)
+from edgarito.services.valuation.models import ResolvedMultiple
 from edgarito.services.valuation.relative import (
     EQUITY_RELATIVE_BASES,
     ProviderNeutralRelativeValuationService,

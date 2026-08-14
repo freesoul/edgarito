@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from edgarito.services.forecasting import (
+from edgarito.schemas.forecasting import (
     FcffForecast,
     ForecastAssumptionSource,
     SimplifiedFcfForecast,

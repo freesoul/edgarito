@@ -19,7 +19,7 @@ from edgarito.schemas.valuation.assumptions import (
     ValuationAssumption,
     ValuationAssumptionKind,
 )
-from edgarito.services.valuation.models import CompanyLifecycle, Cyclicality
+from edgarito.schemas.valuation.selection import CompanyLifecycle, Cyclicality
 
 
 @dataclass(frozen=True)

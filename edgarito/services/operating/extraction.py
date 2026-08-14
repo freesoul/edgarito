@@ -1194,12 +1194,6 @@ def _scope_or_discontinuity_reason(
     return None
 
 
-# Common names used by discovery callers; aliases avoid parallel extractors.
-OpenAIOperatingEvidenceExtractor = OperatingEvidenceExtractor
-OperatingDriverExtractor = OperatingEvidenceExtractor
-OperatingForecastExtractor = OperatingEvidenceExtractor
-
-
 __all__ = [
     "CONTEXT_VERSION",
     "EXTRACTION_INSTRUCTIONS",
@@ -1207,11 +1201,8 @@ __all__ = [
     "OPERATING_CONTEXT_VERSION",
     "OPERATING_PROMPT_VERSION",
     "OPERATING_SCHEMA_VERSION",
-    "OpenAIOperatingEvidenceExtractor",
-    "OperatingDriverExtractor",
     "OperatingEvidenceExtractionError",
     "OperatingEvidenceExtractor",
-    "OperatingForecastExtractor",
     "operating_keyword_hits",
     "PROMPT_VERSION",
     "SCHEMA_VERSION",

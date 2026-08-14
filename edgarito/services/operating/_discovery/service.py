@@ -1,38 +1,22 @@
 """Orchestrate failure-isolated SEC and IR discovery for operating evidence."""
 
-# Private helper imports are retained as compatibility re-exports.
-# ruff: noqa: F401
-
 from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
 from typing import Any
 
-from edgarito.schemas.operating import (
-    OperatingDriverDefinition,
-    OperatingDriverObservation,
-    OperatingSegment,
-)
-from edgarito.services.guidance.documents import (
-    GuidanceDocumentSelector,
-    clean_document_text,
-    extract_operating_context,
-    guidance_keyword_hits,
-    is_exhibit_document,
-    is_periodic_filing,
-)
-from edgarito.services.openai import OpenAIAuthenticationError
-from edgarito.services.operating._discovery import audit, documents, ir, recovery
+from edgarito.services.guidance.documents import GuidanceDocumentSelector
 from edgarito.services.operating._discovery.audit import (
     finalize_history_audit,
     merge_vocabulary_audits,
 )
+from edgarito.services.operating._discovery.contracts import DiscoveryState
 from edgarito.services.operating._discovery.contracts import (
-    DiscoveryState,
-    OperatingForecastDiscovery,
-    OperatingForecastDiscoveryResult,
-    OperatingIrFallback,
+    OperatingForecastDiscoveryResult as _OperatingForecastDiscoveryResult,
+)
+from edgarito.services.operating._discovery.contracts import (
+    OperatingIrFallback as _OperatingIrFallback,
 )
 from edgarito.services.operating._discovery.documents import (
     collect_sec_documents,
@@ -42,18 +26,11 @@ from edgarito.services.operating._discovery.documents import (
 from edgarito.services.operating._discovery.ir import recover_from_ir
 from edgarito.services.operating._discovery.recovery import (
     _assemble,
-    append_unique,
-    gap_terms,
-    merge_extraction_entry,
-    merge_segment_identity,
     recover_sec_gaps,
     retry_vocabulary,
-    targeted_gap_context,
-    targeted_gap_documents,
 )
 from edgarito.services.operating.extraction import (
     OperatingEvidenceExtractor,
-    operating_keyword_hits,
 )
 from edgarito.services.operating.history import OperatingHistoryAssembler
 from edgarito.services.operating.vocabulary import KpiVocabularyProvider
@@ -76,7 +53,7 @@ class OperatingEvidenceDiscoveryService:
         max_gap_documents: int = 4,
         history_assembler: OperatingHistoryAssembler | None = None,
         vocabulary_provider: KpiVocabularyProvider | None = None,
-        ir_fallback: OperatingIrFallback | None = None,
+        ir_fallback: _OperatingIrFallback | None = None,
     ) -> None:
         self._edgar = edgar
         self._extractor = extractor
@@ -105,12 +82,12 @@ class OperatingEvidenceDiscoveryService:
         sector: str | None = None,
         business_archetype: Any | None = None,
         profile_metadata: Mapping[str, Any] | None = None,
-    ) -> OperatingForecastDiscoveryResult:
+    ) -> _OperatingForecastDiscoveryResult:
         """Coordinate inventory, extraction, recovery, and audit assembly."""
 
         del sector  # retained in the public seam for provider-neutral callers
         if valuation_date is not None and valuation_date != as_of:
-            return OperatingForecastDiscoveryResult(
+            return _OperatingForecastDiscoveryResult(
                 warnings=(
                     "Operating evidence discovery skipped: as_of and "
                     "valuation_date differ",
@@ -136,7 +113,7 @@ class OperatingEvidenceDiscoveryService:
             fiscal_years=fiscal_years,
         )
         if preparation is None:
-            return OperatingForecastDiscoveryResult(
+            return _OperatingForecastDiscoveryResult(
                 warnings=tuple((*warnings, preparation_warning or ""))
             )
 
@@ -240,7 +217,7 @@ class OperatingEvidenceDiscoveryService:
                 "unusable"
             )
 
-        return OperatingForecastDiscoveryResult(
+        return _OperatingForecastDiscoveryResult(
             segments=tuple(state.segments),
             definitions=tuple(state.definitions),
             observations=tuple(state.observations),
@@ -282,7 +259,7 @@ class OperatingEvidenceDiscoveryService:
             ir_diagnostic=ir_diagnostic,
         )
 
-    async def retrieve(self, **kwargs: Any) -> OperatingForecastDiscoveryResult:
+    async def retrieve(self, **kwargs: Any) -> _OperatingForecastDiscoveryResult:
         """ManagementGuidanceService-compatible name for discovery callers."""
 
         return await self.discover(**kwargs)
@@ -293,13 +270,13 @@ class OperatingEvidenceDiscoveryService:
         *,
         as_of: datetime.date,
         **kwargs: Any,
-    ) -> OperatingForecastDiscoveryResult:
+    ) -> _OperatingForecastDiscoveryResult:
         """Discover by a provider-neutral company identifier when it is a CIK."""
 
         try:
             cik = int(company_id)
         except (TypeError, ValueError):
-            return OperatingForecastDiscoveryResult(
+            return _OperatingForecastDiscoveryResult(
                 warnings=(
                     "Operating evidence discovery requires a numeric SEC CIK "
                     "when no ticker resolver is supplied",
@@ -307,57 +284,6 @@ class OperatingEvidenceDiscoveryService:
             )
         return await self.discover(cik=cik, as_of=as_of, **kwargs)
 
-    # Compatibility seams for callers that used the former monolith's helpers.
-    _append_unique = staticmethod(append_unique)
-    _gap_terms = staticmethod(gap_terms)
-    _targeted_gap_documents = classmethod(
-        lambda cls, retry_documents, gaps, vocabulary_terms: targeted_gap_documents(
-            retry_documents, gaps, vocabulary_terms
-        )
-    )
-    _targeted_gap_context = classmethod(
-        lambda cls, clean_text, gaps, vocabulary_terms, **kwargs: targeted_gap_context(
-            clean_text, gaps, vocabulary_terms, **kwargs
-        )
-    )
-    _merge_extraction_entry = classmethod(
-        lambda cls, entry, **kwargs: merge_extraction_entry(
-            entry,
-            state=DiscoveryState(
-                segments=kwargs["segments"],
-                definitions=kwargs["definitions"],
-                observations=kwargs["observations"],
-                programs=kwargs["programs"],
-                management_constraints=kwargs["management_constraints"],
-                rejected=kwargs["rejected"],
-                audit_records=kwargs["audit_records"],
-                seen_segments=kwargs["seen_segments"],
-                seen_definitions=kwargs["seen_definitions"],
-                seen_observations=kwargs["seen_observations"],
-                seen_programs=kwargs["seen_programs"],
-                unsupported=kwargs["unsupported"],
-                missing=kwargs["missing"],
-                unusable=kwargs["unusable"],
-                warnings=kwargs["warnings"],
-            ),
-        )
-    )
-
-
-# Descriptive aliases for the common naming conventions.
-OperatingForecastDiscoveryService = OperatingEvidenceDiscoveryService
-OperatingDriverDiscoveryService = OperatingEvidenceDiscoveryService
-OperatingEvidenceDiscovery = OperatingEvidenceDiscoveryService
-_merge_segment_identity = merge_segment_identity
-_merge_vocabulary_audits = merge_vocabulary_audits
-
-
 __all__ = [
-    "OperatingDriverDiscoveryService",
-    "OperatingEvidenceDiscovery",
     "OperatingEvidenceDiscoveryService",
-    "OperatingForecastDiscovery",
-    "OperatingForecastDiscoveryResult",
-    "OperatingForecastDiscoveryService",
-    "OperatingIrFallback",
 ]

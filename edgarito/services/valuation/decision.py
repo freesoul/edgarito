@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
-from edgarito.services.financial_observation_availability import (
-    ObservationAvailabilityMode,
-)
-from edgarito.services.forecasting.models import (
+from edgarito.schemas.forecasting import (
     FcffForecast,
     FcffForecastParameters,
     ForwardGrowthEvidence,
+)
+from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
+from edgarito.services.financials.availability import (
+    ObservationAvailabilityMode,
 )
 from edgarito.services.valuation.decision_models import (
     DecisionScenario,
@@ -133,7 +133,7 @@ class IntrinsicDecisionEngine:
         ):
             raise ValueError("Decision analysis currently requires perpetuity growth")
         self.context = context
-        from edgarito.services.forecasting import FcffForecastService
+        from edgarito.services.forecasting._fcff.service import FcffForecastService
 
         self._forecast_service = FcffForecastService()
 
@@ -194,7 +194,7 @@ class IntrinsicDecisionEngine:
             adaptive_seed = (
                 context.base_forecast if preserve_projection_structure else forecast
             )
-            from edgarito.services.forecasting import (
+            from edgarito.services.forecasting.multistage import (
                 AdaptiveMultistageFcffForecastService,
             )
 

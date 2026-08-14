@@ -10,6 +10,7 @@ from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
+from edgarito.schemas.forecasting import FcffForecastParameters
 from edgarito.schemas.forward import ForwardRevenueEstimate
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -22,12 +23,14 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
-from edgarito.services.forecasting import FcffForecastParameters, FcffForecastService
-from edgarito.services.operating import (
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.operating._discovery.service import (
     OperatingEvidenceDiscoveryService,
+)
+from edgarito.services.operating.contracts import OperatingForecastQualityError
+from edgarito.services.operating.integration import (
     OperatingForecastIntegrationService,
     OperatingForecastPipelineService,
-    OperatingForecastQualityError,
 )
 
 

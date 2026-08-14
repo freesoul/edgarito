@@ -8,13 +8,7 @@ from typing import Any
 
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
-from edgarito.schemas.normalization.financials import (
-    FinancialConcept,
-    FinancialObservation,
-    NormalizedCompanyFinancials,
-)
-from edgarito.services.forecasting._fcff.contracts import PERCENT
-from edgarito.services.forecasting.models import (
+from edgarito.schemas.forecasting import (
     FcffForecast,
     FcffForecastDriver,
     FcffForecastObservation,
@@ -22,6 +16,12 @@ from edgarito.services.forecasting.models import (
     ForecastSeedType,
     ForecastValue,
 )
+from edgarito.schemas.normalization.financials import (
+    FinancialConcept,
+    FinancialObservation,
+    NormalizedCompanyFinancials,
+)
+from edgarito.services.forecasting._fcff.contracts import PERCENT
 from edgarito.services.metrics.calculator import operating_working_capital_value
 
 _ECONOMIC_AUDIT_FIELDS = (

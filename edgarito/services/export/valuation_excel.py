@@ -12,8 +12,9 @@ from typing import Any, Literal
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 
+from edgarito.schemas.forecasting import FcffForecast, ForecastSeedType
 from edgarito.schemas.valuation.relative import ProviderNeutralRelativeValuation
-from edgarito.services.forecasting.models import FcffForecast, ForecastSeedType
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
 from edgarito.services.valuation.discounting import (
     PresentValueService,
     TerminalValueService,
@@ -24,7 +25,6 @@ from edgarito.services.valuation.models import (
     ComparableMultiplesReport,
     FcffDcfResult,
     MultipleStatus,
-    RelativeValuationBasis,
     TerminalMetric,
     TerminalValueMethod,
 )

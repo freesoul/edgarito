@@ -218,7 +218,6 @@ class ArchetypeFormulaRegistry:
 
 
 FORMULA_REGISTRY = ArchetypeFormulaRegistry()
-OperatingFormulaRegistry = ArchetypeFormulaRegistry
 
 
 __all__ = [
@@ -226,7 +225,6 @@ __all__ = [
     "FORMULA_REGISTRY",
     "ArchetypeFormulaRegistry",
     "Formula",
-    "OperatingFormulaRegistry",
     "backlog_conversion",
     "capacity_utilization_price",
     "generic_segment_growth",

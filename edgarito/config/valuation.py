@@ -9,6 +9,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from edgarito.schemas.forecasting import (
+    FcffForecastParameters,
+    SimplifiedFcfForecastParameters,
+)
 from edgarito.schemas.normalization.classification import Sector
 from edgarito.schemas.valuation.intrinsic import (
     PipelineProject,
@@ -17,23 +21,21 @@ from edgarito.schemas.valuation.intrinsic import (
     SotpAdjustment,
     SotpComponent,
 )
-from edgarito.services.forecasting.models import (
-    FcffForecastParameters,
-    SimplifiedFcfForecastParameters,
-)
-from edgarito.services.valuation.models import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
-    CashFlowTiming,
     CompanyLifecycle,
     Cyclicality,
     EconomicTrait,
     FinancialInstitutionKind,
     RelativeValuationBasis,
-    TerminalMetric,
-    TerminalValueMethod,
     ValuationInput,
     ValuationProfile,
     _normalize_peer_evidence_group,
+)
+from edgarito.services.valuation.models import (
+    CashFlowTiming,
+    TerminalMetric,
+    TerminalValueMethod,
 )
 
 DEFAULT_VALUATION_PROFILE_PATH = Path("configs/valuation/default.json")

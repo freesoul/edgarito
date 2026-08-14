@@ -2,6 +2,13 @@ import datetime
 from decimal import Decimal
 
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import (
+    AdaptiveMultistagePlan,
+    FcffForecast,
+    FcffForecastDcfStub,
+    FcffForecastObservation,
+    ForecastSeedType,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -11,16 +18,9 @@ from edgarito.schemas.valuation.assumptions import (
     ValuationAssumptionKind,
     ValuationAssumptionSet,
 )
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
-)
-from edgarito.services.forecasting.models import (
-    AdaptiveMultistagePlan,
-    FcffForecast,
-    FcffForecastDcfStub,
-    FcffForecastObservation,
-    ForecastSeedType,
 )
 from edgarito.services.valuation.discounting import (
     PresentValueService,
@@ -668,7 +668,7 @@ class FcffDcfService:
                     "fair-value path"
                 )
 
-        from edgarito.services.forecasting.fcff import FcffForecastService
+        from edgarito.services.forecasting._fcff.service import FcffForecastService
 
         forecast_service = FcffForecastService()
         identity_issues = forecast_service.economic_identity_issues(forecast)

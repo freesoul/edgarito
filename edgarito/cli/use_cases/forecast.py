@@ -13,10 +13,12 @@ from edgarito.config.valuation import (
 )
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
-from edgarito.services.forecasting import (
+from edgarito.schemas.forecasting import (
     FcffForecastParameters,
-    FcffForecastService,
     SimplifiedFcfForecastParameters,
+)
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.free_cash_flow import (
     SimplifiedFcfForecastService,
 )
 from edgarito.services.valuation import DepreciableAssetLifeResolver

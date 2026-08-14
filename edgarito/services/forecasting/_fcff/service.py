@@ -1,8 +1,4 @@
-"""Orchestration facade for annual driver-based FCFF forecasting."""
-
-# The service intentionally re-exports the former private implementation names
-# for the compatibility facade and host applications.
-# ruff: noqa: F401
+"""Orchestration for annual driver-based FCFF forecasting."""
 
 from __future__ import annotations
 
@@ -10,14 +6,18 @@ import datetime
 from decimal import Decimal
 from typing import Optional
 
-from edgarito.enums.edgar.period import FiscalPeriod
-from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import (
+    FcffForecast,
+    FcffForecastParameters,
+    ForecastSeedType,
+    ForecastValue,
+)
+from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
-    FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
@@ -51,11 +51,6 @@ from edgarito.services.forecasting._fcff.context import (
     quarter_index,
     raise_missing_inputs,
 )
-from edgarito.services.forecasting._fcff.contracts import (
-    PERCENT,
-    _ForecastContext,
-    _HistoricalDrivers,
-)
 from edgarito.services.forecasting._fcff.paths import (
     current_run_rate_growth,
     driver_paths,
@@ -63,14 +58,6 @@ from edgarito.services.forecasting._fcff.paths import (
     expand_path,
     historical_fcff,
     historical_values,
-)
-from edgarito.services.forecasting.models import (
-    FcffForecast,
-    FcffForecastDriver,
-    FcffForecastParameters,
-    ForecastSeedType,
-    ForecastValue,
-    MonetaryForecastConstraint,
 )
 from edgarito.services.metrics.calculator import (
     OPERATING_WORKING_CAPITAL_CONCEPTS,
@@ -333,8 +320,4 @@ class FcffForecastService:
         return future_date(base_date, years)
 
 
-# Preserve the old generic service import while changing its semantics to FCFF.
-FreeCashFlowForecastService = FcffForecastService
-
-
-__all__ = ["FcffForecastService", "FreeCashFlowForecastService"]
+__all__ = ["FcffForecastService"]

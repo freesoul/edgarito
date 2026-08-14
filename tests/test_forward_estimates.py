@@ -9,6 +9,11 @@ import edgarito.cli.__main__ as cli_module
 from edgarito.config.valuation import MultistageValuationConfiguration
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import (
+    FcffForecastParameters,
+    ForecastAssumptionSource,
+    ForwardGrowthEvidence,
+)
 from edgarito.schemas.forward import (
     ForwardRevenueEstimate,
     ForwardRevenueEstimateResult,
@@ -22,14 +27,13 @@ from edgarito.schemas.providers.alphavantage.fundamentals import (
     EarningsEstimatesResponse,
 )
 from edgarito.schemas.providers.yahoo.fundamentals import YahooRevenueEstimateResponse
-from edgarito.services.forecasting import (
-    AdaptiveMultistageFcffForecastService,
-    FcffForecastParameters,
-    FcffForecastService,
-    ForecastAssumptionSource,
-    ForwardGrowthEvidence,
+from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.forecasting.forward_estimates import (
+    ForwardRevenueEstimateService,
 )
-from edgarito.services.forward_estimates import ForwardRevenueEstimateService
+from edgarito.services.forecasting.multistage import (
+    AdaptiveMultistageFcffForecastService,
+)
 
 
 def _observation(concept, value, year):

@@ -1,3 +1,5 @@
+"""Provider-neutral financial-observation availability policy."""
+
 import datetime
 from enum import Enum
 

@@ -16,13 +16,15 @@ from edgarito.schemas.normalization.financials import NormalizedCompanyFinancial
 from edgarito.schemas.vocabulary import KpiVocabularyAudit
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.openai import OpenAIClient
-from edgarito.services.operating import (
-    KpiVocabularyProvider,
+from edgarito.services.operating._discovery.service import (
     OperatingEvidenceDiscoveryService,
-    OperatingEvidenceExtractor,
-    OperatingForecastPipelineService,
 )
-from edgarito.services.operating.vocabulary import normalize_industry_namespace
+from edgarito.services.operating.extraction import OperatingEvidenceExtractor
+from edgarito.services.operating.integration import OperatingForecastPipelineService
+from edgarito.services.operating.vocabulary import (
+    KpiVocabularyProvider,
+    normalize_industry_namespace,
+)
 from edgarito.services.providers.edgar import EdgarClient
 from edgarito.settings import (
     OPENAI_API_KEY,

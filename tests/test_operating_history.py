@@ -9,7 +9,7 @@ from edgarito.schemas.operating import (
     OperatingSegment,
 )
 from edgarito.schemas.operating_history import OperatingEvidenceGap
-from edgarito.services.operating import OperatingHistoryAssembler
+from edgarito.services.operating.history import OperatingHistoryAssembler
 
 
 def _observation(

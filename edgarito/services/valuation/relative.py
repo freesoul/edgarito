@@ -11,10 +11,10 @@ from edgarito.schemas.valuation.relative import (
     RelativeCapitalBridge,
     RelativeNumeratorBasis,
 )
+from edgarito.schemas.valuation.selection import RelativeValuationBasis
 from edgarito.services.valuation.discounting import PresentValueService
 from edgarito.services.valuation.models import (
     PeerMultipleSummary,
-    RelativeValuationBasis,
     ResolvedMultiple,
 )
 

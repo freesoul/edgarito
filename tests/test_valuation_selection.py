@@ -20,7 +20,7 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.valuation import (
+from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
     CompanyLifecycle,
     Cyclicality,
@@ -30,9 +30,11 @@ from edgarito.services.valuation import (
     RelativeValuationBasis,
     ValuationInput,
     ValuationModel,
+    ValuationProfileOverrides,
+)
+from edgarito.services.valuation import (
     ValuationModelSelector,
     ValuationProfileBuilder,
-    ValuationProfileOverrides,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "aapl_facts.json"

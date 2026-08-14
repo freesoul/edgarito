@@ -1313,12 +1313,4 @@ class OperatingHistoryAssembler:
         return derived, []
 
 
-NormalizedOperatingHistoryService = OperatingHistoryAssembler
-OperatingTimeSeriesService = OperatingHistoryAssembler
-
-
-__all__ = [
-    "NormalizedOperatingHistoryService",
-    "OperatingHistoryAssembler",
-    "OperatingTimeSeriesService",
-]
+__all__ = ["OperatingHistoryAssembler"]

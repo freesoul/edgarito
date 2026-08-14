@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from edgarito.config.valuation import ForecastMethod
 from edgarito.enums.granularity import Granularity
-from edgarito.services.forecasting import FcffForecastParameters
+from edgarito.schemas.forecasting import FcffForecastParameters
 
 
 def _forecast_args():
@@ -251,43 +251,6 @@ def test_facade_dispatch_uses_a_snapshot_without_mutating_application(monkeypatc
     assert seen == ["comparables"]
     assert application._run_comparables is original_handler
     assert application.FMP_API_KEY is original_key
-
-
-def test_operating_forecast_legacy_quality_constants_are_reexported():
-    from edgarito.services.operating.forecast import (
-        _HIGH_DRIVER_COVERAGE,
-        _HIGH_RECONSTRUCTION_ERROR,
-    )
-
-    assert str(_HIGH_DRIVER_COVERAGE) == "0.80"
-    assert str(_HIGH_RECONSTRUCTION_ERROR) == "0.05"
-
-
-def test_moved_service_facades_preserve_former_contract_symbols():
-    from edgarito.schemas.operating import OperatingDocumentAudit
-    from edgarito.schemas.operating_history import OperatingEvidenceGap
-    from edgarito.schemas.operating_normalization import (
-        canonical_operating_segment_id,
-    )
-    from edgarito.services.forecasting.fcff import (
-        FcffForecastDcfStub,
-        FcffForecastObservation,
-    )
-    from edgarito.services.operating.discovery import (
-        OperatingDocumentAudit as FacadeDocumentAudit,
-    )
-    from edgarito.services.operating.discovery import (
-        OperatingEvidenceGap as FacadeEvidenceGap,
-    )
-    from edgarito.services.operating.forecast import (
-        canonical_operating_segment_id as FacadeCanonicalSegmentId,
-    )
-
-    assert FcffForecastObservation.__name__ == "FcffForecastObservation"
-    assert FcffForecastDcfStub.__name__ == "FcffForecastDcfStub"
-    assert FacadeCanonicalSegmentId is canonical_operating_segment_id
-    assert FacadeDocumentAudit is OperatingDocumentAudit
-    assert FacadeEvidenceGap is OperatingEvidenceGap
 
 
 def test_facade_service_override_reaches_nested_intrinsic_runner(monkeypatch):

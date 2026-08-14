@@ -5,20 +5,17 @@ from decimal import Decimal
 from edgarito.cli.__main__ import _financial_snapshot_warnings
 from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
+from edgarito.schemas.forecasting import FcffForecastParameters, ForecastSeedType
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting.fcff import FcffForecastService
-from edgarito.services.forecasting.models import (
-    FcffForecastParameters,
-    ForecastSeedType,
-)
+from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.valuation.fcff_dcf import FcffDcfCapitalBridgeResolver
 
 UTC = datetime.timezone.utc

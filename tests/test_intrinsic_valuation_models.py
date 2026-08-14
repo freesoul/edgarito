@@ -31,6 +31,21 @@ from edgarito.schemas.valuation.relative import (
     RelativeCapitalBridge,
     RelativeNumeratorBasis,
 )
+from edgarito.schemas.valuation.selection import (
+    BusinessArchetype,
+    CompanyLifecycle,
+    Cyclicality,
+    DataReadiness,
+    EconomicTrait,
+    FinancialInstitutionKind,
+    ModelRole,
+    ModelSuitability,
+    MultipleConfidence,
+    RelativeValuationBasis,
+    ValuationModel,
+    ValuationProfile,
+    ValuationSelection,
+)
 from edgarito.services.valuation.assumptions import CostOfEquityResolver
 from edgarito.services.valuation.execution import ValuationExecutor
 from edgarito.services.valuation.intrinsic import (
@@ -43,20 +58,7 @@ from edgarito.services.valuation.intrinsic import (
     SotpValuationService,
 )
 from edgarito.services.valuation.models import (
-    BusinessArchetype,
-    CompanyLifecycle,
-    Cyclicality,
-    DataReadiness,
-    EconomicTrait,
-    FinancialInstitutionKind,
-    ModelRole,
-    ModelSuitability,
-    MultipleConfidence,
-    RelativeValuationBasis,
     ResolvedMultiple,
-    ValuationModel,
-    ValuationProfile,
-    ValuationSelection,
 )
 from edgarito.services.valuation.relative import (
     ProviderNeutralRelativeValuationService,

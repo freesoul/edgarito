@@ -5,16 +5,16 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from edgarito.services.forecasting._fcff.contracts import (
-    PERCENT,
-    _ForecastContext,
-    _HistoricalDrivers,
-)
-from edgarito.services.forecasting.models import (
+from edgarito.schemas.forecasting import (
     FcffForecastDriver,
     FcffForecastParameters,
     ForecastAssumptionSource,
     ForecastSeedType,
+)
+from edgarito.services.forecasting._fcff.contracts import (
+    PERCENT,
+    _ForecastContext,
+    _HistoricalDrivers,
 )
 
 

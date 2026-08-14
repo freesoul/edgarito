@@ -10,8 +10,9 @@ from edgarito.cli.presentation.console import ComparableMultiplesConsolePresente
 from edgarito.config.valuation import ValuationProfileLoader
 from edgarito.schemas.market import SecurityMarketData
 from edgarito.schemas.normalization.financials import NormalizedCompanyFinancials
+from edgarito.schemas.valuation.selection import ValuationProfileOverrides
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
 from edgarito.services.normalization.classification import (
@@ -34,7 +35,6 @@ from edgarito.services.valuation import (
     PeerSelectionParameters,
     PeerUniverseSelector,
     ValuationProfileBuilder,
-    ValuationProfileOverrides,
     YahooScreenerPeerDiscoveryProvider,
 )
 from edgarito.settings import (

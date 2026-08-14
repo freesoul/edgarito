@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from statistics import median
 
-from edgarito.services.forecasting.models import FcffForecast
+from edgarito.schemas.forecasting import FcffForecast
+from edgarito.schemas.valuation.selection import (
+    MultipleConfidence,
+    RelativeValuationBasis,
+)
 from edgarito.services.valuation.discounting import PresentValueService
 from edgarito.services.valuation.historical_multiples import HistoricalMultiplesService
 from edgarito.services.valuation.models import (
@@ -12,9 +16,7 @@ from edgarito.services.valuation.models import (
     ComparableMultiplesReport,
     FcffDcfResult,
     HistoricalMultipleSummary,
-    MultipleConfidence,
     MultipleStatus,
-    RelativeValuationBasis,
     ResolvedMultiple,
 )
 

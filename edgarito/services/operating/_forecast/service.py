@@ -1,25 +1,18 @@
 """Orchestration for deterministic operating forecasts.
 
 Input normalization, observation selection, historical reconstruction, and
-consolidation live in focused modules.  This service deliberately owns only the
-workflow and the compatibility methods used by existing callers.
+consolidation live in focused modules. This service owns the workflow and the
+small delegation methods used by the calculation stages.
 """
-
-# The orchestration module re-exports the former private helper names for the
-# public compatibility facade.
-# ruff: noqa: F401
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
-from edgarito.config.operating import OPERATING_VOCABULARY
 from edgarito.schemas.operating import (
     CompanyOperatingForecast,
-    OperatingArchetype,
     OperatingDriverDefinition,
     OperatingDriverForecast,
     OperatingDriverObservation,
@@ -34,14 +27,11 @@ from edgarito.services.operating._forecast.calculation import (
 )
 from edgarito.services.operating._forecast.consolidation import (
     _CONSOLIDATION_SOURCE,
-    _combine_formula_sources,
     _combine_sources,
     _company_unit,
-    _forecast_confidence,
     _growth_path,
     _is_own_operating_source,
     _modeled_revenue_share,
-    _segment_modeled_revenue_share,
     _select_consolidation_segments,
     _worst_confidence,
 )
@@ -50,61 +40,29 @@ from edgarito.services.operating._forecast.contracts import (
     _HISTORICAL_SOURCE,
     _INDEPENDENT_SOURCE,
     _MANAGEMENT_SOURCE,
-    _MEDIUM_DRIVER_COVERAGE,
-    _MEDIUM_RECONSTRUCTION_ERROR,
     _UNAVAILABLE_SOURCE,
-    _YEAR_MAX,
-    _YEAR_MIN,
-    _ConsolidationSelection,
     _FormulaResult,
-    _HistoricalRevenue,
-    _observation_source,
-    _ReconstructionAudit,
     _SelectedObservation,
 )
 from edgarito.services.operating._forecast.normalization import (
     _coerce_definition,
     _coerce_observation,
     _coerce_segment,
-    _constraint_mapping_to_observation,
-    _constraint_tuple_to_observation,
-    _is_year_key,
-    _mapping_constraint_items,
-    _non_negative_revenue,
     _normalize_historical_revenue,
     _normalize_management_constraints,
     _normalize_years,
-    _to_decimal,
-    _year_key,
     normalize_company_historical_revenue,
 )
 from edgarito.services.operating._forecast.reconstruction import (
-    _add_reported_revenue_observations,
     _apply_company_reconstruction_confidence,
-    _apply_reconstruction_confidence,
-    _has_genuine_reconstruction_inputs,
     _historical_company_reconstruction_audit,
-    _historical_reconstruction_audit,
-    _mean,
-    _reconstruct_segment_revenue,
-    _reconstruction_confidence,
-    _reconstruction_quality_warnings,
-    _relative_reconstruction_error,
 )
 from edgarito.services.operating._forecast.selection import (
-    _SEGMENT_REVENUE_DRIVERS,
-    _apply_output_constraint,
-    _constraint_label,
-    _direct_revenue_observation,
     _find_input_observation,
     _find_output_constraint,
     _find_segment_revenue_constraint,
     _generic_growth_fallback,
     _is_generic_unit_observation,
-    _observation_value,
-    _previous_revenue,
-    _reported_revenue_observation_map,
-    _segment_revenue_driver_rank,
     _select_observations,
     _selected_periods_compatible,
 )
@@ -462,8 +420,7 @@ class OperatingForecastService:
                 return result.provenance
         return None
 
-    # Keep the former helper lookup seams available to subclasses and tests;
-    # calculation delegates through these methods rather than importing the
+    # Calculation delegates through these methods rather than importing the
     # helpers directly at each call site.
     @staticmethod
     def _find_input_observation(*args, **kwargs):
@@ -517,10 +474,6 @@ class OperatingForecastService:
         record_driver_forecast(forecasts, forecast, warnings)
 
 
-DeterministicOperatingForecastService = OperatingForecastService
-OperatingForecastEngine = OperatingForecastService
-
-
 def _first_observation_provenance(observations):
     for observation in observations:
         if observation.provenance is not None:
@@ -539,9 +492,7 @@ __all__ = [
     "ARCHETYPE_FORMULAS",
     "ArchetypeFormulaRegistry",
     "CompanyOperatingForecast",
-    "DeterministicOperatingForecastService",
     "FORMULA_REGISTRY",
-    "OperatingForecastEngine",
     "OperatingForecastService",
     "SegmentRevenueForecast",
     "normalize_company_historical_revenue",

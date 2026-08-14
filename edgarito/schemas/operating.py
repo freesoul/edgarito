@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from edgarito.schemas.forecasting import ForecastAssumptionSource
 from edgarito.schemas.operating_normalization import (
     _CONFIDENCE_LEVELS,
     _MAX_FISCAL_YEAR,
@@ -59,6 +60,83 @@ from edgarito.schemas.operating_normalization import (
 from edgarito.schemas.valuation.assumptions import AssumptionProvenance
 
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
+
+
+class ResolvedRevenueYear(BaseModel):
+    """The selected revenue evidence for one fiscal year.
+
+    ``independent_revenue`` and ``consensus_revenue`` are retained even when
+    they lose precedence.  That makes the selection auditable without making
+    the FCFF/DCF layer aware of operating-forecast details.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
+    revenue: Decimal
+    source: str
+    confidence: str
+    independent_revenue: Decimal | None = None
+    independent_source: str | None = None
+    independent_confidence: str | None = None
+    consensus_revenue: Decimal | None = None
+    consensus_source: str | None = None
+    consensus_confidence: str | None = None
+    historical_revenue: Decimal | None = None
+    explicit_revenue: Decimal | None = None
+    management_revenue: Decimal | None = None
+    # Percentage variance of consensus against the independent value.
+    variance: Decimal | None = None
+
+    @field_validator(
+        "revenue",
+        "independent_revenue",
+        "consensus_revenue",
+        "historical_revenue",
+        "explicit_revenue",
+        "management_revenue",
+    )
+    @classmethod
+    def validate_revenue_values(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and (not value.is_finite() or value < 0):
+            raise ValueError("Resolved revenue values must be finite and non-negative")
+        return value
+
+    @field_validator("variance")
+    @classmethod
+    def validate_variance(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not value.is_finite():
+            raise ValueError("Resolved revenue variance must be finite")
+        return value
+
+    @field_validator("source", "independent_source", "consensus_source")
+    @classmethod
+    def normalize_sources(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(getattr(value, "value", value)).strip()
+        return normalized or None
+
+    @field_validator(
+        "confidence",
+        "independent_confidence",
+        "consensus_confidence",
+        mode="before",
+    )
+    @classmethod
+    def normalize_confidences(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(getattr(value, "value", value)).strip().casefold()
+        if normalized not in _CONFIDENCE_LEVELS:
+            raise ValueError("Revenue confidence must be high, medium, or low")
+        return normalized
+
+    @property
+    def selected_revenue(self) -> Decimal:
+        """Descriptive alias for the selected absolute revenue."""
+
+        return self.revenue
 
 # OpenAI Structured Outputs does not accept an object whose
 # ``additionalProperties`` value is another schema.  Pydantic emits exactly
@@ -2063,11 +2141,75 @@ class CompanyOperatingForecast(BaseModel):
     def materialize_revenue_anchors(self, parameters):
         """Materialize this selected absolute revenue path into FCFF inputs."""
 
-        from edgarito.services.operating.reconciliation import (
-            materialize_revenue_anchors,
-        )
+        return _materialize_company_revenue_anchors(parameters, self)
 
-        return materialize_revenue_anchors(parameters, self)
+
+def _materialize_company_revenue_anchors(parameters, selected: CompanyOperatingForecast):
+    """Materialize a company forecast without importing service code.
+
+    The broader reconciliation service handles generic mappings and detailed
+    reconciliation wrappers.  This schema-level path is the narrow operation
+    needed by :meth:`CompanyOperatingForecast.materialize_revenue_anchors`.
+    """
+
+    if parameters.revenue_growth is not None:
+        return parameters
+
+    anchors = dict(parameters.revenue_anchors)
+    sources = dict(parameters.revenue_anchor_sources)
+    for year, value in zip(
+        selected.fiscal_years, selected.consolidated_revenue, strict=True
+    ):
+        source = selected.source_by_year.get(
+            year,
+            "explicit" if year in selected.explicit_years else "independent_operating",
+        )
+        normalized_source = str(getattr(source, "value", source)).strip().casefold()
+        if normalized_source == "unavailable":
+            continue
+        if value <= 0:
+            raise ValueError(f"Selected revenue FY{year} must be positive for FCFF anchors")
+
+        if normalized_source == "explicit":
+            incoming_source = ForecastAssumptionSource.EXPLICIT
+            incoming_rank = 4
+        elif normalized_source == "management_guidance":
+            incoming_source = ForecastAssumptionSource.MANAGEMENT_GUIDANCE
+            incoming_rank = 3
+        elif normalized_source == "normalized_historical":
+            incoming_source = ForecastAssumptionSource.NORMALIZED_HISTORICAL
+            incoming_rank = 0
+        elif normalized_source == "current_run_rate":
+            incoming_source = ForecastAssumptionSource.CURRENT_RUN_RATE
+            incoming_rank = -1
+        else:
+            incoming_source = ForecastAssumptionSource.FORWARD_EVIDENCE
+            incoming_rank = 2 if "independent" in normalized_source else 1
+
+        existing_source = sources.get(year, ForecastAssumptionSource.EXPLICIT)
+        existing_normalized = str(
+            getattr(existing_source, "value", existing_source)
+        ).strip().casefold()
+        existing_rank = {
+            "explicit": 4,
+            "management_guidance": 3,
+            "forward_evidence": 1,
+            "normalized_historical": 0,
+            "current_run_rate": -1,
+        }.get(existing_normalized, 0)
+        if year in anchors and existing_rank >= incoming_rank:
+            continue
+        anchors[year] = value
+        sources[year] = incoming_source
+
+    if anchors == parameters.revenue_anchors and sources == parameters.revenue_anchor_sources:
+        return parameters
+    return parameters.model_copy(
+        update={
+            "revenue_anchors": anchors,
+            "revenue_anchor_sources": sources,
+        }
+    )
 
 
 __all__ = [
@@ -2099,6 +2241,7 @@ __all__ = [
     "OperatingExtractionCacheEntry",
     "OperatingExtractionResult",
     "OperatingSegment",
+    "ResolvedRevenueYear",
     "SegmentRevenueForecast",
     "canonical_operating_segment_id",
     "canonical_operating_segment_identity",

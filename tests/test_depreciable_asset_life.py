@@ -11,8 +11,8 @@ from edgarito.schemas.normalization.financials import (
     FinancialObservation,
     NormalizedCompanyFinancials,
 )
+from edgarito.schemas.valuation.selection import BusinessArchetype
 from edgarito.services.valuation import (
-    BusinessArchetype,
     DepreciableAssetLifeResolver,
 )
 

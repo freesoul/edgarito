@@ -11,7 +11,7 @@ from edgarito.cli.use_cases.forward_assumptions import (
     forward_growth_evidence as _default_forward_growth_evidence,
 )
 from edgarito.services.export import ValuationExcelRenderer
-from edgarito.services.financial_observation_availability import (
+from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
 from edgarito.services.valuation import (

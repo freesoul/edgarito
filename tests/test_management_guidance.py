@@ -8,6 +8,13 @@ import pytest
 import edgarito.cli.__main__ as cli_module
 from edgarito.cli.presentation.valuation_report import ValuationReportConsolePresenter
 from edgarito.enums.market import Market
+from edgarito.schemas.forecasting import (
+    FcffForecast,
+    FcffForecastDriver,
+    FcffForecastObservation,
+    FcffForecastParameters,
+    ForecastAssumptionSource,
+)
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
@@ -26,13 +33,6 @@ from edgarito.schemas.guidance.management import (
 )
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
-from edgarito.services.forecasting.models import (
-    FcffForecast,
-    FcffForecastDriver,
-    FcffForecastObservation,
-    FcffForecastParameters,
-    ForecastAssumptionSource,
-)
 from edgarito.services.guidance.extraction import ManagementGuidanceExtractor
 from edgarito.services.guidance.overlay import GuidanceForecastOverlay
 from edgarito.services.guidance.resolver import ManagementGuidanceResolver

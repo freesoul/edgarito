@@ -9,7 +9,7 @@ from edgarito.schemas.operating import (
     OperatingSegment,
 )
 from edgarito.schemas.valuation import AssumptionOrigin, AssumptionProvenance
-from edgarito.services.operating import OperatingForecastService
+from edgarito.services.operating._forecast.service import OperatingForecastService
 
 
 def _segment(segment_id: str = "segment") -> OperatingSegment:

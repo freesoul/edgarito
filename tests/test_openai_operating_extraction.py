@@ -22,7 +22,9 @@ from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import extract_operating_context
 from edgarito.services.openai import OpenAIClient, OpenAIExtractionError
-from edgarito.services.operating.discovery import OperatingEvidenceDiscoveryService
+from edgarito.services.operating._discovery.service import (
+    OperatingEvidenceDiscoveryService,
+)
 from edgarito.services.operating.extraction import OperatingEvidenceExtractor
 
 
