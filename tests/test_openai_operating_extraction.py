@@ -646,6 +646,36 @@ def test_implied_price_and_arpu_use_only_same_period_reported_revenue_pairs(tmp_
     assert all("same-period" not in (item.reason or "") for item in entry.audit_records)
 
 
+def test_extractor_preserves_scope_evidence_and_total_flags(tmp_path):
+    text = "The total segment reported $100 million in FY2025."
+    response = ExtractedOperatingEvidenceResponse(
+        observations=[
+            ExtractedOperatingObservation(
+                segment_id="segment",
+                driver_id="revenue",
+                fiscal_year=2025,
+                value=100,
+                unit="USD millions",
+                scope="segment",
+                scope_evidence="The total segment",
+                is_total=True,
+                supporting_text=text,
+            )
+        ]
+    )
+
+    entry, _ = asyncio.run(
+        OperatingEvidenceExtractor(
+            _FakeOpenAI(response), FileSystemCache(tmp_path)
+        ).extract(_filing(), _document(text), text, as_of=datetime.date(2026, 3, 1))
+    )
+
+    observation = entry.observations[0]
+    assert observation.scope == "segment"
+    assert observation.scope_evidence == "The total segment"
+    assert observation.is_total
+
+
 def test_incompatible_observation_units_are_rejected_with_item_audit_reason(tmp_path):
     text = (
         "The segment uses volume and price to describe revenue. "

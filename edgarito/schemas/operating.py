@@ -32,19 +32,6 @@ _MIN_FISCAL_YEAR = 1900
 _MAX_FISCAL_YEAR = 2200
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
 _OPERATING_PERIODS = {"FY", "FQ", "YTD", "LTM"}
-_UNIT_SCALES = {
-    "thousand": Decimal("1000"),
-    "thousands": Decimal("1000"),
-    "k": Decimal("1000"),
-    "million": Decimal("1000000"),
-    "millions": Decimal("1000000"),
-    "mn": Decimal("1000000"),
-    "mm": Decimal("1000000"),
-    "billion": Decimal("1000000000"),
-    "billions": Decimal("1000000000"),
-    "bn": Decimal("1000000000"),
-    "bb": Decimal("1000000000"),
-}
 
 # OpenAI Structured Outputs does not accept an object whose
 # ``additionalProperties`` value is another schema.  Pydantic emits exactly
@@ -292,6 +279,13 @@ class OperatingDriverObservation(BaseModel):
     unit: str
     currency: str | None = None
     basis: str | None = None
+    # Generic scope metadata keeps cross-document driver joins auditable without
+    # introducing issuer-specific scope vocabularies.
+    scope: str | None = None
+    scope_evidence: str | None = None
+    is_total: bool = False
+    is_component: bool = False
+    exhaustive: bool = False
     scale: Decimal = Decimal(1)
     # ``unit`` and ``scale`` are canonical formula inputs.  These fields retain
     # the source declaration so cross-filing normalization remains auditable.
@@ -333,7 +327,9 @@ class OperatingDriverObservation(BaseModel):
     def normalize_period_key(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating observation period key")
 
-    @field_validator("unit", "original_unit", "basis", "method")
+    @field_validator(
+        "unit", "original_unit", "basis", "scope", "scope_evidence", "method"
+    )
     @classmethod
     def normalize_period_and_units(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating observation text")
@@ -444,6 +440,120 @@ class OperatingDriverObservation(BaseModel):
         """Compatibility alias for the scale declared by the source."""
 
         return self.original_scale
+
+
+class OperatingEvidenceGap(BaseModel):
+    """A provider-neutral missing operating fact for one period."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    segment_id: str = Field(validation_alias=AliasChoices("segment_id", "segment"))
+    metric: str = Field(
+        validation_alias=AliasChoices("metric", "driver_id", "required_metric")
+    )
+    fiscal_year: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("fiscal_year", "year"),
+        ge=_MIN_FISCAL_YEAR,
+        le=_MAX_FISCAL_YEAR,
+    )
+    fiscal_period: str = Field(
+        default="FY", validation_alias=AliasChoices("fiscal_period", "period")
+    )
+    period_key: str | None = None
+    reason: str = Field(
+        default="missing_required_input",
+        validation_alias=AliasChoices("reason", "gap_type"),
+    )
+    status: str = "unresolved"
+    source_documents: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_quarter_key(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        period = data.get("fiscal_period", data.get("period"))
+        if isinstance(period, str) and period.strip().upper() in {
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4",
+        }:
+            data.setdefault("period_key", period.strip().upper())
+        return data
+
+    @field_validator("segment_id")
+    @classmethod
+    def normalize_segment_id(cls, value: str) -> str:
+        return canonical_operating_segment_id(value) or value.strip()
+
+    @field_validator("metric", "reason", "status")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("Operating evidence gap text cannot be blank")
+        return normalized
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        normalized = str(value).strip().upper()
+        if normalized in {"Q1", "Q2", "Q3", "Q4"}:
+            return "FQ"
+        if normalized not in {"FY", "FQ", "YTD", "LTM"}:
+            raise ValueError("Operating evidence gap period is not supported")
+        return normalized
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip().upper()
+        return normalized or None
+
+    @field_validator("source_documents", "diagnostics")
+    @classmethod
+    def normalize_texts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(str(item).strip() for item in value if str(item).strip())
+        )
+
+    @property
+    def driver_id(self) -> str:
+        """Compatibility alias for callers using driver terminology."""
+
+        return self.metric
+
+    @property
+    def key(self) -> tuple[str, str, int | None, str, str | None]:
+        return (
+            self.segment_id,
+            self.metric.casefold(),
+            self.fiscal_year,
+            self.fiscal_period,
+            self.period_key,
+        )
+
+    @property
+    def label(self) -> str:
+        year = f"FY{self.fiscal_year}" if self.fiscal_year is not None else "FY?"
+        period = self.fiscal_period
+        if self.period_key:
+            period = f"{period}/{self.period_key}"
+        return f"{self.segment_id}/{self.metric}/{year}/{period}"
+
+    @property
+    def gap_type(self) -> str:
+        return self.reason
+
+    @property
+    def period(self) -> str:
+        return self.fiscal_period
 
 
 class OperatingInvestmentProgram(BaseModel):
@@ -790,6 +900,11 @@ class ExtractedOperatingObservation(BaseModel):
     original_scale: float = 1
     currency: str | None = None
     basis: str | None = None
+    scope: str | None = None
+    scope_evidence: str | None = None
+    is_total: bool = False
+    is_component: bool = False
+    exhaustive: bool = False
     origin: Literal["reported", "first_party_observation", "management_guidance"] = (
         "reported"
     )
@@ -802,6 +917,8 @@ class ExtractedOperatingObservation(BaseModel):
         "unit",
         "original_unit",
         "basis",
+        "scope",
+        "scope_evidence",
         "supporting_text",
     )
     @classmethod
@@ -2067,7 +2184,8 @@ def normalize_operating_unit(
     folded = re.sub(r"\b(us dollars?|u\.s\. dollars?)\b", "usd", folded)
     scale = Decimal(1)
     for label, multiplier in sorted(
-        _UNIT_SCALES.items(), key=lambda item: -len(item[0])
+        ((item.label, item.multiplier) for item in _operating_unit_scale_aliases()),
+        key=lambda item: -len(item[0]),
     ):
         if re.search(rf"(?<![a-z]){re.escape(label)}(?![a-z])", folded):
             scale *= multiplier
@@ -2089,6 +2207,14 @@ def normalize_operating_unit(
         normalized_driver = _canonical_metric_name(driver_id or "")
         folded = "currency" if "revenue" in normalized_driver else "unit"
     return folded, scale
+
+
+def _operating_unit_scale_aliases():
+    """Load unit scale aliases lazily to avoid the schemas/config import cycle."""
+
+    from edgarito.config.operating import OPERATING_UNITS
+
+    return OPERATING_UNITS.scale_aliases
 
 
 def operating_units_compatible(expected: str, actual: str) -> bool:
@@ -2420,6 +2546,7 @@ __all__ = [
     "OperatingDriverDefinition",
     "OperatingDriverForecast",
     "OperatingDriverObservation",
+    "OperatingEvidenceGap",
     "OperatingEvidenceAudit",
     "OperatingEvidenceExtractionResponse",
     "OperatingEvidenceExtractionResult",

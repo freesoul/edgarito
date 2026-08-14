@@ -1,3 +1,4 @@
+from edgarito.schemas.operating import OperatingEvidenceGap
 from edgarito.services.operating.discovery import (
     OperatingDriverDiscoveryService,
     OperatingEvidenceDiscovery,
@@ -5,6 +6,7 @@ from edgarito.services.operating.discovery import (
     OperatingForecastDiscovery,
     OperatingForecastDiscoveryResult,
     OperatingForecastDiscoveryService,
+    OperatingIrFallback,
 )
 from edgarito.services.operating.extraction import (
     OpenAIOperatingEvidenceExtractor,
@@ -74,12 +76,14 @@ __all__ = [
     "OperatingForecastQualityError",
     "OperatingForecastQualityResult",
     "OperatingHistoryAssembler",
+    "OperatingEvidenceGap",
     "NormalizedOperatingHistoryService",
     "OperatingTimeSeriesService",
     "merge_operating_growth_evidence",
     "OperatingForecastDiscovery",
     "OperatingForecastDiscoveryResult",
     "OperatingForecastDiscoveryService",
+    "OperatingIrFallback",
     "OperatingDriverDiscoveryService",
     "OperatingEvidenceDiscovery",
     "OperatingEvidenceDiscoveryService",

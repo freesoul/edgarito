@@ -8,6 +8,7 @@ from typing import List, Optional
 
 import aiohttp
 
+from edgarito.config.guidance import GUIDANCE_DOCUMENTS
 from edgarito.schemas.providers.edgar.company_facts import CompanyFacts, Fact
 from edgarito.schemas.providers.edgar.company_ticker import CompanyTickerResponse
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
@@ -20,16 +21,10 @@ from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 class EdgarClient:
     GUIDANCE_FORMS = frozenset(
-        {
-            "8-K",
-            "8-K/A",
-            "6-K",
-            "6-K/A",
-            "10-Q",
-            "10-Q/A",
-            "10-K",
-            "10-K/A",
-        }
+        (
+            *GUIDANCE_DOCUMENTS.current_report_forms,
+            *GUIDANCE_DOCUMENTS.periodic_report_forms,
+        )
     )
 
     def __init__(

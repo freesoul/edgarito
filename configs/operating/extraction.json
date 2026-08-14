@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "number_pattern": "(?<![A-Za-z])[-+]?\\d[\\d,]*(?:\\.\\d+)?",
+  "year_pattern": "\\b(?:FY\\s*)?(?:19|20|21|22)\\d{2}\\b",
+  "forward_pattern": "\\b(?:expect(?:s|ed|ing)?|outlook|forecast(?:s|ed|ing)?|anticipat(?:e|es|ed|ing)|project(?:s|ed|ing)?|target(?:s|ed|ing)?|plan(?:s|ned|ning)?|will)\\b",
+  "first_party_pattern": "\\b(?:we|our|us|company|management|the group|announced|announcement|planned|plan to|intend(?:s|ed)?|under construction)\\b",
+  "third_party_terms": [
+    "analyst",
+    "consensus",
+    "sell-side",
+    "sell side",
+    "wall street",
+    "market expectation",
+    "market estimate",
+    "third-party",
+    "third party"
+  ],
+  "revenue_driver_ids": [
+    "revenue",
+    "segment_revenue",
+    "sales",
+    "net_sales",
+    "total_revenue",
+    "revenue_growth",
+    "sales_growth"
+  ],
+  "operating_audit_patterns": [
+    {"keyword": "volume", "pattern": "\\bvolumes?\\b"},
+    {"keyword": "price", "pattern": "\\bprices?\\b"},
+    {"keyword": "subscribers", "pattern": "\\bsubscribers?\\b"},
+    {"keyword": "users", "pattern": "\\busers?\\b"},
+    {"keyword": "arpu", "pattern": "\\barpu\\b|\\baverage revenue per user\\b"},
+    {"keyword": "capacity", "pattern": "\\bcapac(?:ity|ities)\\b"},
+    {"keyword": "utilization", "pattern": "\\butili[sz]ation\\b"},
+    {"keyword": "transactions", "pattern": "\\btransactions?\\b"},
+    {"keyword": "take rate", "pattern": "\\btake rate\\b"},
+    {"keyword": "backlog", "pattern": "\\bbacklog\\b"},
+    {"keyword": "store count", "pattern": "\\bstore count\\b"},
+    {"keyword": "sales per store", "pattern": "\\bsales per store\\b"},
+    {"keyword": "production", "pattern": "\\bproduction\\b"},
+    {"keyword": "shipments", "pattern": "\\bshipments?\\b"},
+    {"keyword": "deliveries", "pattern": "\\bdeliveries\\b"},
+    {"keyword": "investment", "pattern": "\\binvestments?\\b"},
+    {"keyword": "facility", "pattern": "\\bfacilit(?:y|ies)\\b"}
+  ],
+  "currency_unit_pattern": "(?:^|/)(?:usd|eur|gbp|jpy|cny|cad|aud|chf|currency)(?:/|$)",
+  "count_unit_exclusions": [
+    "ratio",
+    "percent",
+    "percentage",
+    "bps",
+    "bp"
+  ],
+  "metric_aliases": {
+    "subscribers": ["subscriber_count"],
+    "subscriber_count": ["subscribers"],
+    "arpu": ["average_revenue_per_user"],
+    "average_revenue_per_user": ["arpu"],
+    "stores": ["store_count"],
+    "store_count": ["stores"]
+  },
+  "implied_revenue_driver_ids": [
+    "revenue",
+    "segment_revenue",
+    "sales"
+  ],
+  "implied_volume_driver_ids": [
+    "volume",
+    "units",
+    "deliveries",
+    "shipments"
+  ],
+  "implied_subscriber_driver_ids": [
+    "subscribers",
+    "users",
+    "subscriber_count"
+  ],
+  "history_revenue_metric_ids": [
+    "revenue",
+    "segment_revenue",
+    "sales",
+    "net_sales",
+    "total_revenue",
+    "total_sales"
+  ],
+  "history_volume_metric_ids": [
+    "volume",
+    "units",
+    "deliveries",
+    "shipments",
+    "production"
+  ],
+  "history_count_metric_ids": [
+    "subscribers",
+    "subscriber_count",
+    "users",
+    "stores",
+    "store_count"
+  ]
+}

@@ -5,95 +5,19 @@ import re
 from bisect import bisect_left
 from html.parser import HTMLParser
 
+from edgarito.config.guidance import GUIDANCE_DOCUMENTS
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 
-GUIDANCE_TERMS = (
-    "earnings",
-    "financial results",
-    "quarter results",
-    "annual results",
-    "outlook",
-    "guidance",
-    "forecast",
-    "expects",
-    "full year",
-    "fiscal year",
-    "press release",
-    "investor presentation",
-    "expect",
-    "expected",
-    "expecting",
-    "capital expenditures",
-    "capex",
-    "revenue",
-    "margin",
-    "capacity",
-    "forecasting",
-    "target",
-    # Operating-driver evidence uses the same bounded SEC context seam as
-    # management guidance.  These terms improve recall without interpreting
-    # any value or creating a forecast.
-    "volume",
-    "price",
-    "subscriber",
-    "users",
-    "arpu",
-    "average revenue per user",
-    "utilization",
-    "transactions",
-    "take rate",
-    "store count",
-    "sales per store",
-    "production",
-    "shipments",
-    "deliveries",
-    "investment",
-    "facility",
-    "data center",
-)
-
-# Operating discovery shares the SEC/document retrieval seam with management
-# guidance, but it must not inherit guidance's forward-looking bias.  Keep this
-# vocabulary provider/company neutral: the terms describe the shape of a
-# quantitative operating disclosure rather than a particular issuer.
-OPERATING_TERMS = (
-    "segment",
-    "business",
-    "net sales",
-    "revenue",
-    "revenues",
-    "sales",
-    "volume",
-    "units",
-    "production",
-    "shipments",
-    "deliveries",
-    "average selling price",
-    "asp",
-    "price",
-    "pricing",
-    "customers",
-    "users",
-    "subscribers",
-    "arpu",
-    "capacity",
-    "utilization",
-    "backlog",
-    "orders",
-    "store count",
-    "locations",
-    "sales per store",
-    "table",
-    "millions",
-    "billions",
-    "thousands",
-)
+GUIDANCE_TERMS = GUIDANCE_DOCUMENTS.guidance_terms
+OPERATING_TERMS = GUIDANCE_DOCUMENTS.operating_terms
+GUIDANCE_DOCUMENT_CONFIG_VERSION = GUIDANCE_DOCUMENTS.cache_version
 
 GUIDANCE_CONTEXT_MAX_CHARS = 24_000
 GUIDANCE_CONTEXT_WINDOW_CHARS = 900
 
-_CURRENT_REPORT_FORMS = frozenset({"8-K", "8-K/A", "6-K", "6-K/A"})
-_PERIODIC_REPORT_FORMS = frozenset({"10-Q", "10-Q/A", "10-K", "10-K/A"})
+_CURRENT_REPORT_FORMS = frozenset(GUIDANCE_DOCUMENTS.current_report_forms)
+_PERIODIC_REPORT_FORMS = frozenset(GUIDANCE_DOCUMENTS.periodic_report_forms)
+_EXHIBIT_PATTERN = GUIDANCE_DOCUMENTS.exhibit_pattern.regex
 _CURRENT_REPORT_QUOTA = 3
 _PERIODIC_REPORT_QUOTA = 2
 
@@ -104,78 +28,34 @@ def is_periodic_filing(filing: SecFiling) -> bool:
     return filing.form.upper() in _PERIODIC_REPORT_FORMS
 
 
+def is_exhibit_document(document: SecFilingDocument) -> bool:
+    """Return whether a document is a generic SEC EX-99.x exhibit."""
+
+    return bool(_EXHIBIT_PATTERN.fullmatch(document.document_type.strip()))
+
+
 # Keep the context vocabulary broader than the filing metadata vocabulary.  A
 # primary 10-Q/10-K often has no useful item metadata, so its guidance has to be
 # found in the cleaned filing text.
-_GUIDANCE_CONTEXT_PATTERNS = (
-    (r"\bexpect(?:s|ed|ing)?\b", 10),
-    (r"\bguidance\b", 9),
-    (r"\boutlook\b", 8),
-    (r"\bforecast(?:s|ed|ing)?\b", 8),
-    (r"\banticipat(?:e|es|ed|ing)\b", 7),
-    (r"\btarget(?:s|ed|ing)?\b", 7),
-    (r"\bproject(?:s|ed|ing)?\b", 6),
-    (r"\bplan(?:s|ned|ning)?\b", 5),
-    (r"\bestimat(?:e|es|ed|ing)\b", 5),
-    (r"\bcapital expenditure(?:s)?\b", 6),
-    (r"\bcapex\b", 6),
-    (r"\brevenue\b", 3),
-    (r"\bmargin(?:s)?\b", 3),
-    (r"\bcapacity\b", 3),
-    (r"\bearnings\b", 2),
-    (r"\bfree cash flow\b", 2),
-    (r"\boperating cash flow\b", 2),
-    (r"\bbookings?\b", 2),
-    (r"\bbacklog\b", 2),
-    (r"\bvolumes?\b", 4),
-    (r"\bprices?\b", 3),
-    (r"\bsubscribers?\b", 5),
-    (r"\busers?\b", 4),
-    (r"\barpu\b", 6),
-    (r"\baverage revenue per user\b", 6),
-    (r"\butili[sz]ation\b", 5),
-    (r"\btransactions?\b", 4),
-    (r"\btake rate\b", 5),
-    (r"\bstore count\b", 4),
-    (r"\bsales per store\b", 5),
-    (r"\bproduction\b", 4),
-    (r"\bshipments?\b", 4),
-    (r"\bdeliveries\b", 4),
-    (r"\binvestments?\b", 3),
-    (r"\bfacilit(?:y|ies)\b", 3),
-    (r"\bdata cent(?:er|re)s?\b", 3),
-    (r"\beps\b", 2),
+_GUIDANCE_CONTEXT_PATTERNS = tuple(
+    (item.pattern, item.weight) for item in GUIDANCE_DOCUMENTS.guidance_context_patterns
 )
+_GUIDANCE_CONTEXT_RULES = GUIDANCE_DOCUMENTS.guidance_context_patterns
 
 # These patterns deliberately include historical/reporting language and do
 # not assign a premium to words such as "expect" or "forecast".  A long
 # periodic filing commonly places segment revenue and KPI tables far away from
 # its outlook section.
-_OPERATING_CONTEXT_PATTERNS = (
-    (r"\breportable segments?\b", 10),
-    (r"\bsegment(?:s)?\b", 8),
-    (r"\b(?:net )?sales\b", 7),
-    (r"\brevenues?\b", 7),
-    (r"\b(?:average selling price|asp)\b", 7),
-    (r"\b(?:volumes?|units?|production|shipments?|deliveries)\b", 7),
-    (r"\b(?:customers?|users?|subscribers?|arpu)\b", 6),
-    (r"\b(?:capacity|utili[sz]ation|backlog|orders?)\b", 6),
-    (r"\b(?:store count|locations?|sales per store)\b", 5),
-    (r"\b(?:millions?|billions?|thousands?)\b", 5),
-    (r"\b(?:fiscal year|fiscal quarter|year to date|\bFY\d{2,4}\b)\b", 4),
-    (
-        r"\b(?:actual|reported|historical|period ended|three months|six months|nine months)\b",
-        4,
-    ),
+_OPERATING_CONTEXT_PATTERNS = tuple(
+    (item.pattern, item.weight)
+    for item in GUIDANCE_DOCUMENTS.operating_context_patterns
 )
+_OPERATING_CONTEXT_RULES = GUIDANCE_DOCUMENTS.operating_context_patterns
 
 _GUIDANCE_AUDIT_PATTERNS = {
-    "expect": r"\bexpect(?:s|ed|ing)?\b",
-    "capex": r"\bcapex\b",
-    "capital expenditures": r"\bcapital expenditures\b",
-    "revenue": r"\brevenues?\b",
-    "margin": r"\bmargins?\b",
+    item.keyword: item.pattern for item in GUIDANCE_DOCUMENTS.guidance_audit_patterns
 }
+_GUIDANCE_AUDIT_RULES = GUIDANCE_DOCUMENTS.guidance_audit_patterns
 
 
 class _TextParser(HTMLParser):
@@ -220,8 +100,7 @@ def guidance_keyword_hits(text: str) -> dict[str, int]:
     """Count the bounded set of guidance terms shown in audit output."""
 
     return {
-        keyword: len(re.findall(pattern, text, flags=re.IGNORECASE))
-        for keyword, pattern in _GUIDANCE_AUDIT_PATTERNS.items()
+        rule.keyword: len(rule.regex.findall(text)) for rule in _GUIDANCE_AUDIT_RULES
     }
 
 
@@ -244,10 +123,10 @@ def extract_guidance_context(
         return clean_text
 
     matches: list[tuple[int, int, int]] = []
-    for pattern, weight in _GUIDANCE_CONTEXT_PATTERNS:
+    for rule in _GUIDANCE_CONTEXT_RULES:
         matches.extend(
-            (match.start(), match.end(), weight)
-            for match in re.finditer(pattern, clean_text, flags=re.IGNORECASE)
+            (match.start(), match.end(), rule.weight or 0)
+            for match in rule.regex.finditer(clean_text)
         )
     if not matches:
         return clean_text[:max_chars]
@@ -326,10 +205,7 @@ def _operating_table_candidates(
             for item in range(start_index, end_index)
             if lines[item].group(0).strip()
         )
-        if not any(
-            re.search(pattern, block, flags=re.IGNORECASE)
-            for pattern, _weight in _OPERATING_CONTEXT_PATTERNS
-        ):
+        if not any(rule.regex.search(block) for rule in _OPERATING_CONTEXT_RULES):
             continue
         start = lines[start_index].start()
         end = lines[end_index - 1].end()
@@ -371,10 +247,10 @@ def extract_operating_context(
         return clean_text
 
     matches: list[tuple[int, int, int]] = []
-    for pattern, weight in _OPERATING_CONTEXT_PATTERNS:
+    for rule in _OPERATING_CONTEXT_RULES:
         matches.extend(
-            (match.start(), match.end(), weight)
-            for match in re.finditer(pattern, clean_text, flags=re.IGNORECASE)
+            (match.start(), match.end(), rule.weight or 0)
+            for match in rule.regex.finditer(clean_text)
         )
     if not matches:
         return clean_text[:max_chars]
@@ -653,6 +529,37 @@ class GuidanceDocumentSelector:
 
         return self.select_documents(filing, limit=limit, operating=True)
 
+    def operating_document_candidates(
+        self, filing: SecFiling
+    ) -> tuple[SecFilingDocument, ...]:
+        """Return every positively ranked operating document for gap retries."""
+
+        return tuple(
+            document
+            for score, document in self._rank_documents(filing, operating=True)
+            if score > 0
+        )
+
+    def select_exhibit_documents(
+        self, filing: SecFiling, *, limit: int = 4
+    ) -> list[SecFilingDocument]:
+        """Return quantitative EX-99.x exhibits in deterministic rank order.
+
+        Current reports commonly keep the useful KPI table in an exhibit while
+        the 8-K wrapper contains only incorporation language.  This method is a
+        generic selection seam for callers that need exhibit-first retrieval;
+        it does not infer anything from an issuer name or ticker.
+        """
+
+        if limit <= 0:
+            return []
+        ranked = self._rank_documents(filing, operating=True)
+        return [
+            self._mark_primary(document, value=False)
+            for score, document in ranked
+            if score > 0 and is_exhibit_document(document)
+        ][:limit]
+
     def _rank_documents(
         self, filing: SecFiling, *, operating: bool = False
     ) -> list[tuple[int, SecFilingDocument]]:
@@ -737,8 +644,16 @@ class GuidanceDocumentSelector:
         document_type = document.document_type.upper()
         metadata = f"{document.description} {document.filename}".casefold()
         score = sum(2 for term in OPERATING_TERMS if term in metadata)
-        if re.fullmatch(r"EX-99(?:\.\d+)?", document_type):
-            score += 5
+        exhibit = _EXHIBIT_PATTERN.fullmatch(document_type.strip())
+        if exhibit:
+            # An 8-K wrapper is often administrative.  EX-99.x is the generic
+            # SEC attachment convention for earnings releases, KPI tables, and
+            # investor material, so give exhibits a meaningful ranking lead.
+            score += 24
+            if document_type == "EX-99.1":
+                score += 8
+            if filing.form.upper() in _CURRENT_REPORT_FORMS:
+                score += 8
         if document.filename.casefold() == filing.primary_document.casefold():
             # Periodic primary filings contain the authoritative historical
             # segment tables even when their metadata is sparse.

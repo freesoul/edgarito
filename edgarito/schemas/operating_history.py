@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from edgarito.schemas.operating import (
     OperatingDriverDefinition,
     OperatingDriverObservation,
+    OperatingEvidenceGap,
     OperatingSegment,
 )
 
@@ -16,7 +17,7 @@ from edgarito.schemas.operating import (
 class OperatingHistoryAudit(BaseModel):
     """Content-free diagnostics for one assembled first-party time series."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     accepted_periods: tuple[str, ...] = ()
     accepted_metrics: tuple[str, ...] = ()
@@ -36,6 +37,26 @@ class OperatingHistoryAudit(BaseModel):
     join_rejections_by_reason: dict[str, int] = Field(default_factory=dict)
     join_diagnostics: tuple[str, ...] = ()
     source_document_count: int = Field(default=0, ge=0)
+    exhibits_found: int = Field(default=0, ge=0)
+    scope_mismatch_rejections: int = Field(default=0, ge=0)
+    derived_totals: int = Field(default=0, ge=0)
+    gaps_resolved_sec: tuple[OperatingEvidenceGap, ...] = ()
+    gaps_resolved_ir: tuple[OperatingEvidenceGap, ...] = ()
+    reconstruction_candidates: tuple[str, ...] = ()
+    reconstruction_rejections: tuple[str, ...] = ()
+    gaps_detected: tuple[OperatingEvidenceGap, ...] = Field(
+        default=(), validation_alias=AliasChoices("gaps_detected", "detected_gaps")
+    )
+    gaps_resolved: tuple[OperatingEvidenceGap, ...] = Field(
+        default=(), validation_alias=AliasChoices("gaps_resolved", "resolved_gaps")
+    )
+    gaps_unresolved: tuple[OperatingEvidenceGap, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices("gaps_unresolved", "unresolved_gaps"),
+    )
+    gap_diagnostics: tuple[str, ...] = ()
+    new_fy_periods: tuple[str, ...] = ()
+    new_ltm_periods: tuple[str, ...] = ()
 
     @field_validator(
         "accepted_periods",
@@ -46,12 +67,29 @@ class OperatingHistoryAudit(BaseModel):
         "historical_revenue_pairs",
         "warnings",
         "join_diagnostics",
+        "reconstruction_candidates",
+        "reconstruction_rejections",
+        "gap_diagnostics",
+        "new_fy_periods",
+        "new_ltm_periods",
     )
     @classmethod
     def normalize_texts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(
             dict.fromkeys(str(item).strip() for item in value if str(item).strip())
         )
+
+    @property
+    def detected_gaps(self) -> tuple[OperatingEvidenceGap, ...]:
+        return self.gaps_detected
+
+    @property
+    def resolved_gaps(self) -> tuple[OperatingEvidenceGap, ...]:
+        return self.gaps_resolved
+
+    @property
+    def unresolved_gaps(self) -> tuple[OperatingEvidenceGap, ...]:
+        return self.gaps_unresolved
 
 
 class OperatingTimeSeries(BaseModel):
@@ -125,6 +163,7 @@ OperatingHistory = OperatingTimeSeries
 
 __all__ = [
     "NormalizedOperatingTimeSeries",
+    "OperatingEvidenceGap",
     "OperatingHistory",
     "OperatingHistoryAudit",
     "OperatingTimeSeries",

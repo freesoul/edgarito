@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "sector_aliases": {
+    "communication services": "Communication Services",
+    "communications": "Communication Services",
+    "consumer cyclical": "Consumer Discretionary",
+    "consumer discretionary": "Consumer Discretionary",
+    "consumer defensive": "Consumer Staples",
+    "consumer staples": "Consumer Staples",
+    "energy": "Energy",
+    "finance": "Financials",
+    "financial services": "Financials",
+    "financials": "Financials",
+    "health care": "Healthcare",
+    "healthcare": "Healthcare",
+    "life sciences": "Healthcare",
+    "industrials": "Industrials",
+    "information technology": "Technology",
+    "technology": "Technology",
+    "basic materials": "Materials",
+    "materials": "Materials",
+    "real estate": "Real Estate",
+    "utilities": "Utilities"
+  }
+}

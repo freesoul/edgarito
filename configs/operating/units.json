@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "scale_aliases": [
+    {"label": "thousand", "multiplier": "1000"},
+    {"label": "thousands", "multiplier": "1000"},
+    {"label": "k", "multiplier": "1000"},
+    {"label": "million", "multiplier": "1000000"},
+    {"label": "millions", "multiplier": "1000000"},
+    {"label": "mn", "multiplier": "1000000"},
+    {"label": "mm", "multiplier": "1000000"},
+    {"label": "billion", "multiplier": "1000000000"},
+    {"label": "billions", "multiplier": "1000000000"},
+    {"label": "bn", "multiplier": "1000000000"},
+    {"label": "bb", "multiplier": "1000000000"}
+  ]
+}

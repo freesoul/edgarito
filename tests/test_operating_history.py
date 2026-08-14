@@ -8,6 +8,7 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
+from edgarito.schemas.operating_history import OperatingEvidenceGap
 from edgarito.services.operating import OperatingHistoryAssembler
 
 
@@ -152,15 +153,36 @@ def test_history_removes_required_optional_alias_collisions():
 def test_history_joins_cross_document_revenue_and_volume_with_auditable_sources():
     result = OperatingHistoryAssembler().assemble(
         [
-            _observation("Automotive revenues", "revenue", 2025, "100", "USD millions", accession="a", document_name="10-K.htm"),
-            _observation("Vehicle business", "volume", 2025, "20", "million units", accession="b", document_name="8-K.htm"),
+            _observation(
+                "Automotive revenues",
+                "revenue",
+                2025,
+                "100",
+                "USD millions",
+                accession="a",
+                document_name="10-K.htm",
+            ),
+            _observation(
+                "Vehicle business",
+                "volume",
+                2025,
+                "20",
+                "million units",
+                accession="b",
+                document_name="8-K.htm",
+            ),
         ]
     )
 
-    price = next(item for item in result.observations if item.driver_id == "implied_price")
+    price = next(
+        item for item in result.observations if item.driver_id == "implied_price"
+    )
     assert price.normalized_value == Decimal("5")
     assert price.method.endswith("cross_document")
-    assert {item.document_name for item in price.source_provenance} == {"10-K.htm", "8-K.htm"}
+    assert {item.document_name for item in price.source_provenance} == {
+        "10-K.htm",
+        "8-K.htm",
+    }
     assert result.audit.joins_attempted == 1
     assert result.audit.joins_accepted == 1
     assert result.audit.source_document_count == 2
@@ -169,14 +191,63 @@ def test_history_joins_cross_document_revenue_and_volume_with_auditable_sources(
 def test_history_rejects_cross_document_period():
     result = OperatingHistoryAssembler().assemble(
         [
-            _observation("Automotive", "revenue", 2025, "100", "USD millions", accession="a", document_name="10-K.htm"),
-            _observation("Vehicle business", "volume", 2025, "20", "million units", period="FQ", period_key="Q1", accession="b", document_name="8-K.htm"),
+            _observation(
+                "Automotive",
+                "revenue",
+                2025,
+                "100",
+                "USD millions",
+                accession="a",
+                document_name="10-K.htm",
+            ),
+            _observation(
+                "Vehicle business",
+                "volume",
+                2025,
+                "20",
+                "million units",
+                period="FQ",
+                period_key="Q1",
+                accession="b",
+                document_name="8-K.htm",
+            ),
         ]
     )
 
     assert not any(item.driver_id == "implied_price" for item in result.observations)
     assert result.audit.joins_rejected >= 1
     assert "incompatible_period" in result.audit.join_rejections_by_reason
+
+
+def test_history_reports_compatible_ytd_pair_without_fy_coverage():
+    result = OperatingHistoryAssembler().assemble(
+        [
+            _observation(
+                "Automotive",
+                "revenue",
+                2025,
+                "100",
+                "USD millions",
+                period="YTD",
+                accession="a",
+                document_name="10-Q.htm",
+            ),
+            _observation(
+                "Automotive",
+                "volume",
+                2025,
+                "20",
+                "million units",
+                period="YTD",
+                accession="b",
+                document_name="8-K.htm",
+            ),
+        ]
+    )
+
+    assert result.audit.reconstruction_candidates
+    assert not result.audit.historical_revenue_pairs
+    assert any("YTD" in item for item in result.audit.reconstruction_candidates)
 
 
 def test_history_does_not_merge_unrelated_similar_segment_names():
@@ -186,4 +257,142 @@ def test_history_does_not_merge_unrelated_similar_segment_names():
             _observation("Vehicle logistics", "volume", 2025, "20", "million units"),
         ]
     )
-    assert {item.segment_id for item in result.observations} == {"automotive", "vehicle_logistics"}
+    assert {item.segment_id for item in result.observations} == {
+        "automotive",
+        "vehicle_logistics",
+    }
+
+
+def test_gap_contract_and_detection_include_required_inputs_and_period_mismatch():
+    gap = OperatingEvidenceGap(
+        segment_id="Auto", driver_id="volume", fiscal_year=2025, period="Q1"
+    )
+    assert gap.segment_id == "auto"
+    assert gap.metric == "volume"
+    assert gap.fiscal_period == "FQ"
+    assert gap.period_key == "Q1"
+    result = OperatingHistoryAssembler().assemble(
+        [_observation("Auto", "revenue", 2025, "100", "USD millions")],
+        definitions=(_definition(),),
+    )
+    assert {item.metric for item in result.audit.gaps_detected} >= {"volume", "price"}
+    assert any(
+        item.reason == "revenue_volume_mismatch" for item in result.audit.gaps_detected
+    )
+
+
+def test_four_complete_quarters_create_fy_and_ltm_history():
+    observations = [
+        _observation(
+            "Auto", "revenue", 2025, str(value), "USD millions", "FQ", f"Q{quarter}"
+        )
+        for quarter, value in enumerate((10, 20, 30, 40), 1)
+    ]
+    result = OperatingHistoryAssembler().assemble(observations)
+    periods = {
+        item.fiscal_period
+        for item in result.observations
+        if item.segment_id == "auto" and item.driver_id == "revenue"
+    }
+    assert {"FY", "LTM"} <= periods
+    assert result.historical_revenue["auto"][2025] == Decimal("100000000")
+
+
+def test_derived_pairs_reject_scope_mismatch_and_extreme_discontinuity():
+    scoped = OperatingHistoryAssembler().assemble(
+        [
+            OperatingDriverObservation(
+                segment_id="Auto",
+                driver_id="revenue",
+                fiscal_year=2025,
+                value=Decimal("100"),
+                unit="USD millions",
+                origin="reported",
+                confidence="high",
+                scope="segment",
+            ),
+            OperatingDriverObservation(
+                segment_id="Auto",
+                driver_id="volume",
+                fiscal_year=2025,
+                value=Decimal("20"),
+                unit="million units",
+                origin="reported",
+                confidence="high",
+                scope="product",
+            ),
+            OperatingDriverObservation(
+                segment_id="Auto",
+                driver_id="price",
+                fiscal_year=2025,
+                value=Decimal("5"),
+                unit="USD/unit",
+                origin="reported",
+                confidence="high",
+                scope="segment",
+            ),
+        ]
+    )
+    assert not any(item.driver_id == "implied_price" for item in scoped.observations)
+    assert any("scope mismatch" in item for item in scoped.audit.join_diagnostics)
+
+    discontinuous = OperatingHistoryAssembler().assemble(
+        [
+            _observation("Auto", "revenue", 2025, "100", "USD millions", "FQ", "Q1"),
+            _observation("Auto", "volume", 2025, "20", "million units", "FQ", "Q1"),
+            _observation("Auto", "revenue", 2025, "100", "USD millions", "FQ", "Q2"),
+            _observation("Auto", "volume", 2025, "0.01", "million units", "FQ", "Q2"),
+        ]
+    )
+    assert any(
+        "extreme order-of-magnitude discontinuity" in item
+        for item in discontinuous.audit.join_diagnostics
+    )
+
+
+def test_broad_revenue_cannot_join_component_kpi_and_scope_is_preserved():
+    result = OperatingHistoryAssembler().assemble(
+        [
+            _observation("Auto", "revenue", 2025, "100", "USD millions"),
+            OperatingDriverObservation(
+                segment_id="Auto",
+                driver_id="volume",
+                fiscal_year=2025,
+                value=Decimal("20"),
+                unit="million units",
+                origin="reported",
+                confidence="high",
+                scope="product",
+                scope_evidence="Model A deliveries",
+                is_component=True,
+            ),
+        ]
+    )
+
+    assert not any(item.driver_id == "implied_price" for item in result.observations)
+    assert result.audit.scope_mismatch_rejections >= 1
+
+
+def test_exhaustive_components_are_the_only_allowed_derived_total():
+    source = [
+        OperatingDriverObservation(
+            segment_id="Auto",
+            driver_id="volume",
+            fiscal_year=2025,
+            value=Decimal(value),
+            unit="units",
+            origin="reported",
+            confidence="high",
+            scope="segment",
+            scope_evidence=f"Product {value}",
+            is_component=True,
+            exhaustive=True,
+        )
+        for value in ("20", "30")
+    ]
+    result = OperatingHistoryAssembler().assemble(source)
+
+    total = next(item for item in result.observations if item.is_total)
+    assert total.normalized_value == Decimal("50")
+    assert total.method == "derived_from_exhaustive_components"
+    assert result.audit.derived_totals == 1

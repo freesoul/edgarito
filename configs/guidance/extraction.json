@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "unit_scales": [
+    {"unit": "actual", "multiplier": "1"},
+    {"unit": "thousands", "multiplier": "1000"},
+    {"unit": "millions", "multiplier": "1000000"},
+    {"unit": "billions", "multiplier": "1000000000"},
+    {"unit": "percent", "multiplier": "1"},
+    {"unit": "per_share", "multiplier": "1"}
+  ],
+  "currencies": [
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CAD",
+    "AUD",
+    "CNY",
+    "KRW",
+    "TWD",
+    "INR",
+    "BRL",
+    "MXN",
+    "SEK",
+    "NOK",
+    "DKK",
+    "HKD",
+    "SGD"
+  ],
+  "number_pattern": "(?<![A-Za-z])[-+]?\\d[\\d,]*(?:\\.\\d+)?",
+  "third_party_terms": [
+    "analyst",
+    "consensus",
+    "market expectation"
+  ],
+  "forward_terms": [
+    "expect",
+    "outlook",
+    "guidance",
+    "forecast",
+    "anticipat",
+    "project",
+    "target",
+    "will",
+    "estimate",
+    "plan"
+  ],
+  "result_terms": [
+    " was ",
+    " were ",
+    "reported",
+    "actual result"
+  ]
+}

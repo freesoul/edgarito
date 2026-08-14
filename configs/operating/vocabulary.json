@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "global_terms": [
+    {"raw": "revenue", "metric": "revenue"},
+    {"raw": "sales", "metric": "revenue"},
+    {"raw": "volume", "metric": "volume"},
+    {"raw": "price", "metric": "price"},
+    {"raw": "customers", "metric": "customers"},
+    {"raw": "capacity", "metric": "capacity"},
+    {"raw": "utilization", "metric": "utilization"},
+    {"raw": "production", "metric": "production"},
+    {"raw": "deliveries", "metric": "deliveries"},
+    {"raw": "shipments", "metric": "shipments"},
+    {"raw": "units", "metric": "volume"},
+    {"raw": "deployments", "metric": "deployments"},
+    {"raw": "subscribers", "metric": "subscribers"},
+    {"raw": "users", "metric": "users"},
+    {"raw": "members", "metric": "members"},
+    {"raw": "arpu", "metric": "arpu"},
+    {"raw": "backlog", "metric": "backlog"},
+    {"raw": "orders", "metric": "orders"},
+    {"raw": "transactions", "metric": "transactions"},
+    {"raw": "stores", "metric": "stores"},
+    {"raw": "sites", "metric": "sites"}
+  ],
+  "industry_terms": {
+    "general_operating": [
+      {"raw": "backlog", "metric": "backlog"},
+      {"raw": "orders", "metric": "orders"}
+    ],
+    "automobile_manufacturers": [
+      {"raw": "deliveries", "metric": "deliveries"},
+      {"raw": "production", "metric": "production"}
+    ],
+    "automotive": [
+      {"raw": "deliveries", "metric": "deliveries"},
+      {"raw": "production", "metric": "production"},
+      {"raw": "asp", "metric": "price"}
+    ],
+    "semiconductors": [
+      {"raw": "wafer shipments", "metric": "volume"},
+      {"raw": "bit shipments", "metric": "volume"},
+      {"raw": "utilization", "metric": "utilization"},
+      {"raw": "asp", "metric": "price"}
+    ],
+    "cloud_software": [
+      {"raw": "seats", "metric": "users"},
+      {"raw": "arr", "metric": "revenue"},
+      {"raw": "mrr", "metric": "revenue"},
+      {"raw": "workloads", "metric": "volume"}
+    ],
+    "bank": [
+      {"raw": "loans", "metric": "volume"},
+      {"raw": "deposits", "metric": "volume"},
+      {"raw": "nim", "metric": "price"},
+      {"raw": "aum", "metric": "volume"}
+    ],
+    "energy_storage": [
+      {"raw": "gwh", "metric": "capacity"},
+      {"raw": "mwh", "metric": "capacity"},
+      {"raw": "deployments", "metric": "deployments"},
+      {"raw": "installed capacity", "metric": "capacity"}
+    ],
+    "technology_platform": [
+      {"raw": "subscribers", "metric": "subscribers"},
+      {"raw": "average revenue per user", "metric": "arpu"}
+    ],
+    "resource_producer": [
+      {"raw": "production", "metric": "production"},
+      {"raw": "reserves", "metric": "reserves"}
+    ],
+    "reit_property": [
+      {"raw": "occupancy", "metric": "occupancy"},
+      {"raw": "same-store NOI", "metric": "same_store_noi"}
+    ],
+    "project_pipeline": [
+      {"raw": "bookings", "metric": "bookings"},
+      {"raw": "backlog", "metric": "backlog"}
+    ]
+  },
+  "industry_aliases": {
+    "automobile": "automotive",
+    "automobiles": "automotive",
+    "auto": "automotive",
+    "auto_manufacturers": "automotive",
+    "automobile_manufacturers": "automotive",
+    "consumer_cyclical_automobiles": "automotive",
+    "consumer_cyclical_auto_manufacturers": "automotive",
+    "semiconductor": "semiconductors",
+    "semiconductors": "semiconductors",
+    "software": "cloud_software",
+    "software_cloud": "cloud_software",
+    "cloud_software": "cloud_software",
+    "software_infrastructure": "cloud_software",
+    "software_application": "cloud_software",
+    "software_systems": "cloud_software",
+    "cloud_computing": "cloud_software",
+    "banking": "bank",
+    "banks": "bank",
+    "bank": "bank",
+    "energy_storage": "energy_storage",
+    "energy_storage_systems": "energy_storage",
+    "energy_and_storage": "energy_storage",
+    "renewable_energy_storage": "energy_storage",
+    "energy_storage_and_batteries": "energy_storage",
+    "storage": "energy_storage",
+    "semiconductor_equipment": "semiconductors"
+  }
+}

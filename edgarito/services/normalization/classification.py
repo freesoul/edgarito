@@ -1,6 +1,7 @@
 import re
 from typing import Optional
 
+from edgarito.config.classification import CLASSIFICATION
 from edgarito.schemas.identifiers import SecurityIdentifiers
 from edgarito.schemas.normalization.classification import (
     NormalizedCompanyClassification,
@@ -10,28 +11,7 @@ from edgarito.schemas.providers.alphavantage.fundamentals import CompanyOverview
 from edgarito.schemas.providers.fmp.fundamentals import CompanyProfile
 from edgarito.schemas.providers.yahoo.fundamentals import YahooCompanyFinancials
 
-SECTOR_ALIASES = {
-    "communication services": Sector.COMMUNICATION_SERVICES,
-    "communications": Sector.COMMUNICATION_SERVICES,
-    "consumer cyclical": Sector.CONSUMER_DISCRETIONARY,
-    "consumer discretionary": Sector.CONSUMER_DISCRETIONARY,
-    "consumer defensive": Sector.CONSUMER_STAPLES,
-    "consumer staples": Sector.CONSUMER_STAPLES,
-    "energy": Sector.ENERGY,
-    "finance": Sector.FINANCIALS,
-    "financial services": Sector.FINANCIALS,
-    "financials": Sector.FINANCIALS,
-    "health care": Sector.HEALTHCARE,
-    "healthcare": Sector.HEALTHCARE,
-    "life sciences": Sector.HEALTHCARE,
-    "industrials": Sector.INDUSTRIALS,
-    "information technology": Sector.TECHNOLOGY,
-    "technology": Sector.TECHNOLOGY,
-    "basic materials": Sector.MATERIALS,
-    "materials": Sector.MATERIALS,
-    "real estate": Sector.REAL_ESTATE,
-    "utilities": Sector.UTILITIES,
-}
+SECTOR_ALIASES = CLASSIFICATION.sector_aliases
 
 
 class CompanyClassificationNormalizer:

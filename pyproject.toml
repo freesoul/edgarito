@@ -47,6 +47,18 @@ exclude = ["venv_windows", "venv", "cache"]
 "configs/red_flags" = [
     "configs/red_flags/default.json",
 ]
+"configs/operating" = [
+    "configs/operating/vocabulary.json",
+    "configs/operating/units.json",
+    "configs/operating/extraction.json",
+]
+"configs/guidance" = [
+    "configs/guidance/documents.json",
+    "configs/guidance/extraction.json",
+]
+"configs/classification" = [
+    "configs/classification/sectors.json",
+]
 
 [tool.ruff]
 target-version = "py310"

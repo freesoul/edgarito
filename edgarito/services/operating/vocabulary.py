@@ -7,111 +7,19 @@ import hashlib
 import json
 import re
 
+from edgarito.config.operating import OPERATING_VOCABULARY
 from edgarito.schemas.vocabulary import DiscoveredKpiTerm, KpiVocabularyAudit
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 
 VOCABULARY_SCHEMA_VERSION = "kpi-vocabulary-v1"
 VOCABULARY_PROMPT_VERSION = "kpi-terminology-v1"
 
-# Deliberately small global vocabulary. Industry additions live below by
-# taxonomy/archetype, never by issuer or ticker.
-GLOBAL_KPI_TERMS = (
-    ("revenue", "revenue"),
-    ("sales", "revenue"),
-    ("volume", "volume"),
-    ("price", "price"),
-    ("customers", "customers"),
-    ("capacity", "capacity"),
-    ("utilization", "utilization"),
-    ("production", "production"),
-    ("deliveries", "deliveries"),
-    ("shipments", "shipments"),
-    ("units", "volume"),
-    ("deployments", "deployments"),
-    ("subscribers", "subscribers"),
-    ("users", "users"),
-    ("members", "members"),
-    ("arpu", "arpu"),
-    ("backlog", "backlog"),
-    ("orders", "orders"),
-    ("transactions", "transactions"),
-    ("stores", "stores"),
-    ("sites", "sites"),
-)
-INDUSTRY_KPI_TERMS = {
-    "general_operating": (("backlog", "backlog"), ("orders", "orders")),
-    "automobile_manufacturers": (
-        ("deliveries", "deliveries"),
-        ("production", "production"),
-    ),
-    "automotive": (
-        ("deliveries", "deliveries"),
-        ("production", "production"),
-        ("asp", "price"),
-    ),
-    "semiconductors": (
-        ("wafer shipments", "volume"),
-        ("bit shipments", "volume"),
-        ("utilization", "utilization"),
-        ("asp", "price"),
-    ),
-    "cloud_software": (
-        ("seats", "users"),
-        ("arr", "revenue"),
-        ("mrr", "revenue"),
-        ("workloads", "volume"),
-    ),
-    "bank": (
-        ("loans", "volume"),
-        ("deposits", "volume"),
-        ("nim", "price"),
-        ("aum", "volume"),
-    ),
-    "energy_storage": (
-        ("gwh", "capacity"),
-        ("mwh", "capacity"),
-        ("deployments", "deployments"),
-        ("installed capacity", "capacity"),
-    ),
-    "technology_platform": (
-        ("subscribers", "subscribers"),
-        ("average revenue per user", "arpu"),
-    ),
-    "resource_producer": (("production", "production"), ("reserves", "reserves")),
-    "reit_property": (("occupancy", "occupancy"), ("same-store NOI", "same_store_noi")),
-    "project_pipeline": (("bookings", "bookings"), ("backlog", "backlog")),
-}
-
-# Provider labels are intentionally mapped here rather than spread across CLI
-# and classification adapters.  The original label remains available for audit.
-INDUSTRY_ALIASES = {
-    "automobile": "automotive",
-    "automobiles": "automotive",
-    "auto": "automotive",
-    "auto_manufacturers": "automotive",
-    "automobile_manufacturers": "automotive",
-    "consumer_cyclical_automobiles": "automotive",
-    "consumer_cyclical_auto_manufacturers": "automotive",
-    "semiconductor": "semiconductors",
-    "semiconductors": "semiconductors",
-    "software": "cloud_software",
-    "software_cloud": "cloud_software",
-    "cloud_software": "cloud_software",
-    "software_infrastructure": "cloud_software",
-    "software_application": "cloud_software",
-    "software_systems": "cloud_software",
-    "cloud_computing": "cloud_software",
-    "banking": "bank",
-    "banks": "bank",
-    "bank": "bank",
-    "energy_storage": "energy_storage",
-    "energy_storage_systems": "energy_storage",
-    "energy_and_storage": "energy_storage",
-    "renewable_energy_storage": "energy_storage",
-    "energy_storage_and_batteries": "energy_storage",
-    "storage": "energy_storage",
-    "semiconductor_equipment": "semiconductors",
-}
+# Deliberately small global vocabulary. Industry additions and provider-label
+# aliases are versioned data; the compiled view retains their source order.
+GLOBAL_KPI_TERMS = OPERATING_VOCABULARY.global_terms
+INDUSTRY_KPI_TERMS = OPERATING_VOCABULARY.industry_terms
+INDUSTRY_ALIASES = OPERATING_VOCABULARY.industry_aliases
+VOCABULARY_CONFIG_VERSION = OPERATING_VOCABULARY.cache_version
 
 
 def normalize_vocabulary_key(value: object | None) -> str:
@@ -208,7 +116,7 @@ class KpiVocabularyProvider:
             return (), base
         digest = document_hash or hashlib.sha256(source_text.encode()).hexdigest()
         key = hashlib.sha256(
-            f"{digest}|{self.model}|{VOCABULARY_PROMPT_VERSION}|{VOCABULARY_SCHEMA_VERSION}".encode()
+            f"{digest}|{self.model}|{VOCABULARY_PROMPT_VERSION}|{VOCABULARY_SCHEMA_VERSION}|{VOCABULARY_CONFIG_VERSION}".encode()
         ).hexdigest()
         path = f"kpi-vocabulary/{normalize_industry_namespace(industry) or normalize_vocabulary_key(business_archetype) or 'unresolved'}/{key}.json"
         cached = self.cache.read(path)

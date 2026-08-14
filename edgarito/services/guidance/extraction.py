@@ -6,6 +6,7 @@ import json
 import re
 from decimal import Decimal
 
+from edgarito.config.guidance import GUIDANCE_DOCUMENTS, GUIDANCE_EXTRACTION
 from edgarito.schemas.guidance.management import (
     ExtractedGuidanceItem,
     ExtractedGuidanceResponse,
@@ -29,6 +30,7 @@ from edgarito.services.openai import OpenAIClient
 PROMPT_VERSION = "management-guidance-v4"
 SCHEMA_VERSION = "management-guidance-schema-v1"
 CONTEXT_VERSION = "guidance-context-v1"
+GUIDANCE_EXTRACTION_CONFIG_VERSION = GUIDANCE_EXTRACTION.cache_version
 
 EXTRACTION_INSTRUCTIONS = """
 Extract only explicit forward-looking numerical guidance issued by company management.
@@ -56,33 +58,14 @@ empty guidance list when no qualifying management guidance exists.
 """.strip()
 
 _SCALE = {
-    GuidanceUnit.ACTUAL: Decimal(1),
-    GuidanceUnit.THOUSANDS: Decimal(1_000),
-    GuidanceUnit.MILLIONS: Decimal(1_000_000),
-    GuidanceUnit.BILLIONS: Decimal(1_000_000_000),
-    GuidanceUnit.PERCENT: Decimal(1),
-    GuidanceUnit.PER_SHARE: Decimal(1),
+    GuidanceUnit(unit): multiplier
+    for unit, multiplier in GUIDANCE_EXTRACTION.unit_scales.items()
 }
-_CURRENCIES = {
-    "USD",
-    "EUR",
-    "GBP",
-    "JPY",
-    "CHF",
-    "CAD",
-    "AUD",
-    "CNY",
-    "KRW",
-    "TWD",
-    "INR",
-    "BRL",
-    "MXN",
-    "SEK",
-    "NOK",
-    "DKK",
-    "HKD",
-    "SGD",
-}
+_CURRENCIES = GUIDANCE_EXTRACTION.currencies
+_GUIDANCE_NUMBER_PATTERN = GUIDANCE_EXTRACTION.number_pattern.regex
+_THIRD_PARTY_TERMS = GUIDANCE_EXTRACTION.third_party_terms
+_FORWARD_TERMS = GUIDANCE_EXTRACTION.forward_terms
+_RESULT_TERMS = GUIDANCE_EXTRACTION.result_terms
 
 
 class ManagementGuidanceExtractor:
@@ -189,6 +172,8 @@ class ManagementGuidanceExtractor:
             "reasoning_effort": self._openai.reasoning_effort,
             "prompt_version": self.prompt_version,
             "schema_version": self.schema_version,
+            "configuration_schema_version": GUIDANCE_EXTRACTION_CONFIG_VERSION,
+            "document_configuration_schema_version": GUIDANCE_DOCUMENTS.cache_version,
         }
         digest = hashlib.sha256(
             json.dumps(identity, sort_keys=True).encode("utf-8")
@@ -276,9 +261,7 @@ class ManagementGuidanceExtractor:
         return Decimal(str(value)) if value is not None else None
 
     @staticmethod
-    def _is_primary_document(
-        filing: SecFiling, document: SecFilingDocument
-    ) -> bool:
+    def _is_primary_document(filing: SecFiling, document: SecFilingDocument) -> bool:
         return document.filename.casefold() == filing.primary_document.casefold()
 
     @staticmethod
@@ -294,26 +277,10 @@ class ManagementGuidanceExtractor:
         if not evidence or evidence.casefold() not in normalized_source.casefold():
             return "Supporting text was not found in the SEC document"
         evidence_lower = evidence.casefold()
-        if any(
-            term in evidence_lower
-            for term in ("analyst", "consensus", "market expectation")
-        ):
+        if any(term in evidence_lower for term in _THIRD_PARTY_TERMS):
             return "Supporting text describes third-party expectations"
-        forward_terms = (
-            "expect",
-            "outlook",
-            "guidance",
-            "forecast",
-            "anticipat",
-            "project",
-            "target",
-            "will",
-            "estimate",
-            "plan",
-        )
-        result_terms = (" was ", " were ", "reported", "actual result")
-        if any(term in f" {evidence_lower} " for term in result_terms) and not any(
-            term in evidence_lower for term in forward_terms
+        if any(term in f" {evidence_lower} " for term in _RESULT_TERMS) and not any(
+            term in evidence_lower for term in _FORWARD_TERMS
         ):
             return "Supporting text describes an actual result, not guidance"
         if item.low is not None and item.high is not None and item.low > item.high:
@@ -334,7 +301,7 @@ class ManagementGuidanceExtractor:
         ]
         evidence_numbers = {
             Decimal(token.replace(",", ""))
-            for token in re.findall(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?", evidence)
+            for token in _GUIDANCE_NUMBER_PATTERN.findall(evidence)
         }
         if any(value not in evidence_numbers for value in values):
             return "Extracted numerical values are absent from supporting text"

@@ -15,6 +15,7 @@ import re
 from decimal import Decimal
 from typing import Iterable
 
+from edgarito.config.operating import OPERATING_EXTRACTION, OPERATING_UNITS
 from edgarito.schemas.operating import (
     EvidenceReference,
     ExtractedOperatingDriverDefinition,
@@ -35,6 +36,7 @@ from edgarito.schemas.operating import (
 from edgarito.schemas.providers.edgar.filing import SecFiling, SecFilingDocument
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.guidance.documents import (
+    GUIDANCE_DOCUMENT_CONFIG_VERSION,
     clean_document_text,
     extract_operating_context,
     normalize_evidence,
@@ -44,6 +46,9 @@ from edgarito.services.openai import OpenAIClient
 PROMPT_VERSION = "operating-evidence-v4"
 SCHEMA_VERSION = "operating-evidence-schema-v4"
 CONTEXT_VERSION = "operating-context-v2"
+OPERATING_EXTRACTION_CONFIG_VERSION = (
+    f"{OPERATING_EXTRACTION.cache_version}|units:{OPERATING_UNITS.cache_version}"
+)
 
 OPERATING_PROMPT_VERSION = PROMPT_VERSION
 OPERATING_SCHEMA_VERSION = SCHEMA_VERSION
@@ -81,72 +86,39 @@ concise. Every numeric value, including a fiscal year, must appear in that
 supporting excerpt. Historical segment revenue is explicitly allowed as a
 reported observation. Do not calculate implied price, ARPU, growth, or any
 other value in the response; deterministic post-processing may derive implied
-price/ARPU only from two accepted same-period reported observations. Exclude
-analyst, consensus, sell-side, Wall Street, market, or third-party
-expectations. Use an empty collection when no qualifying evidence exists.
+ price/ARPU only from two accepted same-period reported observations. Preserve
+scope metadata. Mark `is_total` only when the source explicitly labels the KPI
+as a total for the stated scope. Mark `is_component` for a component or
+subcategory and `exhaustive` only when the source explicitly says the component
+list is complete. These flags control deterministic joins; never infer
+exhaustiveness from the presence of several rows. Exclude analyst, consensus,
+sell-side, Wall Street, market, or third-party expectations. Use an empty
+collection when no qualifying evidence exists.
 """.strip()
 
-_NUMBER_PATTERN = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?")
-_YEAR_PATTERN = re.compile(r"\b(?:FY\s*)?(?:19|20|21|22)\d{2}\b", re.IGNORECASE)
-_FORWARD_PATTERN = re.compile(
-    r"\b(?:expect(?:s|ed|ing)?|outlook|forecast(?:s|ed|ing)?|"
-    r"anticipat(?:e|es|ed|ing)|project(?:s|ed|ing)?|target(?:s|ed|ing)?|"
-    r"plan(?:s|ned|ning)?|will)\b",
-    re.IGNORECASE,
-)
-_FIRST_PARTY_PATTERN = re.compile(
-    r"\b(?:we|our|us|company|management|the group|announced|announcement|"
-    r"planned|plan to|intend(?:s|ed)?|under construction)\b",
-    re.IGNORECASE,
-)
-_THIRD_PARTY_TERMS = (
-    "analyst",
-    "consensus",
-    "sell-side",
-    "sell side",
-    "wall street",
-    "market expectation",
-    "market estimate",
-    "third-party",
-    "third party",
-)
-_REVENUE_DRIVER_IDS = {
-    "revenue",
-    "segment_revenue",
-    "sales",
-    "net_sales",
-    "total_revenue",
-    "revenue_growth",
-    "sales_growth",
-}
-
+_NUMBER_PATTERN = OPERATING_EXTRACTION.number_pattern.regex
+_YEAR_PATTERN = OPERATING_EXTRACTION.year_pattern.regex
+_FORWARD_PATTERN = OPERATING_EXTRACTION.forward_pattern.regex
+_FIRST_PARTY_PATTERN = OPERATING_EXTRACTION.first_party_pattern.regex
+_THIRD_PARTY_TERMS = OPERATING_EXTRACTION.third_party_terms
+_REVENUE_DRIVER_IDS = OPERATING_EXTRACTION.revenue_driver_ids
+_OPERATING_AUDIT_RULES = OPERATING_EXTRACTION.operating_audit_patterns
 _OPERATING_AUDIT_PATTERNS = {
-    "volume": r"\bvolumes?\b",
-    "price": r"\bprices?\b",
-    "subscribers": r"\bsubscribers?\b",
-    "users": r"\busers?\b",
-    "arpu": r"\barpu\b|\baverage revenue per user\b",
-    "capacity": r"\bcapac(?:ity|ities)\b",
-    "utilization": r"\butili[sz]ation\b",
-    "transactions": r"\btransactions?\b",
-    "take rate": r"\btake rate\b",
-    "backlog": r"\bbacklog\b",
-    "store count": r"\bstore count\b",
-    "sales per store": r"\bsales per store\b",
-    "production": r"\bproduction\b",
-    "shipments": r"\bshipments?\b",
-    "deliveries": r"\bdeliveries\b",
-    "investment": r"\binvestments?\b",
-    "facility": r"\bfacilit(?:y|ies)\b",
+    item.keyword: item.pattern for item in _OPERATING_AUDIT_RULES
 }
+_CURRENCY_UNIT_PATTERN = OPERATING_EXTRACTION.currency_unit_pattern.regex
+_COUNT_UNIT_EXCLUSIONS = OPERATING_EXTRACTION.count_unit_exclusions
+_METRIC_ALIASES = OPERATING_EXTRACTION.metric_aliases
+_IMPLIED_REVENUE_DRIVER_IDS = OPERATING_EXTRACTION.implied_revenue_driver_ids
+_IMPLIED_VOLUME_DRIVER_IDS = OPERATING_EXTRACTION.implied_volume_driver_ids
+_IMPLIED_SUBSCRIBER_DRIVER_IDS = OPERATING_EXTRACTION.implied_subscriber_driver_ids
 
 
 def operating_keyword_hits(text: str) -> dict[str, int]:
     """Count the bounded operating vocabulary used in document audits."""
 
     return {
-        keyword: len(re.findall(pattern, text, flags=re.IGNORECASE))
-        for keyword, pattern in _OPERATING_AUDIT_PATTERNS.items()
+        item.keyword: len(item.regex.findall(text)) for item in _OPERATING_AUDIT_RULES
     }
 
 
@@ -183,6 +155,7 @@ class OperatingEvidenceExtractor:
         source_text: str | None = None,
         context_text: str | None = None,
         fiscal_years: tuple[int, ...] | None = None,
+        source_provider: str = "sec",
     ) -> tuple[OperatingExtractionCacheEntry, bool]:
         """Return normalized evidence and whether the result came from cache."""
 
@@ -203,6 +176,7 @@ class OperatingEvidenceExtractor:
             document,
             context_text,
             fiscal_years=fiscal_years,
+            source_provider=source_provider,
         )
 
         cached = self._cache.read(path)
@@ -226,6 +200,7 @@ class OperatingEvidenceExtractor:
             source_text=validation_text,
             as_of=effective_as_of,
             fiscal_years=fiscal_years,
+            source_provider=source_provider,
         )
         self._cache.save(path, entry.model_dump_json(indent=2))
         return entry, False
@@ -237,6 +212,7 @@ class OperatingEvidenceExtractor:
         context_text: str | None = None,
         *,
         fiscal_years: tuple[int, ...] | None = None,
+        source_provider: str = "sec",
     ) -> str:
         if context_text is None:
             context_text = extract_operating_context(
@@ -253,6 +229,9 @@ class OperatingEvidenceExtractor:
             "reasoning_effort": self._openai.reasoning_effort,
             "prompt_version": self.prompt_version,
             "schema_version": self.schema_version,
+            "configuration_schema_version": OPERATING_EXTRACTION_CONFIG_VERSION,
+            "document_configuration_schema_version": GUIDANCE_DOCUMENT_CONFIG_VERSION,
+            "source_provider": source_provider,
         }
         digest = hashlib.sha256(
             json.dumps(identity, sort_keys=True).encode("utf-8")
@@ -272,6 +251,7 @@ class OperatingEvidenceExtractor:
         source_text: str,
         as_of: datetime.date | None,
         fiscal_years: tuple[int, ...] | None,
+        source_provider: str = "sec",
     ) -> OperatingExtractionCacheEntry:
         segments: list[OperatingSegment] = []
         definitions: list[OperatingDriverDefinition] = []
@@ -306,7 +286,7 @@ class OperatingEvidenceExtractor:
                 continue
             try:
                 evidence = self._evidence_reference(
-                    filing, document, item.supporting_text, source_text
+                    filing, document, item.supporting_text, source_text, source_provider
                 )
                 segment = OperatingSegment(
                     segment_id=item.segment_id,
@@ -359,7 +339,7 @@ class OperatingEvidenceExtractor:
                 continue
             try:
                 definition = self._definition_from_item(
-                    item, filing, document, source_text
+                    item, filing, document, source_text, source_provider
                 )
             except ValueError as exc:
                 rejected.append(self._rejection("definition", str(exc), item))
@@ -408,7 +388,7 @@ class OperatingEvidenceExtractor:
                 continue
             try:
                 observation = self._observation_from_item(
-                    item, filing, document, source_text
+                    item, filing, document, source_text, source_provider
                 )
             except ValueError as exc:
                 rejected.append(self._rejection("observation", str(exc), item))
@@ -517,7 +497,9 @@ class OperatingEvidenceExtractor:
                 self._add_diagnostic(rejection, unsupported, missing)
                 continue
             try:
-                program = self._program_from_item(item, filing, document, source_text)
+                program = self._program_from_item(
+                    item, filing, document, source_text, source_provider
+                )
             except ValueError as exc:
                 rejected.append(self._rejection("investment_program", str(exc), item))
                 continue
@@ -570,12 +552,13 @@ class OperatingEvidenceExtractor:
         filing: SecFiling,
         document: SecFilingDocument,
         source_text: str,
+        source_provider: str = "sec",
     ) -> OperatingDriverDefinition:
         archetype = item.archetype
         required = item.required_inputs or item.input_metrics
         formula_id = item.formula_id or archetype.value
         evidence = self._evidence_reference(
-            filing, document, item.supporting_text, source_text
+            filing, document, item.supporting_text, source_text, source_provider
         )
         return OperatingDriverDefinition(
             driver_id=item.driver_id,
@@ -598,9 +581,10 @@ class OperatingEvidenceExtractor:
         filing: SecFiling,
         document: SecFilingDocument,
         source_text: str,
+        source_provider: str = "sec",
     ) -> OperatingDriverObservation:
         evidence = self._evidence_reference(
-            filing, document, item.supporting_text, source_text
+            filing, document, item.supporting_text, source_text, source_provider
         )
         origin = (
             "management_guidance"
@@ -624,6 +608,11 @@ class OperatingEvidenceExtractor:
             original_scale=self._decimal(item.original_scale) or Decimal(1),
             currency=item.currency,
             basis=item.basis,
+            scope=item.scope,
+            scope_evidence=item.scope_evidence or item.basis or item.supporting_text,
+            is_total=item.is_total,
+            is_component=item.is_component,
+            exhaustive=item.exhaustive,
             origin=origin,
             confidence=item.confidence,
             evidence=evidence,
@@ -635,9 +624,10 @@ class OperatingEvidenceExtractor:
         filing: SecFiling,
         document: SecFilingDocument,
         source_text: str,
+        source_provider: str = "sec",
     ) -> OperatingInvestmentProgram:
         evidence = self._evidence_reference(
-            filing, document, item.supporting_text, source_text
+            filing, document, item.supporting_text, source_text, source_provider
         )
         return OperatingInvestmentProgram(
             program_id=item.program_id,
@@ -798,7 +788,7 @@ class OperatingEvidenceExtractor:
                 (
                     item
                     for driver_id, item in values.items()
-                    if driver_id in {"revenue", "segment_revenue", "sales"}
+                    if driver_id in _IMPLIED_REVENUE_DRIVER_IDS
                 ),
                 None,
             )
@@ -806,7 +796,7 @@ class OperatingEvidenceExtractor:
                 (
                     item
                     for driver_id, item in values.items()
-                    if driver_id in {"volume", "units", "deliveries", "shipments"}
+                    if driver_id in _IMPLIED_VOLUME_DRIVER_IDS
                 ),
                 None,
             )
@@ -814,7 +804,7 @@ class OperatingEvidenceExtractor:
                 (
                     item
                     for driver_id, item in values.items()
-                    if driver_id in {"subscribers", "users", "subscriber_count"}
+                    if driver_id in _IMPLIED_SUBSCRIBER_DRIVER_IDS
                 ),
                 None,
             )
@@ -835,6 +825,17 @@ class OperatingEvidenceExtractor:
                 if denominator is None:
                     continue
                 reason = _implied_pair_invalid_reason(revenue, denominator, driver_id)
+                reason = reason or _scope_or_discontinuity_reason(
+                    driver_id,
+                    revenue,
+                    denominator,
+                    value=(
+                        revenue.normalized_value / denominator.normalized_value
+                        if denominator.normalized_value
+                        else Decimal(0)
+                    ),
+                    observations=(*observations, *derived),
+                )
                 if reason:
                     unusable.append(reason)
                     audits.append(
@@ -876,6 +877,32 @@ class OperatingEvidenceExtractor:
                         confidence="medium",
                         method=method,
                         evidence=evidence,
+                        source_provenance=tuple(
+                            item.evidence
+                            for item in (revenue, denominator)
+                            if item.evidence is not None
+                        ),
+                        basis=(
+                            revenue.basis
+                            or denominator.basis
+                            or evidence.supporting_text
+                            if evidence is not None
+                            else revenue.basis or denominator.basis
+                        ),
+                        scope=(
+                            revenue.scope
+                            if revenue.scope == denominator.scope
+                            else None
+                        ),
+                        scope_evidence=(
+                            revenue.scope_evidence
+                            or denominator.scope_evidence
+                            or revenue.basis
+                            or denominator.basis
+                            or evidence.supporting_text
+                            if evidence is not None
+                            else revenue.scope_evidence or denominator.scope_evidence
+                        ),
                     )
                 )
                 audits.append(
@@ -980,9 +1007,10 @@ class OperatingEvidenceExtractor:
         document: SecFilingDocument,
         supporting_text: str,
         source_text: str,
+        provider: str = "sec",
     ) -> EvidenceReference:
         return EvidenceReference(
-            provider="sec",
+            provider=provider,
             accession=filing.accession_number,
             filing_date=filing.filing_date,
             document_name=document.filename,
@@ -1096,38 +1124,20 @@ def _normalize_metric(value: str) -> str:
 def _metric_names_match(left: str, right: str) -> bool:
     left_normalized = _normalize_metric(left)
     right_normalized = _normalize_metric(right)
-    aliases = {
-        "subscribers": {"subscriber_count"},
-        "subscriber_count": {"subscribers"},
-        "arpu": {"average_revenue_per_user"},
-        "average_revenue_per_user": {"arpu"},
-        "stores": {"store_count"},
-        "store_count": {"stores"},
-    }
-    return left_normalized == right_normalized or right_normalized in aliases.get(
-        left_normalized, set()
+    return (
+        left_normalized == right_normalized
+        or right_normalized in _METRIC_ALIASES.get(left_normalized, set())
     )
 
 
 def _is_currency_unit(unit: str) -> bool:
     normalized, _scale = normalize_operating_unit(unit)
-    return bool(
-        re.search(
-            r"(?:^|/)(?:usd|eur|gbp|jpy|cny|cad|aud|chf|currency)(?:/|$)",
-            normalized,
-        )
-    )
+    return bool(_CURRENCY_UNIT_PATTERN.search(normalized))
 
 
 def _is_count_unit(unit: str) -> bool:
     normalized, _scale = normalize_operating_unit(unit)
-    return not _is_currency_unit(unit) and normalized not in {
-        "ratio",
-        "percent",
-        "percentage",
-        "bps",
-        "bp",
-    }
+    return not _is_currency_unit(unit) and normalized not in _COUNT_UNIT_EXCLUSIONS
 
 
 def _implied_pair_invalid_reason(
@@ -1145,6 +1155,45 @@ def _implied_pair_invalid_reason(
     return None
 
 
+def _scope_or_discontinuity_reason(
+    driver_id: str,
+    revenue: OperatingDriverObservation,
+    denominator: OperatingDriverObservation,
+    *,
+    value: Decimal,
+    observations: Iterable[OperatingDriverObservation],
+) -> str | None:
+    scopes = tuple(
+        dict.fromkeys(item.scope for item in (revenue, denominator) if item.scope)
+    )
+    if len(scopes) > 1:
+        return "Cannot derive implied metric: scope mismatch"
+    segment = revenue.segment_id
+    year = revenue.fiscal_year
+    metric = "price" if driver_id == "implied_price" else "arpu"
+    historical = [
+        item.normalized_value
+        for item in observations
+        if item is not revenue
+        and item.segment_id == segment
+        and item.fiscal_year == year
+        and item.origin != "derived"
+        and item.driver_id.casefold() in {metric, f"implied_{metric}"}
+        and item.normalized_value != 0
+    ]
+    if (
+        value != 0
+        and historical
+        and any(
+            value.copy_abs() > item.copy_abs() * Decimal("10")
+            or value.copy_abs() * Decimal("10") < item.copy_abs()
+            for item in historical
+        )
+    ):
+        return "Cannot derive implied metric: extreme order-of-magnitude discontinuity"
+    return None
+
+
 # Common names used by discovery callers; aliases avoid parallel extractors.
 OpenAIOperatingEvidenceExtractor = OperatingEvidenceExtractor
 OperatingDriverExtractor = OperatingEvidenceExtractor
@@ -1154,6 +1203,7 @@ OperatingForecastExtractor = OperatingEvidenceExtractor
 __all__ = [
     "CONTEXT_VERSION",
     "EXTRACTION_INSTRUCTIONS",
+    "OPERATING_EXTRACTION_CONFIG_VERSION",
     "OPERATING_CONTEXT_VERSION",
     "OPERATING_PROMPT_VERSION",
     "OPERATING_SCHEMA_VERSION",
