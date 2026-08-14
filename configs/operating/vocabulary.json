@@ -105,5 +105,43 @@
     "energy_storage_and_batteries": "energy_storage",
     "storage": "energy_storage",
     "semiconductor_equipment": "semiconductors"
+  },
+  "metric_aliases": {
+    "segment_revenue": "revenue",
+    "historical_revenue": "revenue",
+    "historical_segment_revenue": "revenue",
+    "segment_sales": "revenue",
+    "total_revenue": "revenue",
+    "total_sales": "revenue",
+    "sales": "revenue",
+    "net_sales": "revenue",
+    "deliveries": "volume",
+    "shipments": "volume",
+    "production": "volume",
+    "units": "volume",
+    "asp": "price",
+    "average_selling_price": "price",
+    "implied_price": "price",
+    "implied_arpu": "arpu",
+    "subscriber_count": "subscribers",
+    "users": "subscribers",
+    "transaction_count": "transactions",
+    "take_rate": "take_rate",
+    "conversion": "conversion_rate",
+    "stores": "store_count",
+    "sales_per_location": "sales_per_store",
+    "cash_deliveries": "volume",
+    "vehicle_deliveries": "volume",
+    "megapack_deployments": "volume",
+    "powerwall_deployments": "volume",
+    "average_selling_price_per_unit": "price",
+    "average_selling_price_per_megapack_unit": "price",
+    "megapack_average_selling_price": "price"
+  },
+  "revenue_driver_priority": {
+    "revenue": 4,
+    "segment_revenue": 3,
+    "total_revenue": 2,
+    "total_sales": 1
   }
 }

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
-from edgarito.config.operating import OPERATING_EXTRACTION
+from edgarito.config.operating import OPERATING_EXTRACTION, OPERATING_VOCABULARY
 from edgarito.schemas.operating import (
     EvidenceReference,
     OperatingDriverDefinition,
@@ -716,38 +716,7 @@ class OperatingHistoryAssembler:
             return "revenue"
         if normalized.endswith("_revenue_driver") or normalized.endswith("_sales"):
             return "revenue"
-        return {
-            "segment_revenue": "revenue",
-            "historical_revenue": "revenue",
-            "historical_segment_revenue": "revenue",
-            "segment_sales": "revenue",
-            "total_revenue": "revenue",
-            "total_sales": "revenue",
-            "sales": "revenue",
-            "net_sales": "revenue",
-            "deliveries": "volume",
-            "shipments": "volume",
-            "production": "volume",
-            "units": "volume",
-            "asp": "price",
-            "average_selling_price": "price",
-            "implied_price": "price",
-            "implied_arpu": "arpu",
-            "subscriber_count": "subscribers",
-            "users": "subscribers",
-            "transaction_count": "transactions",
-            "take_rate": "take_rate",
-            "conversion": "conversion_rate",
-            "stores": "store_count",
-            "sales_per_location": "sales_per_store",
-            "cash_deliveries": "volume",
-            "vehicle_deliveries": "volume",
-            "megapack_deployments": "volume",
-            "powerwall_deployments": "volume",
-            "average_selling_price_per_unit": "price",
-            "average_selling_price_per_megapack_unit": "price",
-            "megapack_average_selling_price": "price",
-        }.get(normalized, normalized)
+        return OPERATING_VOCABULARY.metric_aliases.get(normalized, normalized)
 
     @classmethod
     def _canonical_observation(

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from edgarito.config.operating import OPERATING_VOCABULARY
 from edgarito.schemas.operating import (
     CompanyOperatingForecast,
     OperatingArchetype,
@@ -31,16 +32,7 @@ _MANAGEMENT_SOURCE = "management_guidance"
 _HISTORICAL_SOURCE = "normalized_historical"
 _UNAVAILABLE_SOURCE = "unavailable"
 _CONSOLIDATION_SOURCE = "mixed"
-_SEGMENT_REVENUE_DRIVERS = frozenset(
-    {
-        "revenue",
-        "segment_revenue",
-        "total_revenue",
-        "total_sales",
-        "sales",
-        "net_sales",
-    }
-)
+_SEGMENT_REVENUE_DRIVERS = frozenset(OPERATING_VOCABULARY.revenue_driver_priority)
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 _YEAR_MIN = 1900
 _YEAR_MAX = 2200
@@ -1525,12 +1517,7 @@ def _find_segment_revenue_constraint(
 
 
 def _segment_revenue_driver_rank(driver_id: str) -> int:
-    return {
-        "revenue": 4,
-        "segment_revenue": 3,
-        "total_revenue": 2,
-        "total_sales": 1,
-    }.get(driver_id.casefold(), 0)
+    return OPERATING_VOCABULARY.revenue_driver_priority.get(driver_id.casefold(), 0)
 
 
 def _direct_revenue_observation(

@@ -33,6 +33,8 @@ class OperatingVocabularyConfiguration(_OperatingConfigModel):
     global_terms: tuple[KpiTermConfiguration, ...]
     industry_terms: dict[str, tuple[KpiTermConfiguration, ...]]
     industry_aliases: dict[str, str]
+    metric_aliases: dict[str, str]
+    revenue_driver_priority: dict[str, int]
 
 
 class UnitScaleConfiguration(_OperatingConfigModel):
@@ -75,6 +77,8 @@ class OperatingVocabularyView:
     global_terms: tuple[tuple[str, str], ...]
     industry_terms: Mapping[str, tuple[tuple[str, str], ...]]
     industry_aliases: Mapping[str, str]
+    metric_aliases: Mapping[str, str]
+    revenue_driver_priority: Mapping[str, int]
 
     @property
     def cache_version(self) -> str:
@@ -208,6 +212,10 @@ class OperatingVocabularyLoader:
                 }
             ),
             industry_aliases=MappingProxyType(dict(model.industry_aliases)),
+            metric_aliases=MappingProxyType(dict(model.metric_aliases)),
+            revenue_driver_priority=MappingProxyType(
+                dict(model.revenue_driver_priority)
+            ),
         )
 
     @classmethod
