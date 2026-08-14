@@ -1,0 +1,548 @@
+"""Orchestration for deterministic operating forecasts.
+
+Input normalization, observation selection, historical reconstruction, and
+consolidation live in focused modules.  This service deliberately owns only the
+workflow and the compatibility methods used by existing callers.
+"""
+
+# The orchestration module re-exports the former private helper names for the
+# public compatibility facade.
+# ruff: noqa: F401
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
+from decimal import Decimal
+from typing import Any
+
+from edgarito.config.operating import OPERATING_VOCABULARY
+from edgarito.schemas.operating import (
+    CompanyOperatingForecast,
+    OperatingArchetype,
+    OperatingDriverDefinition,
+    OperatingDriverForecast,
+    OperatingDriverObservation,
+    OperatingSegment,
+    SegmentRevenueForecast,
+)
+from edgarito.services.operating._forecast.calculation import (
+    calculate_segment_forecast,
+    evaluate_definition,
+    record_driver_forecast,
+    record_input_forecasts,
+)
+from edgarito.services.operating._forecast.consolidation import (
+    _CONSOLIDATION_SOURCE,
+    _combine_formula_sources,
+    _combine_sources,
+    _company_unit,
+    _forecast_confidence,
+    _growth_path,
+    _is_own_operating_source,
+    _modeled_revenue_share,
+    _segment_modeled_revenue_share,
+    _select_consolidation_segments,
+    _worst_confidence,
+)
+from edgarito.services.operating._forecast.contracts import (
+    _CONFIDENCE_RANK,
+    _HISTORICAL_SOURCE,
+    _INDEPENDENT_SOURCE,
+    _MANAGEMENT_SOURCE,
+    _MEDIUM_DRIVER_COVERAGE,
+    _MEDIUM_RECONSTRUCTION_ERROR,
+    _UNAVAILABLE_SOURCE,
+    _YEAR_MAX,
+    _YEAR_MIN,
+    _ConsolidationSelection,
+    _FormulaResult,
+    _HistoricalRevenue,
+    _observation_source,
+    _ReconstructionAudit,
+    _SelectedObservation,
+)
+from edgarito.services.operating._forecast.normalization import (
+    _coerce_definition,
+    _coerce_observation,
+    _coerce_segment,
+    _constraint_mapping_to_observation,
+    _constraint_tuple_to_observation,
+    _is_year_key,
+    _mapping_constraint_items,
+    _non_negative_revenue,
+    _normalize_historical_revenue,
+    _normalize_management_constraints,
+    _normalize_years,
+    _to_decimal,
+    _year_key,
+    normalize_company_historical_revenue,
+)
+from edgarito.services.operating._forecast.reconstruction import (
+    _add_reported_revenue_observations,
+    _apply_company_reconstruction_confidence,
+    _apply_reconstruction_confidence,
+    _has_genuine_reconstruction_inputs,
+    _historical_company_reconstruction_audit,
+    _historical_reconstruction_audit,
+    _mean,
+    _reconstruct_segment_revenue,
+    _reconstruction_confidence,
+    _reconstruction_quality_warnings,
+    _relative_reconstruction_error,
+)
+from edgarito.services.operating._forecast.selection import (
+    _SEGMENT_REVENUE_DRIVERS,
+    _apply_output_constraint,
+    _constraint_label,
+    _direct_revenue_observation,
+    _find_input_observation,
+    _find_output_constraint,
+    _find_segment_revenue_constraint,
+    _generic_growth_fallback,
+    _is_generic_unit_observation,
+    _observation_value,
+    _previous_revenue,
+    _reported_revenue_observation_map,
+    _segment_revenue_driver_rank,
+    _select_observations,
+    _selected_periods_compatible,
+)
+from edgarito.services.operating.registry import (
+    ARCHETYPE_FORMULAS,
+    FORMULA_REGISTRY,
+    ArchetypeFormulaRegistry,
+)
+
+
+class OperatingForecastService:
+    """Build deterministic segment and consolidated operating revenue paths."""
+
+    def __init__(self, registry: ArchetypeFormulaRegistry | None = None):
+        self.registry = registry or FORMULA_REGISTRY
+
+    def forecast(
+        self,
+        segments: Iterable[OperatingSegment],
+        definitions: Iterable[OperatingDriverDefinition],
+        observations: Iterable[OperatingDriverObservation] = (),
+        management_constraints: Any = (),
+        historical_revenue: Any = None,
+        fiscal_years: Iterable[int] = (),
+        *,
+        company_id: str = "company",
+    ) -> CompanyOperatingForecast:
+        """Normalize evidence, forecast each segment, and consolidate roots."""
+
+        years = _normalize_years(fiscal_years)
+        normalized_segments_by_id: dict[str, OperatingSegment] = {}
+        for item in segments:
+            segment = _coerce_segment(item)
+            previous = normalized_segments_by_id.get(segment.segment_id)
+            if previous is None or (
+                previous.name == previous.segment_id and segment.name != segment.segment_id
+            ):
+                normalized_segments_by_id[segment.segment_id] = segment
+        normalized_segments = tuple(normalized_segments_by_id.values())
+        normalized_definitions = tuple(_coerce_definition(item) for item in definitions)
+        for definition in normalized_definitions:
+            if definition.segment_id not in normalized_segments_by_id:
+                normalized_segments_by_id[definition.segment_id] = OperatingSegment(
+                    segment_id=definition.segment_id,
+                    name=definition.segment_id.replace("_", " ").title(),
+                    scope="segment",
+                    source="first_party_filing",
+                    confidence="medium",
+                )
+        normalized_segments = tuple(normalized_segments_by_id.values())
+        normalized_observations = tuple(
+            _coerce_observation(item) for item in observations
+        )
+        normalized_segments = tuple(
+            {segment.segment_id: segment for segment in normalized_segments}.values()
+        )
+        segment_ids = [segment.segment_id for segment in normalized_segments]
+        if len(segment_ids) != len(set(segment_ids)):
+            raise ValueError("Operating segments must have unique segment IDs")
+        unknown_definition_segments = {
+            definition.segment_id
+            for definition in normalized_definitions
+            if definition.segment_id not in set(segment_ids)
+        }
+        if unknown_definition_segments:
+            for segment_id in sorted(unknown_definition_segments):
+                normalized_segments += (
+                    OperatingSegment(
+                        segment_id=segment_id,
+                        name=segment_id.replace("_", " ").title(),
+                        scope="segment",
+                        source="first_party_filing",
+                        confidence="medium",
+                    ),
+                )
+            normalized_segments = tuple(
+                {segment.segment_id: segment for segment in normalized_segments}.values()
+            )
+
+        consolidation = _select_consolidation_segments(normalized_segments)
+        consolidation_ids = {segment.segment_id for segment in consolidation.segments}
+        historical = _normalize_historical_revenue(
+            historical_revenue,
+            normalized_segments,
+        )
+        constraint_records = _normalize_management_constraints(
+            management_constraints,
+            segments=normalized_segments,
+            definitions=normalized_definitions,
+        )
+        records = (*normalized_observations, *constraint_records)
+        selected_records = _select_observations(records)
+        historical_selected_records = _select_observations(
+            record for record in records if record.origin != "management_guidance"
+        )
+        definitions_by_segment: dict[str, tuple[OperatingDriverDefinition, ...]] = {
+            segment.segment_id: tuple(
+                sorted(
+                    (
+                        definition
+                        for definition in normalized_definitions
+                        if definition.segment_id == segment.segment_id
+                        and definition.output_metric == "revenue"
+                    ),
+                    key=lambda item: item.driver_id,
+                )
+            )
+            for segment in normalized_segments
+        }
+
+        segment_forecasts = tuple(
+            self.forecast_segment(
+                segment,
+                definitions_by_segment[segment.segment_id],
+                selected_records=selected_records,
+                historical_selected_records=historical_selected_records,
+                fiscal_years=years,
+                historical_revenue=historical.by_segment.get(segment.segment_id, {}),
+            )
+            for segment in normalized_segments
+        )
+        consolidated_forecasts = tuple(
+            forecast
+            for forecast in segment_forecasts
+            if forecast.segment.segment_id in consolidation_ids
+        )
+        company_audit = _historical_company_reconstruction_audit(
+            consolidation.segments,
+            definitions_by_segment,
+            historical_selected_records,
+            historical,
+            self.registry,
+        )
+        modeled_revenue_share = _modeled_revenue_share(
+            consolidation.segments,
+            segment_forecasts,
+            historical,
+            historical_selected_records,
+            company_audit,
+        )
+
+        consolidated_revenue: list[Decimal] = []
+        consolidated_sources: dict[int, str] = {}
+        consolidated_confidences: dict[int, str] = {}
+        warnings: list[str] = list(consolidation.warnings)
+        for forecast in segment_forecasts:
+            warnings.extend(
+                f"{forecast.segment.segment_id}: {warning}"
+                for warning in forecast.warnings
+            )
+        warnings.extend(f"company: {warning}" for warning in company_audit.warnings)
+
+        for index, year in enumerate(years):
+            segment_values = [
+                forecast.revenue[index] for forecast in consolidated_forecasts
+            ]
+            segment_sources = [
+                forecast.source_by_year[year] for forecast in consolidated_forecasts
+            ]
+            segment_confidences = [
+                forecast.confidence_by_year[year] for forecast in consolidated_forecasts
+            ]
+            if consolidated_forecasts and all(
+                source != _UNAVAILABLE_SOURCE for source in segment_sources
+            ):
+                value = sum(segment_values, Decimal(0))
+                source = _combine_sources(segment_sources)
+                confidence = _worst_confidence(segment_confidences)
+                if source in {_INDEPENDENT_SOURCE, _CONSOLIDATION_SOURCE}:
+                    confidence = _apply_company_reconstruction_confidence(
+                        confidence,
+                        company_audit,
+                    )
+            elif consolidated_forecasts and segment_sources:
+                missing = ", ".join(
+                    forecast.segment.segment_id
+                    for forecast in consolidated_forecasts
+                    if forecast.source_by_year[year] == _UNAVAILABLE_SOURCE
+                )
+                warnings.append(
+                    f"FY{year}: consolidated operating revenue is incomplete; "
+                    f"unavailable segment scope(s): {missing}"
+                )
+                if year in historical.company:
+                    value = historical.company[year]
+                    source = _HISTORICAL_SOURCE
+                    confidence = "medium"
+                else:
+                    value = Decimal(0)
+                    source = _UNAVAILABLE_SOURCE
+                    confidence = "low"
+            elif year in historical.company:
+                value = historical.company[year]
+                source = _HISTORICAL_SOURCE
+                confidence = "medium"
+            else:
+                value = Decimal(0)
+                source = _UNAVAILABLE_SOURCE
+                confidence = "low"
+                if not segment_forecasts:
+                    warnings.append(
+                        f"FY{year}: no operating segments or historical revenue"
+                    )
+            consolidated_revenue.append(value)
+            consolidated_sources[year] = source
+            consolidated_confidences[year] = confidence
+
+        explicit_years = sorted(
+            year
+            for year, source in consolidated_sources.items()
+            if source not in {_HISTORICAL_SOURCE, _UNAVAILABLE_SOURCE}
+        )
+        consolidated_growth = _growth_path(tuple(consolidated_revenue))
+        transition_start_year = explicit_years[-1] + 1 if explicit_years else None
+        return CompanyOperatingForecast(
+            company_id=company_id,
+            fiscal_years=years,
+            segment_forecasts=segment_forecasts,
+            consolidated_revenue=tuple(consolidated_revenue),
+            consolidated_growth=consolidated_growth,
+            explicit_years=tuple(explicit_years),
+            transition_start_year=transition_start_year,
+            source_by_year=consolidated_sources,
+            confidence_by_year=consolidated_confidences,
+            warnings=tuple(dict.fromkeys(warnings)),
+            unit=_company_unit(normalized_segments),
+            driver_coverage=company_audit.coverage,
+            modeled_revenue_share=modeled_revenue_share,
+            genuine_coverage=company_audit.genuine_coverage,
+            reconstruction_error=company_audit.error,
+            reconstruction_error_by_year=company_audit.error_by_year,
+            derived_reconstruction_years=company_audit.derived_reconstruction_years,
+            supported_years=company_audit.supported_years,
+            own_supported_years=tuple(
+                year
+                for year, source in consolidated_sources.items()
+                if _is_own_operating_source(source)
+                and _CONFIDENCE_RANK[consolidated_confidences[year]]
+                >= _CONFIDENCE_RANK["medium"]
+            ),
+            confidence=company_audit.confidence,
+        )
+
+    def forecast_segment(
+        self,
+        segment: OperatingSegment,
+        definitions: Iterable[OperatingDriverDefinition],
+        observations: Iterable[OperatingDriverObservation] = (),
+        management_constraints: Any = (),
+        historical_revenue: Any = None,
+        fiscal_years: Iterable[int] = (),
+        *,
+        selected_records: Mapping[tuple[str, str, int], _SelectedObservation]
+        | None = None,
+        historical_selected_records: Mapping[
+            tuple[str, str, int], _SelectedObservation
+        ]
+        | None = None,
+    ) -> SegmentRevenueForecast:
+        """Build one segment path; public for formula-focused callers."""
+
+        normalized_segment = _coerce_segment(segment)
+        years = _normalize_years(fiscal_years)
+        normalized_definitions = tuple(_coerce_definition(item) for item in definitions)
+        if any(
+            definition.segment_id != normalized_segment.segment_id
+            for definition in normalized_definitions
+        ):
+            raise ValueError("Operating definition segment_id must match the segment")
+
+        if selected_records is None:
+            records = tuple(_coerce_observation(item) for item in observations)
+            records += _normalize_management_constraints(
+                management_constraints,
+                segments=(normalized_segment,),
+                definitions=normalized_definitions,
+            )
+            selected_records = _select_observations(records)
+            historical_selected_records = _select_observations(
+                record for record in records if record.origin != "management_guidance"
+            )
+        elif historical_selected_records is None:
+            historical_selected_records = {
+                key: selected
+                for key, selected in selected_records.items()
+                if selected.source != _MANAGEMENT_SOURCE
+            }
+        historical = _normalize_historical_revenue(
+            historical_revenue,
+            (normalized_segment,),
+        )
+        return self._forecast_segment(
+            normalized_segment,
+            normalized_definitions,
+            selected_records,
+            historical_selected_records,
+            years,
+            historical.by_segment.get(normalized_segment.segment_id, {}),
+        )
+
+    build = forecast
+    forecast_company = forecast
+
+    def _forecast_segment(
+        self,
+        segment: OperatingSegment,
+        definitions: tuple[OperatingDriverDefinition, ...],
+        selected_records: Mapping[tuple[str, str, int], _SelectedObservation],
+        historical_selected_records: Mapping[
+            tuple[str, str, int], _SelectedObservation
+        ],
+        years: tuple[int, ...],
+        historical_revenue: Mapping[int, Decimal],
+    ) -> SegmentRevenueForecast:
+        return calculate_segment_forecast(
+            self,
+            segment,
+            definitions,
+            selected_records,
+            historical_selected_records,
+            years,
+            historical_revenue,
+        )
+
+    def _evaluate_definition(
+        self,
+        segment: OperatingSegment,
+        definition: OperatingDriverDefinition,
+        selected_records: Mapping[tuple[str, str, int], _SelectedObservation],
+        year: int,
+        selected_revenue_by_year: Mapping[int, Decimal],
+        historical_revenue: Mapping[int, Decimal],
+    ) -> tuple[_FormulaResult | None, list[str]]:
+        return evaluate_definition(
+            self,
+            segment,
+            definition,
+            selected_records,
+            year,
+            selected_revenue_by_year,
+            historical_revenue,
+        )
+
+    @staticmethod
+    def _first_observation_provenance(observations):
+        for observation in observations:
+            if observation.provenance is not None:
+                return observation.provenance
+        return None
+
+    @staticmethod
+    def _first_provenance(results):
+        for result in results:
+            if result.provenance is not None:
+                return result.provenance
+        return None
+
+    # Keep the former helper lookup seams available to subclasses and tests;
+    # calculation delegates through these methods rather than importing the
+    # helpers directly at each call site.
+    @staticmethod
+    def _find_input_observation(*args, **kwargs):
+        return _find_input_observation(*args, **kwargs)
+
+    @staticmethod
+    def _find_output_constraint(*args, **kwargs):
+        return _find_output_constraint(*args, **kwargs)
+
+    @staticmethod
+    def _find_segment_revenue_constraint(*args, **kwargs):
+        return _find_segment_revenue_constraint(*args, **kwargs)
+
+    @staticmethod
+    def _is_generic_unit_observation(*args, **kwargs):
+        return _is_generic_unit_observation(*args, **kwargs)
+
+    @staticmethod
+    def _selected_periods_compatible(*args, **kwargs):
+        return _selected_periods_compatible(*args, **kwargs)
+
+    @staticmethod
+    def _generic_growth_fallback(*args, **kwargs):
+        return _generic_growth_fallback(*args, **kwargs)
+
+    @staticmethod
+    def _record_input_forecasts(
+        forecasts: dict[tuple[str, int], OperatingDriverForecast],
+        segment: OperatingSegment,
+        definition: OperatingDriverDefinition,
+        inputs: tuple[_SelectedObservation, ...],
+        year: int,
+        warnings: list[str],
+    ) -> None:
+        record_input_forecasts(
+            None,
+            forecasts,
+            segment,
+            definition,
+            inputs,
+            year,
+            warnings,
+        )
+
+    @staticmethod
+    def _record_driver_forecast(
+        forecasts: dict[tuple[str, int], OperatingDriverForecast],
+        forecast: OperatingDriverForecast,
+        warnings: list[str],
+    ) -> None:
+        record_driver_forecast(forecasts, forecast, warnings)
+
+
+DeterministicOperatingForecastService = OperatingForecastService
+OperatingForecastEngine = OperatingForecastService
+
+
+def _first_observation_provenance(observations):
+    for observation in observations:
+        if observation.provenance is not None:
+            return observation.provenance
+    return None
+
+
+def _first_provenance(results):
+    for result in results:
+        if result.provenance is not None:
+            return result.provenance
+    return None
+
+
+__all__ = [
+    "ARCHETYPE_FORMULAS",
+    "ArchetypeFormulaRegistry",
+    "CompanyOperatingForecast",
+    "DeterministicOperatingForecastService",
+    "FORMULA_REGISTRY",
+    "OperatingForecastEngine",
+    "OperatingForecastService",
+    "SegmentRevenueForecast",
+    "normalize_company_historical_revenue",
+]

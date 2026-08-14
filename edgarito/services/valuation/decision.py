@@ -9,11 +9,9 @@ from edgarito.schemas.normalization.financials import NormalizedCompanyFinancial
 from edgarito.services.financial_observation_availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting import (
-    AdaptiveMultistageFcffForecastService,
+from edgarito.services.forecasting.models import (
     FcffForecast,
     FcffForecastParameters,
-    FcffForecastService,
     ForwardGrowthEvidence,
 )
 from edgarito.services.valuation.decision_models import (
@@ -135,6 +133,8 @@ class IntrinsicDecisionEngine:
         ):
             raise ValueError("Decision analysis currently requires perpetuity growth")
         self.context = context
+        from edgarito.services.forecasting import FcffForecastService
+
         self._forecast_service = FcffForecastService()
 
     def evaluate(
@@ -194,6 +194,10 @@ class IntrinsicDecisionEngine:
             adaptive_seed = (
                 context.base_forecast if preserve_projection_structure else forecast
             )
+            from edgarito.services.forecasting import (
+                AdaptiveMultistageFcffForecastService,
+            )
+
             forecast, plan = AdaptiveMultistageFcffForecastService(
                 self._forecast_service
             ).forecast(

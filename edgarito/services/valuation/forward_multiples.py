@@ -1,12 +1,14 @@
+from __future__ import annotations
+
 import datetime
 import math
 from decimal import Decimal
 from statistics import median
+from typing import TYPE_CHECKING
 
 from edgarito.services.financial_observation_availability import (
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import FcffForecastParameters
 from edgarito.services.valuation.historical_multiples import HistoricalMultiplesService
 from edgarito.services.valuation.models import (
@@ -16,12 +18,19 @@ from edgarito.services.valuation.models import (
 )
 from edgarito.services.valuation.multiple_resolver import MultipleResolver
 
+if TYPE_CHECKING:
+    from edgarito.services.forecasting.fcff import FcffForecastService
+
 
 class ForwardPeerMultiplesService:
     """Build same-horizon peer multiples from each peer's generic forecast."""
 
     def __init__(self, forecast_service: FcffForecastService | None = None):
-        self._forecast_service = forecast_service or FcffForecastService()
+        if forecast_service is None:
+            from edgarito.services.forecasting.fcff import FcffForecastService
+
+            forecast_service = FcffForecastService()
+        self._forecast_service = forecast_service
 
     def build(
         self,

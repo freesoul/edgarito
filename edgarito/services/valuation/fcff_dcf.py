@@ -15,7 +15,6 @@ from edgarito.services.financial_observation_availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
-from edgarito.services.forecasting.fcff import FcffForecastService
 from edgarito.services.forecasting.models import (
     AdaptiveMultistagePlan,
     FcffForecast,
@@ -668,6 +667,8 @@ class FcffDcfService:
                     "the assumed execution-price path differs from the model-implied "
                     "fair-value path"
                 )
+
+        from edgarito.services.forecasting.fcff import FcffForecastService
 
         forecast_service = FcffForecastService()
         identity_issues = forecast_service.economic_identity_issues(forecast)

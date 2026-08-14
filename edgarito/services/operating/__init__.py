@@ -19,6 +19,7 @@ from edgarito.services.operating.forecast import (
     DeterministicOperatingForecastService,
     OperatingForecastEngine,
     OperatingForecastService,
+    normalize_company_historical_revenue,
 )
 from edgarito.services.operating.history import (
     NormalizedOperatingHistoryService,
@@ -94,6 +95,7 @@ __all__ = [
     "OperatingForecastExtractor",
     "OperatingForecastReconciler",
     "OperatingForecastService",
+    "normalize_company_historical_revenue",
     "OperatingFormulaRegistry",
     "OperatingRevenueReconciler",
     "OperatingRevenueReconciliation",
