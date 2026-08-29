@@ -48,7 +48,7 @@ class OperatingUnitsConfiguration(_OperatingConfigModel):
 
 
 class OperatingExtractionConfiguration(_OperatingConfigModel):
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     number_pattern: str = Field(min_length=1)
     year_pattern: str = Field(min_length=1)
     forward_pattern: str = Field(min_length=1)
@@ -65,6 +65,9 @@ class OperatingExtractionConfiguration(_OperatingConfigModel):
     history_revenue_metric_ids: tuple[str, ...]
     history_volume_metric_ids: tuple[str, ...]
     history_count_metric_ids: tuple[str, ...]
+    gross_margin_driver_ids: tuple[str, ...] = ()
+    gross_profit_driver_ids: tuple[str, ...] = ()
+    cost_of_revenue_driver_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,9 @@ class OperatingExtractionView:
     history_revenue_metric_ids: frozenset[str]
     history_volume_metric_ids: frozenset[str]
     history_count_metric_ids: frozenset[str]
+    gross_margin_driver_ids: frozenset[str] = frozenset()
+    gross_profit_driver_ids: frozenset[str] = frozenset()
+    cost_of_revenue_driver_ids: frozenset[str] = frozenset()
 
     @property
     def cache_version(self) -> str:
@@ -363,6 +369,9 @@ class OperatingExtractionLoader:
             history_revenue_metric_ids=frozenset(model.history_revenue_metric_ids),
             history_volume_metric_ids=frozenset(model.history_volume_metric_ids),
             history_count_metric_ids=frozenset(model.history_count_metric_ids),
+            gross_margin_driver_ids=frozenset(model.gross_margin_driver_ids),
+            gross_profit_driver_ids=frozenset(model.gross_profit_driver_ids),
+            cost_of_revenue_driver_ids=frozenset(model.cost_of_revenue_driver_ids),
         )
 
     @classmethod

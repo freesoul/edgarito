@@ -1,6 +1,10 @@
 from edgarito.services.operating._discovery.service import (
     OperatingEvidenceDiscoveryService,
 )
+from edgarito.services.operating._forecast.economics import (
+    GrossEconomicsForecastService,
+    OperatingEconomicsForecastService,
+)
 from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
@@ -46,6 +50,8 @@ __all__ = [
     "OperatingEvidenceExtractionError",
     "OperatingEvidenceExtractor",
     "OperatingForecastService",
+    "OperatingEconomicsForecastService",
+    "GrossEconomicsForecastService",
     "normalize_company_historical_revenue",
     "RevenueForecastReconciler",
     "backlog_conversion",

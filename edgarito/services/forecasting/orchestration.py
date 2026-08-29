@@ -175,6 +175,10 @@ class FcffForecastOrchestrationService:
             forwarded.update(kwargs)
             forwarded.setdefault("evidence", evidence)
             forwarded.setdefault("parameters", parameters or FcffForecastParameters())
+            # The intermediate operating layer may execute explicit gross
+            # economics decisions, while this FCFF seam still rejects the
+            # unresolved driver-based FCFF method above.
+            forwarded.setdefault("forecast_plan", plan)
             forwarded.setdefault("as_of", as_of)
             forwarded.setdefault("availability_mode", availability_mode)
             try:

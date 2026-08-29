@@ -44,6 +44,9 @@ from edgarito.services.operating._forecast.contracts import (
     _FormulaResult,
     _SelectedObservation,
 )
+from edgarito.services.operating._forecast.economics import (
+    OperatingEconomicsForecastService,
+)
 from edgarito.services.operating._forecast.normalization import (
     _coerce_definition,
     _coerce_observation,
@@ -76,8 +79,13 @@ from edgarito.services.operating.registry import (
 class OperatingForecastService:
     """Build deterministic segment and consolidated operating revenue paths."""
 
-    def __init__(self, registry: ArchetypeFormulaRegistry | None = None):
+    def __init__(
+        self,
+        registry: ArchetypeFormulaRegistry | None = None,
+        economics_service: OperatingEconomicsForecastService | None = None,
+    ):
         self.registry = registry or FORMULA_REGISTRY
+        self.economics_service = economics_service or OperatingEconomicsForecastService()
 
     def forecast(
         self,
@@ -89,14 +97,23 @@ class OperatingForecastService:
         fiscal_years: Iterable[int] = (),
         *,
         company_id: str = "company",
+        plan: Any | None = None,
+        forecast_plan: Any | None = None,
+        overrides: Any = (),
+        forecast_overrides: Any | None = None,
+        economics_config: Any | None = None,
+        operating_economics_config: Any | None = None,
     ) -> CompanyOperatingForecast:
         """Normalize evidence, forecast each segment, and consolidate roots."""
 
         years = _normalize_years(fiscal_years)
         normalized_segments_by_id: dict[str, OperatingSegment] = {}
+        ambiguous_segment_ids: set[str] = set()
         for item in segments:
             segment = _coerce_segment(item)
             previous = normalized_segments_by_id.get(segment.segment_id)
+            if previous is not None:
+                ambiguous_segment_ids.add(segment.segment_id)
             if previous is None or (
                 previous.name == previous.segment_id and segment.name != segment.segment_id
             ):
@@ -277,7 +294,7 @@ class OperatingForecastService:
         )
         consolidated_growth = _growth_path(tuple(consolidated_revenue))
         transition_start_year = explicit_years[-1] + 1 if explicit_years else None
-        return CompanyOperatingForecast(
+        company_forecast = CompanyOperatingForecast(
             company_id=company_id,
             fiscal_years=years,
             segment_forecasts=segment_forecasts,
@@ -305,6 +322,55 @@ class OperatingForecastService:
             ),
             confidence=company_audit.confidence,
         )
+        economics_requested = _has_economics_inputs(
+            records,
+            plan if plan is not None else forecast_plan,
+            overrides if forecast_overrides is None else forecast_overrides,
+        )
+        if economics_requested and not normalized_segments and _has_explicit_economics_target(
+            plan if plan is not None else forecast_plan,
+            overrides if forecast_overrides is None else forecast_overrides,
+        ):
+            raise ValueError(
+                "Explicit gross-economics target does not match a supplied canonical segment"
+            )
+        if economics_requested and normalized_segments:
+            economics = self.economics_service.forecast(
+                segments=normalized_segments,
+                segment_revenue_forecasts=segment_forecasts,
+                observations=records,
+                fiscal_years=years,
+                plan=plan,
+                forecast_plan=forecast_plan,
+                overrides=overrides,
+                forecast_overrides=forecast_overrides,
+                company_id=company_id,
+                config=(
+                    economics_config
+                    if economics_config is not None
+                    else operating_economics_config
+                ),
+                ambiguous_segment_ids=ambiguous_segment_ids,
+            )
+            economics_by_id = {
+                item.segment.segment_id: item for item in economics.segment_economics
+            }
+            company_forecast = company_forecast.model_copy(
+                update={
+                    "segment_forecasts": tuple(
+                        item.model_copy(
+                            update={
+                                "operating_economics": economics_by_id.get(
+                                    item.segment.segment_id
+                                )
+                            }
+                        )
+                        for item in segment_forecasts
+                    ),
+                    "operating_economics": economics,
+                }
+            )
+        return company_forecast
 
     def forecast_segment(
         self,
@@ -497,3 +563,96 @@ __all__ = [
     "SegmentRevenueForecast",
     "normalize_company_historical_revenue",
 ]
+
+
+def _has_economics_inputs(observations, plan, overrides) -> bool:
+    """Keep the revenue-only model dump unchanged unless economics are requested."""
+
+    economics_metrics = {
+        "gross_margin",
+        "gross_margin_percent",
+        "gross_margin_percentage",
+        "gross_margin_rate",
+        "gross_margin_pct",
+        "gross_profit_margin",
+        "gross_profit",
+        "gross_profit_amount",
+        "gross_income",
+        "gross_income_amount",
+        "cost_of_revenue",
+        "cost_of_sales",
+        "cost_of_goods_sold",
+        "cost_of_goods",
+        "cogs",
+    }
+    if any(
+        str(getattr(item, "driver_id", "")).strip().casefold().replace("-", "_").replace(" ", "_")
+        in economics_metrics
+        for item in observations
+    ):
+        return True
+    records = []
+    if plan is not None:
+        records.extend(getattr(plan, "decisions", ()) or ())
+        records.extend(getattr(plan, "overrides", ()) or ())
+        if isinstance(plan, Mapping):
+            records.extend(plan.get("decisions", ()) or ())
+            records.extend(plan.get("overrides", ()) or ())
+    if isinstance(overrides, Mapping):
+        records.extend(overrides.values())
+    elif hasattr(overrides, "metric") and hasattr(overrides, "strategy"):
+        records.append(overrides)
+    else:
+        try:
+            records.extend(overrides or ())
+        except TypeError:
+            records.append(overrides)
+    return any(
+        str(
+            getattr(
+                getattr(item, "metric", item.get("metric", "") if isinstance(item, Mapping) else ""),
+                "value",
+                getattr(item, "metric", item.get("metric", "") if isinstance(item, Mapping) else ""),
+            )
+        )
+        .strip()
+        .casefold()
+        .replace("-", "_")
+        .replace(" ", "_")
+        in economics_metrics
+        for item in records
+    )
+
+
+def _has_explicit_economics_target(plan, overrides) -> bool:
+    records = []
+    if plan is not None:
+        if isinstance(plan, Mapping):
+            records.extend(plan.get("decisions", ()) or ())
+            records.extend(plan.get("overrides", ()) or ())
+        else:
+            records.extend(getattr(plan, "decisions", ()) or ())
+            records.extend(getattr(plan, "overrides", ()) or ())
+    if isinstance(overrides, Mapping):
+        records.extend(overrides.values())
+    elif hasattr(overrides, "metric") and hasattr(overrides, "strategy"):
+        records.append(overrides)
+    else:
+        try:
+            records.extend(overrides or ())
+        except TypeError:
+            records.append(overrides)
+    for item in records:
+        metric = (
+            item.get("metric", "") if isinstance(item, Mapping) else getattr(item, "metric", "")
+        )
+        strategy = (
+            item.get("strategy", "")
+            if isinstance(item, Mapping)
+            else getattr(item, "strategy", "")
+        )
+        metric = str(getattr(metric, "value", metric)).strip().casefold()
+        strategy = str(getattr(strategy, "value", strategy)).strip().casefold()
+        if metric in {"gross_margin", "gross_profit"} and strategy == "explicit":
+            return True
+    return False

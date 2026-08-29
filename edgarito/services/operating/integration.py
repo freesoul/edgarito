@@ -69,6 +69,11 @@ class OperatingForecastIntegrationService:
         *,
         fcff_parameters: FcffForecastParameters | None = None,
         company_id: str = "company",
+        plan: Any | None = None,
+        forecast_plan: Any | None = None,
+        overrides: Any = (),
+        forecast_overrides: Any | None = None,
+        economics_config: Any | None = None,
     ) -> _contracts.OperatingForecastIntegrationResult:
         if parameters is not None and fcff_parameters is not None:
             raise ValueError("Pass either parameters or fcff_parameters, not both")
@@ -132,6 +137,11 @@ class OperatingForecastIntegrationService:
             historical_revenue,
             fiscal_years,
             company_id=company_id,
+            plan=plan,
+            forecast_plan=forecast_plan,
+            overrides=overrides,
+            forecast_overrides=forecast_overrides,
+            economics_config=economics_config,
         )
         company_history = normalize_company_historical_revenue(
             historical_revenue,
@@ -212,6 +222,11 @@ class OperatingForecastPipelineService:
             ObservationAvailabilityMode.POINT_IN_TIME
         ),
         company_id: str | None = None,
+        plan: Any | None = None,
+        forecast_plan: Any | None = None,
+        overrides: Any = (),
+        forecast_overrides: Any | None = None,
+        economics_config: Any | None = None,
     ) -> _contracts.OperatingForecastPipelineResult:
         """Compose the operating selection before adaptive FCFF arithmetic."""
 
@@ -279,6 +294,11 @@ class OperatingForecastPipelineService:
             fiscal_years=years,
             parameters=requested,
             company_id=company_id or financials.company_id,
+            plan=plan,
+            forecast_plan=forecast_plan,
+            overrides=overrides,
+            forecast_overrides=forecast_overrides,
+            economics_config=economics_config,
         )
         quality = self.quality_gate(values, integration.reconciled_forecast)
         if not quality.accepted:

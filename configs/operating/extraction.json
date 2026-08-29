@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "number_pattern": "(?<![A-Za-z])[-+]?\\d[\\d,]*(?:\\.\\d+)?",
   "year_pattern": "\\b(?:FY\\s*)?(?:19|20|21|22)\\d{2}\\b",
   "forward_pattern": "\\b(?:expect(?:s|ed|ing)?|outlook|forecast(?:s|ed|ing)?|anticipat(?:e|es|ed|ing)|project(?:s|ed|ing)?|target(?:s|ed|ing)?|plan(?:s|ned|ning)?|will)\\b",
@@ -41,7 +41,10 @@
     {"keyword": "shipments", "pattern": "\\bshipments?\\b"},
     {"keyword": "deliveries", "pattern": "\\bdeliveries\\b"},
     {"keyword": "investment", "pattern": "\\binvestments?\\b"},
-    {"keyword": "facility", "pattern": "\\bfacilit(?:y|ies)\\b"}
+    {"keyword": "facility", "pattern": "\\bfacilit(?:y|ies)\\b"},
+    {"keyword": "gross margin", "pattern": "\\bgross\\s+(?:profit|income)\\s+margin\\b|\\bgross\\s+margin\\b"},
+    {"keyword": "gross profit", "pattern": "\\bgross\\s+(?:profit|income)\\b"},
+    {"keyword": "cost of revenue", "pattern": "\\bcost\\s+of\\s+(?:revenue|sales|goods\\s+sold)\\b|\\bcogs\\b"}
   ],
   "currency_unit_pattern": "(?:^|/)(?:usd|eur|gbp|jpy|cny|cad|aud|chf|currency)(?:/|$)",
   "count_unit_exclusions": [
@@ -57,7 +60,13 @@
     "arpu": ["average_revenue_per_user"],
     "average_revenue_per_user": ["arpu"],
     "stores": ["store_count"],
-    "store_count": ["stores"]
+    "store_count": ["stores"],
+    "gross_margin": ["gross_profit_margin", "gross_margin_percent", "gross_margin_percentage", "gross_margin_rate", "gross_margin_pct"],
+    "gross_profit_margin": ["gross_margin"],
+    "gross_profit": ["gross_income", "gross_profit_amount"],
+    "gross_income": ["gross_profit"],
+    "cost_of_revenue": ["cost_of_sales", "cost_of_goods_sold", "cogs"],
+    "cost_of_sales": ["cost_of_revenue", "cost_of_goods_sold", "cogs"]
   },
   "implied_revenue_driver_ids": [
     "revenue",
@@ -96,5 +105,24 @@
     "users",
     "stores",
     "store_count"
+  ],
+  "gross_margin_driver_ids": [
+    "gross_margin",
+    "gross_profit_margin",
+    "gross_margin_percent",
+    "gross_margin_percentage",
+    "gross_margin_rate",
+    "gross_margin_pct"
+  ],
+  "gross_profit_driver_ids": [
+    "gross_profit",
+    "gross_income",
+    "gross_profit_amount"
+  ],
+  "cost_of_revenue_driver_ids": [
+    "cost_of_revenue",
+    "cost_of_sales",
+    "cost_of_goods_sold",
+    "cogs"
   ]
 }

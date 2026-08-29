@@ -255,6 +255,19 @@ class RevenueForecastReconciler:
                 "Revenue transition starts after "
                 f"FY{transition_start_year - 1}: FY{transition_start_year}"
             )
+        economics_changed = revenue != forecast.consolidated_revenue
+        economics_warning = (
+            "Gross economics cleared from reconciled revenue path because revenue "
+            "reconciliation changed the independent denominator"
+            if economics_changed and forecast.operating_economics is not None
+            else None
+        )
+        reconciled_segment_forecasts = forecast.segment_forecasts
+        if economics_changed and forecast.operating_economics is not None:
+            reconciled_segment_forecasts = tuple(
+                item.model_copy(update={"operating_economics": None})
+                for item in forecast.segment_forecasts
+            )
         reconciled_forecast = forecast.model_copy(
             update={
                 "consolidated_revenue": revenue,
@@ -273,9 +286,23 @@ class RevenueForecastReconciler:
                 "independent_revenue_by_year": independent_revenue_by_year,
                 "consensus_revenue_by_year": consensus_revenue_by_year,
                 "management_revenue_by_year": management_revenue_by_year,
+                "segment_forecasts": reconciled_segment_forecasts,
+                "operating_economics": None
+                if economics_changed
+                else forecast.operating_economics,
                 "warnings": tuple(dict.fromkeys(warnings)),
             }
         )
+        if economics_warning is not None:
+            reconciled_forecast = reconciled_forecast.model_copy(
+                update={
+                    "warnings": tuple(
+                        dict.fromkeys(
+                            (*reconciled_forecast.warnings, economics_warning)
+                        )
+                    )
+                }
+            )
         self._last_resolved_years = resolved_years
         details = _contracts.RevenueForecastReconciliation(
             reconciled_forecast, resolved_years

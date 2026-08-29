@@ -172,6 +172,26 @@ def _metric_value(value: ForecastMetric | str) -> str:
     return value.value if isinstance(value, ForecastMetric) else str(value)
 
 
+def _validate_economics_explicit_record(metric, strategy, path) -> None:
+    """Validate shared gross-economics manual paths without a second override type."""
+
+    normalized_metric = _metric_value(metric).strip().casefold().replace("-", "_")
+    if normalized_metric not in {"gross_margin", "gross_profit"}:
+        return
+    if strategy == ForecastStrategy.EXPLICIT and path is None:
+        raise ValueError(f"Explicit {normalized_metric} records require explicit_path")
+    if path is None:
+        return
+    if normalized_metric == "gross_margin" and any(
+        item < Decimal("-100") or item > Decimal("100") for item in path
+    ):
+        raise ValueError(
+            "Gross-margin explicit paths must be between -100 and 100 percentage points"
+        )
+    if normalized_metric == "gross_profit" and any(item < 0 for item in path):
+        raise ValueError("Gross-profit explicit paths cannot be negative")
+
+
 def _decision_key(value: "ForecastDecision") -> tuple[str, str, str]:
     return (value.scope.value, value.scope_id, _metric_value(value.metric))
 
@@ -270,6 +290,7 @@ class ForecastDecision(BaseModel):
             raise ValueError("Company forecast decisions require scope_id='company'")
         if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
             raise ValueError("Segment forecast decisions require a segment scope_id")
+        _validate_economics_explicit_record(self.metric, self.strategy, self.explicit_path)
         return self
 
     @field_validator("confidence")
@@ -352,6 +373,7 @@ class ForecastOverride(BaseModel):
             raise ValueError("Company forecast overrides require scope_id='company'")
         if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
             raise ValueError("Segment forecast overrides require a segment scope_id")
+        _validate_economics_explicit_record(self.metric, self.strategy, self.explicit_path)
         return self
 
     @property

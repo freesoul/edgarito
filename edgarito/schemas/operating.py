@@ -21,10 +21,11 @@ from pydantic import (
     Field,
     WithJsonSchema,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
-from edgarito.schemas.forecasting import ForecastAssumptionSource
+from edgarito.schemas.forecasting import ForecastAssumptionSource, ForecastProvenance
 from edgarito.schemas.operating_normalization import (
     _CONFIDENCE_LEVELS,
     _MAX_FISCAL_YEAR,
@@ -1075,13 +1076,6 @@ class ExtractedOperatingObservation(BaseModel):
             )
         return value
 
-    @field_validator("value", "low", "high")
-    @classmethod
-    def reject_negative_values(cls, value: float | None) -> float | None:
-        if value is not None and value < 0:
-            raise ValueError("Extracted operating observations cannot be negative")
-        return value
-
     @field_validator("confidence", mode="before")
     @classmethod
     def normalize_confidence(cls, value: str) -> str:
@@ -1119,6 +1113,26 @@ class ExtractedOperatingObservation(BaseModel):
             raise ValueError(
                 "Extracted operating observation requires a value or range"
             )
+        metric = self.driver_id.strip().casefold().replace("-", "_").replace(" ", "_")
+        margin_metric = metric in {
+            "gross_margin",
+            "gross_profit_margin",
+            "gross_margin_percent",
+            "gross_margin_percentage",
+            "gross_margin_rate",
+            "gross_margin_pct",
+        }
+        gross_profit_metric = metric in {
+            "gross_profit",
+            "gross_profit_amount",
+            "gross_income",
+            "gross_income_amount",
+        }
+        if not margin_metric and not gross_profit_metric and any(
+            value is not None and value < 0
+            for value in (self.value, self.low, self.high)
+        ):
+            raise ValueError("Extracted operating observations cannot be negative")
         if self.low is not None and self.high is not None and self.low > self.high:
             raise ValueError("Extracted operating observation low cannot exceed high")
         if self.value is not None:
@@ -1568,6 +1582,382 @@ class OperatingDriverForecast(BaseModel):
         return _finite_decimal(value, "Operating driver forecasts")
 
 
+class OperatingEconomicsMetricDiagnostics(BaseModel):
+    """Independent coverage and validation diagnostics for one economics metric."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    metric: Literal["gross_margin", "gross_profit"]
+    coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
+    supported_years: tuple[int, ...] = ()
+    confidence: Literal["high", "medium", "low"] = "low"
+    reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
+    completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
+    warnings: tuple[str, ...] = ()
+    identity_warnings: tuple[str, ...] = ()
+
+    @field_validator("coverage", "reconstruction_error", "completeness")
+    @classmethod
+    def validate_metrics(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Operating economics diagnostics")
+
+    @field_validator("supported_years")
+    @classmethod
+    def validate_years(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Operating economics supported years")
+        return value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @field_validator("warnings", "identity_warnings")
+    @classmethod
+    def normalize_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            _normalize_required_text(item, "Operating economics diagnostic warning")
+            for item in value
+        )
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> "OperatingEconomicsMetricDiagnostics":
+        if self.reconstruction_error is not None and self.reconstruction_error < 0:
+            raise ValueError(
+                "Operating economics reconstruction error cannot be negative"
+            )
+        for value, label in (
+            (self.coverage, "coverage"),
+            (self.completeness, "completeness"),
+        ):
+            if value is not None and not Decimal(0) <= value <= Decimal(1):
+                raise ValueError(f"Operating economics {label} must be between 0 and 1")
+        return self
+
+
+class OperatingEconomicsDiagnostics(BaseModel):
+    """Metric-specific diagnostics retained independently from revenue quality."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    gross_margin: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_margin")
+    )
+    gross_profit: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_profit")
+    )
+    completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
+    identity_warnings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @field_validator("completeness")
+    @classmethod
+    def validate_completeness(cls, value: Decimal | None) -> Decimal | None:
+        value = _finite_decimal(value, "Operating economics completeness")
+        if value is not None and not Decimal(0) <= value <= Decimal(1):
+            raise ValueError("Operating economics completeness must be between 0 and 1")
+        return value
+
+    @field_validator("identity_warnings", "warnings")
+    @classmethod
+    def normalize_diagnostic_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            _normalize_required_text(item, "Operating economics warning")
+            for item in value
+        )
+
+    @property
+    def margin(self) -> OperatingEconomicsMetricDiagnostics:
+        """Short alias for the gross-margin diagnostics."""
+
+        return self.gross_margin
+
+    @property
+    def profit(self) -> OperatingEconomicsMetricDiagnostics:
+        """Short alias for the gross-profit diagnostics."""
+
+        return self.gross_profit
+
+
+class OperatingEconomicsYear(BaseModel):
+    """Selected segment economics for one fiscal year."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
+    fiscal_period: str = "FY"
+    period_key: str | None = None
+    revenue: Decimal | None = None
+    gross_margin: Decimal | None = None
+    gross_profit: Decimal | None = None
+    source: str = "unavailable"
+    confidence: Literal["high", "medium", "low"] = "low"
+    provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    provenance_chain: tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...] = ()
+    source_provenance: tuple[EvidenceReference, ...] = ()
+    gross_margin_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    gross_margin_provenance_chain: tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...] = ()
+    gross_margin_source_provenance: tuple[EvidenceReference, ...] = ()
+    gross_profit_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    gross_profit_provenance_chain: tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...] = ()
+    gross_profit_source_provenance: tuple[EvidenceReference, ...] = ()
+    method: str = "unavailable"
+    audit: tuple[str, ...] = ()
+    expected_gross_profit: Decimal | None = None
+    identity_error: Decimal | None = None
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key")
+    @classmethod
+    def normalize_period_key(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating economics period key")
+
+    @field_validator("revenue", "gross_margin", "gross_profit", "expected_gross_profit", "identity_error")
+    @classmethod
+    def validate_values(cls, value: Decimal | None) -> Decimal | None:
+        return _finite_decimal(value, "Operating economics values")
+
+    @field_validator("source", "method")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _normalize_required_text(value, "Operating economics provenance")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: str) -> str:
+        return str(getattr(value, "value", value)).strip().casefold()
+
+    @field_validator("audit")
+    @classmethod
+    def normalize_audit(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_normalize_required_text(item, "Operating economics audit") for item in value)
+
+    @model_validator(mode="after")
+    def validate_identity_error(self) -> "OperatingEconomicsYear":
+        if self.identity_error is not None and self.identity_error < 0:
+            raise ValueError("Operating economics identity error cannot be negative")
+        return self
+
+
+class SegmentOperatingEconomicsForecast(BaseModel):
+    """Gross-margin and gross-profit path paired with one revenue segment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    segment: OperatingSegment
+    fiscal_years: tuple[int, ...]
+    revenue: tuple[Decimal | None, ...]
+    gross_margin: tuple[Decimal | None, ...]
+    gross_profit: tuple[Decimal | None, ...]
+    years: tuple[OperatingEconomicsYear, ...] = ()
+    source_by_year: dict[int, str] = Field(default_factory=dict)
+    confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    gross_margin_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    gross_margin_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    gross_margin_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    gross_profit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    gross_profit_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    gross_profit_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    method_by_year: dict[int, str] = Field(default_factory=dict)
+    audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    diagnostics: OperatingEconomicsDiagnostics = Field(
+        default_factory=OperatingEconomicsDiagnostics
+    )
+    warnings: tuple[str, ...] = ()
+    unit: str = "currency"
+
+    @field_validator("fiscal_years")
+    @classmethod
+    def validate_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        _validate_year_sequence(value, "Segment economics years")
+        return value
+
+    @field_validator("revenue")
+    @classmethod
+    def validate_revenue_values(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
+        return tuple(
+            None
+            if item is None
+            else _non_negative_decimal(item, "Segment economics revenue")
+            for item in value
+        )
+
+    @field_validator("gross_margin", "gross_profit")
+    @classmethod
+    def validate_economics_values(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
+        return tuple(_finite_decimal(item, "Segment economics values") for item in value)
+
+    @field_validator("unit")
+    @classmethod
+    def normalize_unit(cls, value: str) -> str:
+        return _normalize_required_text(value, "Segment economics unit")
+
+    @field_validator("source_by_year", "confidence_by_year", "method_by_year", mode="before")
+    @classmethod
+    def normalize_year_maps(cls, value: dict[int, str] | None) -> dict[int, str]:
+        return {int(year): str(getattr(item, "value", item)).strip() for year, item in (value or {}).items()}
+
+    @field_validator("confidence_by_year")
+    @classmethod
+    def validate_confidence_map(cls, value: dict[int, str]) -> dict[int, str]:
+        normalized = {year: confidence.casefold() for year, confidence in value.items()}
+        if set(normalized.values()) - _CONFIDENCE_LEVELS:
+            raise ValueError("Operating economics confidence must be high, medium, or low")
+        return normalized
+
+    @field_validator("warnings")
+    @classmethod
+    def normalize_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_normalize_required_text(item, "Segment economics warning") for item in value)
+
+    @model_validator(mode="after")
+    def validate_forecast(self) -> "SegmentOperatingEconomicsForecast":
+        length = len(self.fiscal_years)
+        if any(len(path) != length for path in (self.revenue, self.gross_margin, self.gross_profit)):
+            raise ValueError("Segment economics paths must match fiscal_years")
+        if self.years and tuple(item.fiscal_year for item in self.years) != self.fiscal_years:
+            raise ValueError("Segment economics year records must match fiscal_years")
+        for mapping, label in (
+            (self.source_by_year, "source_by_year"),
+            (self.confidence_by_year, "confidence_by_year"),
+            (self.provenance_by_year, "provenance_by_year"),
+            (self.provenance_chain_by_year, "provenance_chain_by_year"),
+            (self.source_provenance_by_year, "source_provenance_by_year"),
+            (self.gross_margin_provenance_by_year, "gross_margin_provenance_by_year"),
+            (
+                self.gross_margin_provenance_chain_by_year,
+                "gross_margin_provenance_chain_by_year",
+            ),
+            (
+                self.gross_margin_source_provenance_by_year,
+                "gross_margin_source_provenance_by_year",
+            ),
+            (self.gross_profit_provenance_by_year, "gross_profit_provenance_by_year"),
+            (
+                self.gross_profit_provenance_chain_by_year,
+                "gross_profit_provenance_chain_by_year",
+            ),
+            (
+                self.gross_profit_source_provenance_by_year,
+                "gross_profit_source_provenance_by_year",
+            ),
+            (self.method_by_year, "method_by_year"),
+            (self.audit_by_year, "audit_by_year"),
+        ):
+            if not set(mapping).issubset(self.fiscal_years):
+                raise ValueError(f"Segment economics {label} contains an unknown year")
+        if not self.years:
+            object.__setattr__(
+                self,
+                "years",
+                tuple(
+                    OperatingEconomicsYear(
+                        fiscal_year=year,
+                        revenue=revenue,
+                        gross_margin=margin,
+                        gross_profit=profit,
+                        source=self.source_by_year.get(year, "unavailable"),
+                        confidence=self.confidence_by_year.get(year, "low"),
+                        provenance=self.provenance_by_year.get(year),
+                        provenance_chain=self.provenance_chain_by_year.get(year, ()),
+                        source_provenance=self.source_provenance_by_year.get(year, ()),
+                        gross_margin_provenance=self.gross_margin_provenance_by_year.get(year),
+                        gross_margin_provenance_chain=self.gross_margin_provenance_chain_by_year.get(year, ()),
+                        gross_margin_source_provenance=self.gross_margin_source_provenance_by_year.get(year, ()),
+                        gross_profit_provenance=self.gross_profit_provenance_by_year.get(year),
+                        gross_profit_provenance_chain=self.gross_profit_provenance_chain_by_year.get(year, ()),
+                        gross_profit_source_provenance=self.gross_profit_source_provenance_by_year.get(year, ()),
+                        method=self.method_by_year.get(year, "unavailable"),
+                        audit=self.audit_by_year.get(year, ()),
+                    )
+                    for year, revenue, margin, profit in zip(
+                        self.fiscal_years, self.revenue, self.gross_margin, self.gross_profit, strict=True
+                    )
+                ),
+            )
+        return self
+
+    @property
+    def gross_margin_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.gross_margin, strict=True))
+
+    @property
+    def gross_profit_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.gross_profit, strict=True))
+
+    @property
+    def margin_provenance(self):
+        return self.gross_margin_provenance_by_year
+
+    @property
+    def profit_provenance(self):
+        return self.gross_profit_provenance_by_year
+
+    @property
+    def margin_source_provenance(self):
+        return self.gross_margin_source_provenance_by_year
+
+    @property
+    def profit_source_provenance(self):
+        return self.gross_profit_source_provenance_by_year
+
+    @property
+    def margin_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.gross_margin
+
+    @property
+    def profit_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.gross_profit
+
+    @property
+    def gross_margin_coverage(self) -> Decimal | None:
+        return self.diagnostics.gross_margin.coverage
+
+    @property
+    def gross_profit_coverage(self) -> Decimal | None:
+        return self.diagnostics.gross_profit.coverage
+
+    @property
+    def gross_margin_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.gross_margin.supported_years
+
+    @property
+    def gross_profit_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.gross_profit.supported_years
+
+
+class OperatingEconomicsForecastConfig(BaseModel):
+    """Small deterministic policy surface for gross-economics normalization."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    historical_window: int = Field(default=3, ge=1, le=10)
+    normalization_method: Literal["median", "weighted_recent"] = "median"
+    gross_margin_min: Decimal = Decimal("-100")
+    gross_margin_max: Decimal = Decimal("100")
+
+    @field_validator("gross_margin_min", "gross_margin_max")
+    @classmethod
+    def validate_bounds(cls, value: Decimal) -> Decimal:
+        return _finite_decimal(value, "Gross-margin bounds")
+
+    @model_validator(mode="after")
+    def validate_margin_bounds(self) -> "OperatingEconomicsForecastConfig":
+        if self.gross_margin_min >= self.gross_margin_max:
+            raise ValueError("Gross-margin minimum must be below maximum")
+        if self.gross_margin_max > Decimal("100"):
+            raise ValueError("Gross-margin maximum cannot exceed 100 percentage points")
+        return self
+
+
 class SegmentRevenueForecast(BaseModel):
     """Selected revenue path and driver audit for one operating segment."""
 
@@ -1601,6 +1991,16 @@ class SegmentRevenueForecast(BaseModel):
     # unambiguous.
     own_supported_years: tuple[int, ...] = ()
     confidence: Literal["high", "medium", "low"] = "low"
+    # Optional sibling output.  It is omitted from serialization when absent so
+    # existing revenue-only dumps remain byte/model-dump compatible.
+    operating_economics: SegmentOperatingEconomicsForecast | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_revenue_forecast(self, handler):
+        data = handler(self)
+        if self.operating_economics is None:
+            data.pop("operating_economics", None)
+        return data
 
     @field_validator("unit")
     @classmethod
@@ -1830,6 +2230,16 @@ class CompanyOperatingForecast(BaseModel):
     independent_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
     consensus_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
     management_revenue_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    # Optional sibling output.  See the serializer below for the compatibility
+    # guarantee when no gross-economics evidence is supplied.
+    operating_economics: "CompanyOperatingEconomicsForecast | None" = None
+
+    @model_serializer(mode="wrap")
+    def serialize_company_forecast(self, handler):
+        data = handler(self)
+        if self.operating_economics is None:
+            data.pop("operating_economics", None)
+        return data
 
     @field_validator("company_id")
     @classmethod
@@ -2078,6 +2488,20 @@ class CompanyOperatingForecast(BaseModel):
         for item in self.segment_forecasts:
             if item.fiscal_years != self.fiscal_years:
                 raise ValueError("Segment and company forecast years must match")
+            if (
+                item.operating_economics is not None
+                and item.operating_economics.fiscal_years != self.fiscal_years
+            ):
+                raise ValueError(
+                    "Segment operating-economics and company forecast years must match"
+                )
+        if (
+            self.operating_economics is not None
+            and self.operating_economics.fiscal_years != self.fiscal_years
+        ):
+            raise ValueError(
+                "Company operating-economics and forecast years must match"
+            )
         if (
             self.transition_start_year is not None
             and self.explicit_years
@@ -2142,6 +2566,257 @@ class CompanyOperatingForecast(BaseModel):
         """Materialize this selected absolute revenue path into FCFF inputs."""
 
         return _materialize_company_revenue_anchors(parameters, self)
+
+
+class CompanyOperatingEconomicsForecast(BaseModel):
+    """Consolidated gross economics using the revenue consolidation set."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    company_id: str
+    fiscal_years: tuple[int, ...]
+    segment_economics: tuple[SegmentOperatingEconomicsForecast, ...] = Field(
+        default=(), validation_alias=AliasChoices(
+            "segment_economics", "segments", "segment_forecasts"
+        )
+    )
+    consolidated_revenue: tuple[Decimal | None, ...]
+    consolidated_gross_profit: tuple[Decimal | None, ...] = Field(
+        validation_alias=AliasChoices("consolidated_gross_profit", "gross_profit")
+    )
+    consolidated_gross_margin: tuple[Decimal | None, ...] = Field(
+        validation_alias=AliasChoices("consolidated_gross_margin", "gross_margin")
+    )
+    years: tuple[OperatingEconomicsYear, ...] = ()
+    source_by_year: dict[int, str] = Field(default_factory=dict)
+    confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    gross_margin_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    gross_margin_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    gross_margin_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    gross_profit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    gross_profit_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    gross_profit_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    method_by_year: dict[int, str] = Field(default_factory=dict)
+    audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    diagnostics: OperatingEconomicsDiagnostics = Field(
+        default_factory=OperatingEconomicsDiagnostics
+    )
+    warnings: tuple[str, ...] = ()
+    unit: str = "currency"
+
+    @field_validator("company_id")
+    @classmethod
+    def normalize_company_id(cls, value: str) -> str:
+        return _normalize_required_text(value, "Operating economics company identifier")
+
+    @field_validator("fiscal_years")
+    @classmethod
+    def validate_year_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        _validate_year_sequence(value, "Company economics years")
+        return value
+
+    @field_validator("consolidated_revenue")
+    @classmethod
+    def validate_company_values(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
+        return tuple(
+            None
+            if item is None
+            else _non_negative_decimal(item, "Company economics values")
+            for item in value
+        )
+
+    @field_validator("consolidated_gross_profit", "consolidated_gross_margin")
+    @classmethod
+    def validate_company_economics(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
+        return tuple(_finite_decimal(item, "Company economics values") for item in value)
+
+    @field_validator("unit")
+    @classmethod
+    def normalize_unit(cls, value: str) -> str:
+        return _normalize_required_text(value, "Company economics unit")
+
+    @field_validator("source_by_year", "confidence_by_year", "method_by_year", mode="before")
+    @classmethod
+    def normalize_year_maps(cls, value: dict[int, str] | None) -> dict[int, str]:
+        return {int(year): str(getattr(item, "value", item)).strip() for year, item in (value or {}).items()}
+
+    @field_validator("confidence_by_year")
+    @classmethod
+    def validate_confidence_map(cls, value: dict[int, str]) -> dict[int, str]:
+        normalized = {year: confidence.casefold() for year, confidence in value.items()}
+        if set(normalized.values()) - _CONFIDENCE_LEVELS:
+            raise ValueError("Operating economics confidence must be high, medium, or low")
+        return normalized
+
+    @field_validator("warnings")
+    @classmethod
+    def normalize_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_normalize_required_text(item, "Company economics warning") for item in value)
+
+    @model_validator(mode="after")
+    def validate_forecast(self) -> "CompanyOperatingEconomicsForecast":
+        length = len(self.fiscal_years)
+        if any(
+            len(path) != length
+            for path in (
+                self.consolidated_revenue,
+                self.consolidated_gross_profit,
+                self.consolidated_gross_margin,
+            )
+        ):
+            raise ValueError("Company economics paths must match fiscal_years")
+        if self.years and tuple(item.fiscal_year for item in self.years) != self.fiscal_years:
+            raise ValueError("Company economics year records must match fiscal_years")
+        for segment in self.segment_economics:
+            if segment.fiscal_years != self.fiscal_years:
+                raise ValueError("Segment and company economics years must match")
+        for mapping, label in (
+            (self.source_by_year, "source_by_year"),
+            (self.confidence_by_year, "confidence_by_year"),
+            (self.provenance_by_year, "provenance_by_year"),
+            (self.provenance_chain_by_year, "provenance_chain_by_year"),
+            (self.source_provenance_by_year, "source_provenance_by_year"),
+            (self.gross_margin_provenance_by_year, "gross_margin_provenance_by_year"),
+            (
+                self.gross_margin_provenance_chain_by_year,
+                "gross_margin_provenance_chain_by_year",
+            ),
+            (
+                self.gross_margin_source_provenance_by_year,
+                "gross_margin_source_provenance_by_year",
+            ),
+            (self.gross_profit_provenance_by_year, "gross_profit_provenance_by_year"),
+            (
+                self.gross_profit_provenance_chain_by_year,
+                "gross_profit_provenance_chain_by_year",
+            ),
+            (
+                self.gross_profit_source_provenance_by_year,
+                "gross_profit_source_provenance_by_year",
+            ),
+            (self.method_by_year, "method_by_year"),
+            (self.audit_by_year, "audit_by_year"),
+        ):
+            if not set(mapping).issubset(self.fiscal_years):
+                raise ValueError(f"Company economics {label} contains an unknown year")
+        if not self.years:
+            object.__setattr__(
+                self,
+                "years",
+                tuple(
+                    OperatingEconomicsYear(
+                        fiscal_year=year,
+                        revenue=revenue,
+                        gross_profit=profit,
+                        gross_margin=margin,
+                        source=self.source_by_year.get(year, "unavailable"),
+                        confidence=self.confidence_by_year.get(year, "low"),
+                        provenance=self.provenance_by_year.get(year),
+                        provenance_chain=self.provenance_chain_by_year.get(year, ()),
+                        source_provenance=self.source_provenance_by_year.get(year, ()),
+                        gross_margin_provenance=self.gross_margin_provenance_by_year.get(year),
+                        gross_margin_provenance_chain=self.gross_margin_provenance_chain_by_year.get(year, ()),
+                        gross_margin_source_provenance=self.gross_margin_source_provenance_by_year.get(year, ()),
+                        gross_profit_provenance=self.gross_profit_provenance_by_year.get(year),
+                        gross_profit_provenance_chain=self.gross_profit_provenance_chain_by_year.get(year, ()),
+                        gross_profit_source_provenance=self.gross_profit_source_provenance_by_year.get(year, ()),
+                        method=self.method_by_year.get(year, "unavailable"),
+                        audit=self.audit_by_year.get(year, ()),
+                    )
+                    for year, revenue, profit, margin in zip(
+                        self.fiscal_years,
+                        self.consolidated_revenue,
+                        self.consolidated_gross_profit,
+                        self.consolidated_gross_margin,
+                        strict=True,
+                    )
+                ),
+            )
+        return self
+
+    @property
+    def segments(self) -> tuple[SegmentOperatingEconomicsForecast, ...]:
+        """Compatibility alias for the selected segment economics."""
+
+        return self.segment_economics
+
+    @property
+    def gross_profit(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_gross_profit
+
+    @property
+    def gross_margin(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_gross_margin
+
+    @property
+    def gross_profit_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.consolidated_gross_profit, strict=True))
+
+    @property
+    def gross_margin_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.consolidated_gross_margin, strict=True))
+
+    @property
+    def margin_provenance(self):
+        return self.gross_margin_provenance_by_year
+
+    @property
+    def profit_provenance(self):
+        return self.gross_profit_provenance_by_year
+
+    @property
+    def margin_source_provenance(self):
+        return self.gross_margin_source_provenance_by_year
+
+    @property
+    def profit_source_provenance(self):
+        return self.gross_profit_source_provenance_by_year
+
+    @property
+    def margin_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.gross_margin
+
+    @property
+    def profit_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.gross_profit
+
+    @property
+    def gross_margin_coverage(self) -> Decimal | None:
+        return self.diagnostics.gross_margin.coverage
+
+    @property
+    def gross_profit_coverage(self) -> Decimal | None:
+        return self.diagnostics.gross_profit.coverage
+
+    @property
+    def gross_margin_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.gross_margin.supported_years
+
+    @property
+    def gross_profit_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.gross_profit.supported_years
+
+
+# The names below make the additive contract discoverable for both the
+# "forecast" and "economics" terminology used by existing clients.
+OperatingEconomicsForecast = CompanyOperatingEconomicsForecast
+OperatingEconomicsForecastResult = CompanyOperatingEconomicsForecast
+GrossEconomicsForecast = CompanyOperatingEconomicsForecast
+SegmentOperatingEconomics = SegmentOperatingEconomicsForecast
+SegmentGrossEconomicsForecast = SegmentOperatingEconomicsForecast
+CompanyOperatingEconomics = CompanyOperatingEconomicsForecast
+CompanyGrossEconomicsForecast = CompanyOperatingEconomicsForecast
+OperatingMetricDiagnostics = OperatingEconomicsMetricDiagnostics
+GrossMarginDiagnostics = OperatingEconomicsMetricDiagnostics
+GrossProfitDiagnostics = OperatingEconomicsMetricDiagnostics
+
+
+# ``CompanyOperatingForecast`` is declared before its optional sibling contract
+# to keep the revenue schema in its historical location.
+CompanyOperatingForecast.model_rebuild()
 
 
 def _materialize_company_revenue_anchors(parameters, selected: CompanyOperatingForecast):
@@ -2213,6 +2888,9 @@ def _materialize_company_revenue_anchors(parameters, selected: CompanyOperatingF
 
 
 __all__ = [
+    "CompanyOperatingEconomics",
+    "CompanyOperatingEconomicsForecast",
+    "CompanyGrossEconomicsForecast",
     "CompanyOperatingForecast",
     "EvidenceReference",
     "ExtractedOperatingDriverDefinition",
@@ -2227,6 +2905,16 @@ __all__ = [
     "OperatingDriverDefinition",
     "OperatingDriverForecast",
     "OperatingDriverObservation",
+    "OperatingEconomicsDiagnostics",
+    "OperatingEconomicsForecast",
+    "OperatingEconomicsForecastConfig",
+    "OperatingEconomicsForecastResult",
+    "OperatingEconomicsMetricDiagnostics",
+    "OperatingEconomicsYear",
+    "OperatingMetricDiagnostics",
+    "GrossMarginDiagnostics",
+    "GrossProfitDiagnostics",
+    "GrossEconomicsForecast",
     "OperatingEvidenceGap",
     "OperatingEvidenceAudit",
     "OperatingEvidenceExtractionResponse",
@@ -2242,6 +2930,9 @@ __all__ = [
     "OperatingExtractionResult",
     "OperatingSegment",
     "ResolvedRevenueYear",
+    "SegmentOperatingEconomics",
+    "SegmentOperatingEconomicsForecast",
+    "SegmentGrossEconomicsForecast",
     "SegmentRevenueForecast",
     "canonical_operating_segment_id",
     "canonical_operating_segment_identity",

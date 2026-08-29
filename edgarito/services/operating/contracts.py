@@ -84,6 +84,10 @@ class RevenueForecastReconciliation:
         return self.forecast.warnings
 
     @property
+    def operating_economics(self):
+        return self.forecast.operating_economics
+
+    @property
     def own_supported_years(self) -> tuple[int, ...]:
         """Years retained from the supported independent operating path."""
 
@@ -169,6 +173,20 @@ class OperatingForecastIntegrationResult:
     def diagnostics(self) -> dict[str, object]:
         return self.audit_diagnostics
 
+    @property
+    def operating_economics(self):
+        """Return optional gross economics without changing revenue reconciliation."""
+
+        # Gross economics are calculated against the independent segment
+        # revenue path.  Reconciliation may clear the reconciled copy when its
+        # denominator changes, so the independent artifact is the truthful
+        # convenience surface.
+        return self.independent_forecast.operating_economics
+
+    @property
+    def independent_operating_economics(self):
+        return self.independent_forecast.operating_economics
+
     def materialize_revenue_anchors(
         self, parameters: FcffForecastParameters
     ) -> FcffForecastParameters:
@@ -240,6 +258,10 @@ class OperatingForecastPipelineResult:
     @property
     def diagnostics(self) -> dict[str, object]:
         return self.audit_diagnostics
+
+    @property
+    def operating_economics(self):
+        return self.integration.operating_economics
 
 
 @dataclass(frozen=True)

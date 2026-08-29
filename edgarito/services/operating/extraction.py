@@ -43,9 +43,9 @@ from edgarito.services.guidance.documents import (
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "operating-evidence-v4"
-SCHEMA_VERSION = "operating-evidence-schema-v4"
-CONTEXT_VERSION = "operating-context-v2"
+PROMPT_VERSION = "operating-evidence-v5"
+SCHEMA_VERSION = "operating-evidence-schema-v5"
+CONTEXT_VERSION = "operating-context-v3"
 OPERATING_EXTRACTION_CONFIG_VERSION = (
     f"{OPERATING_EXTRACTION.cache_version}|units:{OPERATING_UNITS.cache_version}"
 )
@@ -81,6 +81,14 @@ under-construction, completed, or reported facts; they may contain spend,
 capacity, facility, production, or timing facts, but they are not revenue
 forecasts. Do not turn an investment program into revenue or growth.
 
+When explicitly stated for a named segment, copy gross margin in percentage
+points, gross profit/income, and cost of revenue/cost of sales as ordinary
+reported observations using driver IDs gross_margin, gross_profit, or
+cost_of_revenue (aliases are accepted). These are evidence only: do not
+calculate gross profit, gross margin, or any forecast in the response. Negative
+gross margin is permitted when the filing states a gross loss; preserve the
+reported period, units, scope, component flags, and supporting text.
+
 Copy supporting_text verbatim from the visible source context and keep it
 concise. Every numeric value, including a fiscal year, must appear in that
 supporting excerpt. Historical segment revenue is explicitly allowed as a
@@ -112,6 +120,22 @@ _METRIC_ALIASES = OPERATING_EXTRACTION.metric_aliases
 _IMPLIED_REVENUE_DRIVER_IDS = OPERATING_EXTRACTION.implied_revenue_driver_ids
 _IMPLIED_VOLUME_DRIVER_IDS = OPERATING_EXTRACTION.implied_volume_driver_ids
 _IMPLIED_SUBSCRIBER_DRIVER_IDS = OPERATING_EXTRACTION.implied_subscriber_driver_ids
+_GROSS_MARGIN_DRIVER_IDS = OPERATING_EXTRACTION.gross_margin_driver_ids or frozenset(
+    {
+        "gross_margin",
+        "gross_profit_margin",
+        "gross_margin_percent",
+        "gross_margin_percentage",
+        "gross_margin_rate",
+    }
+)
+_GROSS_PROFIT_DRIVER_IDS = OPERATING_EXTRACTION.gross_profit_driver_ids or frozenset(
+    {"gross_profit", "gross_income", "gross_profit_amount"}
+)
+_COST_OF_REVENUE_DRIVER_IDS = (
+    OPERATING_EXTRACTION.cost_of_revenue_driver_ids
+    or frozenset({"cost_of_revenue", "cost_of_sales", "cost_of_goods_sold", "cogs"})
+)
 
 
 def operating_keyword_hits(text: str) -> dict[str, int]:
@@ -714,6 +738,10 @@ class OperatingEvidenceExtractor:
         driver_id = _normalize_metric(item.driver_id)
         if driver_id in _REVENUE_DRIVER_IDS and not _is_currency_unit(item.unit):
             return "Segment revenue observation unit is not a currency unit"
+        if driver_id in _GROSS_MARGIN_DRIVER_IDS and not _is_rate_unit(item.unit):
+            return "Gross-margin observation unit is not a percentage or ratio unit"
+        if driver_id in _GROSS_PROFIT_DRIVER_IDS | _COST_OF_REVENUE_DRIVER_IDS and not _is_currency_unit(item.unit):
+            return "Gross-profit or cost observation unit is not a currency unit"
         for (segment_id, _definition_id), definition in definitions.items():
             if segment_id != item.segment_id:
                 continue
@@ -1133,6 +1161,13 @@ def _metric_names_match(left: str, right: str) -> bool:
 def _is_currency_unit(unit: str) -> bool:
     normalized, _scale = normalize_operating_unit(unit)
     return bool(_CURRENCY_UNIT_PATTERN.search(normalized))
+
+
+def _is_rate_unit(unit: str) -> bool:
+    normalized = normalize_operating_unit(unit)[0].casefold()
+    return normalized in {"%", "ratio", "rate", "percent", "percentage", "bps", "bp"} or any(
+        token in normalized for token in ("percent", "percentage", "basis_point")
+    )
 
 
 def _is_count_unit(unit: str) -> bool:
