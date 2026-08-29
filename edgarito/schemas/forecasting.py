@@ -113,6 +113,8 @@ class ForecastMetric(_CaseInsensitiveStrEnum):
     GROSS_PROFIT = "gross_profit"
     R_AND_D = "r_and_d"
     SG_AND_A = "sg_and_a"
+    OTHER_OPERATING_ITEMS = "other_operating_items"
+    EBIT = "ebit"
     REVENUE_GROWTH = "revenue_growth"
     OPERATING_MARGIN = "operating_margin"
     TAX = "tax"
@@ -136,6 +138,37 @@ class ForecastStrategy(_CaseInsensitiveStrEnum):
     RATIO = "ratio"
     RESIDUAL = "residual"
     IGNORE = "ignore"
+
+
+class ForecastValueBasis(_CaseInsensitiveStrEnum):
+    """Interpretation of an explicit operating-economics path.
+
+    Gross-margin paths predate this field and remain percentage-point paths by
+    contract.  New expense paths must declare their basis so an amount cannot
+    accidentally be treated as a percentage (or vice versa).
+    """
+
+    ABSOLUTE = "absolute"
+    PERCENT_OF_REVENUE = "percent_of_revenue"
+
+    @classmethod
+    def _missing_(cls, value):
+        member = super()._missing_(value)
+        if member is not None:
+            return member
+        normalized = str(value).strip().casefold().replace("-", "_").replace(" ", "_")
+        if normalized in {
+            "ratio",
+            "percent",
+            "percentage",
+            "percentage_points",
+            "percentage_points_of_revenue",
+            "percent_of_sales",
+        }:
+            return cls.PERCENT_OF_REVENUE
+        if normalized in {"amount", "currency", "absolute_amount"}:
+            return cls.ABSOLUTE
+        return None
 
 
 class ForecastProvenance(BaseModel):
@@ -172,11 +205,26 @@ def _metric_value(value: ForecastMetric | str) -> str:
     return value.value if isinstance(value, ForecastMetric) else str(value)
 
 
-def _validate_economics_explicit_record(metric, strategy, path) -> None:
+def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> None:
     """Validate shared gross-economics manual paths without a second override type."""
 
     normalized_metric = _metric_value(metric).strip().casefold().replace("-", "_")
-    if normalized_metric not in {"gross_margin", "gross_profit"}:
+    normalized_metric = {
+        "research_and_development": "r_and_d",
+        "research_and_development_expense": "r_and_d",
+        "selling_general_and_administrative": "sg_and_a",
+        "selling_general_and_administrative_expense": "sg_and_a",
+        "operating_income": "ebit",
+        "operating_income_loss": "ebit",
+    }.get(normalized_metric, normalized_metric)
+    if normalized_metric not in {
+        "gross_margin",
+        "gross_profit",
+        "r_and_d",
+        "sg_and_a",
+        "other_operating_items",
+        "ebit",
+    }:
         return
     if strategy == ForecastStrategy.EXPLICIT and path is None:
         raise ValueError(f"Explicit {normalized_metric} records require explicit_path")
@@ -190,6 +238,68 @@ def _validate_economics_explicit_record(metric, strategy, path) -> None:
         )
     if normalized_metric == "gross_profit" and any(item < 0 for item in path):
         raise ValueError("Gross-profit explicit paths cannot be negative")
+    if normalized_metric in {"r_and_d", "sg_and_a"}:
+        if strategy in {ForecastStrategy.EXPLICIT, ForecastStrategy.RATIO}:
+            if path is None:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} records require explicit_path"
+                )
+            if basis is None:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} records require an explicit value basis"
+                )
+            expected = (
+                ForecastValueBasis.ABSOLUTE
+                if strategy == ForecastStrategy.EXPLICIT
+                else ForecastValueBasis.PERCENT_OF_REVENUE
+            )
+            if basis != expected:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} paths require basis={expected.value}"
+                )
+        if path is not None and any(item < 0 for item in path):
+            raise ValueError(f"{normalized_metric} paths cannot be negative")
+    elif normalized_metric in {"other_operating_items", "ebit"}:
+        if strategy == ForecastStrategy.RATIO:
+            raise ValueError(
+                f"Ratio {normalized_metric} paths are not supported; use absolute signed values"
+            )
+        if strategy == ForecastStrategy.EXPLICIT:
+            if path is None:
+                raise ValueError(
+                    f"Explicit {normalized_metric} records require explicit_path"
+                )
+            if basis is None:
+                raise ValueError(
+                    f"Explicit {normalized_metric} records require an explicit value basis"
+                )
+            if basis != ForecastValueBasis.ABSOLUTE:
+                raise ValueError(
+                    f"Explicit {normalized_metric} paths require basis=absolute"
+                )
+
+
+def _validate_economics_scope(scope, metric) -> None:
+    """Reject phase-two company-only metrics at the decision boundary."""
+
+    normalized_metric = _metric_value(metric).strip().casefold().replace("-", "_")
+    if normalized_metric in {
+        "other_operating_item",
+        "other_operating_income",
+        "other_operating_expense",
+        "recurring_other_operating_items",
+    }:
+        normalized_metric = "other_operating_items"
+    if normalized_metric in {"ebit", "operating_income", "operating_income_loss"}:
+        normalized_metric = "ebit"
+    if scope == ForecastScope.SEGMENT and normalized_metric in {
+        "other_operating_items",
+        "ebit",
+    }:
+        raise ValueError(
+            f"Segment {normalized_metric} decisions/overrides are unsupported; "
+            "only segment R&D and SG&A are supported in this phase"
+        )
 
 
 def _decision_key(value: "ForecastDecision") -> tuple[str, str, str]:
@@ -241,6 +351,10 @@ class ForecastDecision(BaseModel):
         default=None,
         validation_alias=AliasChoices("explicit_path", "path"),
     )
+    basis: ForecastValueBasis | None = Field(
+        default=None,
+        validation_alias=AliasChoices("basis", "value_basis", "path_basis"),
+    )
     provenance: Optional[str | ForecastProvenance] = None
 
     @field_validator("scope_id", "rationale")
@@ -290,7 +404,10 @@ class ForecastDecision(BaseModel):
             raise ValueError("Company forecast decisions require scope_id='company'")
         if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
             raise ValueError("Segment forecast decisions require a segment scope_id")
-        _validate_economics_explicit_record(self.metric, self.strategy, self.explicit_path)
+        _validate_economics_scope(self.scope, self.metric)
+        _validate_economics_explicit_record(
+            self.metric, self.strategy, self.explicit_path, self.basis
+        )
         return self
 
     @field_validator("confidence")
@@ -323,6 +440,10 @@ class ForecastOverride(BaseModel):
     explicit_path: Optional[tuple[Decimal, ...]] = Field(
         default=None,
         validation_alias=AliasChoices("explicit_path", "path"),
+    )
+    basis: ForecastValueBasis | None = Field(
+        default=None,
+        validation_alias=AliasChoices("basis", "value_basis", "path_basis"),
     )
     provenance: Optional[str | ForecastProvenance] = None
 
@@ -373,7 +494,10 @@ class ForecastOverride(BaseModel):
             raise ValueError("Company forecast overrides require scope_id='company'")
         if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
             raise ValueError("Segment forecast overrides require a segment scope_id")
-        _validate_economics_explicit_record(self.metric, self.strategy, self.explicit_path)
+        _validate_economics_scope(self.scope, self.metric)
+        _validate_economics_explicit_record(
+            self.metric, self.strategy, self.explicit_path, self.basis
+        )
         return self
 
     @property
@@ -1516,6 +1640,7 @@ __all__ = [
     "ForecastSeedType",
     "ForecastStrategy",
     "ForecastValue",
+    "ForecastValueBasis",
     "ForwardGrowthEvidence",
     "ForwardGrowthOutlook",
     "SimplifiedFcfForecast",

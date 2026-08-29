@@ -35,6 +35,13 @@ class FinancialReport(AlphaVantageModel):
 
 class IncomeStatementReport(FinancialReport):
     total_revenue: Optional[Decimal] = Field(default=None, alias="totalRevenue")
+    gross_profit: Optional[Decimal] = Field(default=None, alias="grossProfit")
+    research_and_development: Optional[Decimal] = Field(
+        default=None, alias="researchAndDevelopment"
+    )
+    selling_general_and_administrative: Optional[Decimal] = Field(
+        default=None, alias="sellingGeneralAndAdministrative"
+    )
     operating_income: Optional[Decimal] = Field(default=None, alias="operatingIncome")
     net_income: Optional[Decimal] = Field(default=None, alias="netIncome")
 

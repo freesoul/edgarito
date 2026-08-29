@@ -24,6 +24,16 @@ class ObservationDerivationKind(str, Enum):
 
 class FinancialConcept(str, Enum):
     REVENUE = "revenue"
+    GROSS_PROFIT = "gross_profit"
+    RESEARCH_AND_DEVELOPMENT_EXPENSE = "research_and_development_expense"
+    SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE = (
+        "selling_general_and_administrative_expense"
+    )
+    # Short names are additive aliases used by operating-economics callers.
+    R_AND_D = "research_and_development_expense"
+    RESEARCH_AND_DEVELOPMENT = "research_and_development_expense"
+    SG_AND_A = "selling_general_and_administrative_expense"
+    SELLING_GENERAL_AND_ADMINISTRATIVE = "selling_general_and_administrative_expense"
     OPERATING_INCOME = "operating_income"
     PRETAX_INCOME = "pretax_income"
     INCOME_TAX_EXPENSE = "income_tax_expense"
@@ -74,6 +84,9 @@ class FinancialConcept(str, Enum):
 
 CONCEPT_STATEMENTS: dict[FinancialConcept, FinancialStatement] = {
     FinancialConcept.REVENUE: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.GROSS_PROFIT: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.RESEARCH_AND_DEVELOPMENT_EXPENSE: FinancialStatement.INCOME_STATEMENT,
+    FinancialConcept.SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.OPERATING_INCOME: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.PRETAX_INCOME: FinancialStatement.INCOME_STATEMENT,
     FinancialConcept.INCOME_TAX_EXPENSE: FinancialStatement.INCOME_STATEMENT,

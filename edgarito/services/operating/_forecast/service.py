@@ -334,12 +334,13 @@ class OperatingForecastService:
             raise ValueError(
                 "Explicit gross-economics target does not match a supplied canonical segment"
             )
-        if economics_requested and normalized_segments:
+        if economics_requested and (normalized_segments or company_forecast is not None):
             economics = self.economics_service.forecast(
                 segments=normalized_segments,
                 segment_revenue_forecasts=segment_forecasts,
                 observations=records,
                 fiscal_years=years,
+                revenue_forecast=company_forecast,
                 plan=plan,
                 forecast_plan=forecast_plan,
                 overrides=overrides,
@@ -584,6 +585,19 @@ def _has_economics_inputs(observations, plan, overrides) -> bool:
         "cost_of_goods_sold",
         "cost_of_goods",
         "cogs",
+        "r_and_d",
+        "research_and_development",
+        "research_and_development_expense",
+        "sg_and_a",
+        "selling_general_and_administrative",
+        "selling_general_and_administrative_expense",
+        "other_operating_items",
+        "other_operating_item",
+        "other_operating_income",
+        "other_operating_expense",
+        "recurring_other_operating_items",
+        "ebit",
+        "operating_income",
     }
     if any(
         str(getattr(item, "driver_id", "")).strip().casefold().replace("-", "_").replace(" ", "_")
@@ -653,6 +667,19 @@ def _has_explicit_economics_target(plan, overrides) -> bool:
         )
         metric = str(getattr(metric, "value", metric)).strip().casefold()
         strategy = str(getattr(strategy, "value", strategy)).strip().casefold()
-        if metric in {"gross_margin", "gross_profit"} and strategy == "explicit":
+        scope = (
+            item.get("scope", "")
+            if isinstance(item, Mapping)
+            else getattr(getattr(item, "scope", ""), "value", getattr(item, "scope", ""))
+        )
+        scope = str(scope).strip().casefold()
+        if metric in {
+            "gross_margin",
+            "gross_profit",
+            "r_and_d",
+            "sg_and_a",
+            "other_operating_items",
+            "ebit",
+        } and strategy in {"explicit", "ratio", "residual"} and scope == "segment":
             return True
     return False

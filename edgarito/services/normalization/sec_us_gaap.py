@@ -22,6 +22,7 @@ class ConceptDefinition:
     taxonomy: str = "us-gaap"
     additive: bool = True
     fallback_component_groups: tuple[tuple[str, ...], ...] = ()
+    absolute_value: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,23 @@ CONCEPT_DEFINITIONS = (
             "SalesRevenueNet",
             "RevenuesNetOfInterestExpense",
         ),
+    ),
+    ConceptDefinition(
+        FinancialConcept.GROSS_PROFIT,
+        ("GrossProfit",),
+    ),
+    ConceptDefinition(
+        FinancialConcept.RESEARCH_AND_DEVELOPMENT_EXPENSE,
+        (
+            "ResearchAndDevelopmentExpense",
+            "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+        ),
+        absolute_value=True,
+    ),
+    ConceptDefinition(
+        FinancialConcept.SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE,
+        ("SellingGeneralAndAdministrativeExpense",),
+        absolute_value=True,
     ),
     ConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
@@ -735,7 +753,7 @@ class SecUsGaapNormalizer:
         return FinancialObservation(
             concept=definition.concept,
             statement=definition.concept.statement,
-            value=measurement.val,
+                    value=abs(measurement.val) if definition.absolute_value else measurement.val,
             unit=candidate.unit,
             granularity=granularity,
             fiscal_year=fiscal_year,
@@ -768,7 +786,7 @@ class SecUsGaapNormalizer:
             fiscal_year,
             fiscal_period,
         )
-        observation.value = value
+        observation.value = abs(value) if definition.absolute_value else value
         observation.period_start = period_start
         observation.derivation_kind = ObservationDerivationKind.PERIOD_RECONSTRUCTION
         observation.derivation = derivation

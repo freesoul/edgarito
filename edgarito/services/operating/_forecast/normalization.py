@@ -183,6 +183,8 @@ def _normalize_management_constraints(
     if isinstance(value, (OperatingDriverObservation, Mapping)):
         if isinstance(value, OperatingDriverObservation):
             items: list[Any] = [value]
+        elif {"driver_id", "fiscal_year"}.issubset(value):
+            items = [value]
         else:
             items = list(_mapping_constraint_items(value, segments))
     else:
@@ -276,8 +278,11 @@ def _constraint_mapping_to_observation(
 ) -> OperatingDriverObservation:
     segment_id = str(value.get("segment_id", "")).strip()
     driver_id = str(value.get("driver_id", "revenue")).strip()
+    declared_scope = str(value.get("scope", "")).strip().casefold()
     fiscal_year = value.get("fiscal_year")
-    if not segment_id and len(segments) == 1:
+    if not segment_id and declared_scope in {"company", "consolidated", "total"}:
+        segment_id = "company"
+    elif not segment_id and len(segments) == 1:
         segment_id = segments[0].segment_id
     if fiscal_year is None:
         raise ValueError("Management constraint requires fiscal_year")
@@ -292,6 +297,8 @@ def _constraint_mapping_to_observation(
         "origin": "management_guidance",
         "confidence": value.get("confidence", "high"),
     }
+    if declared_scope:
+        kwargs["scope"] = declared_scope
     if isinstance(raw_constraint, Mapping):
         for name in (
             "value",

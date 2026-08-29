@@ -5,6 +5,13 @@ from edgarito.services.operating._forecast.economics import (
     GrossEconomicsForecastService,
     OperatingEconomicsForecastService,
 )
+from edgarito.services.operating._forecast.financials_adapter import (
+    NormalizedFinancialsOperatingAdapter,
+    adapt_normalized_company_financials,
+    adapt_normalized_financials,
+    normalized_company_financials_to_operating_observations,
+    normalized_financials_to_operating_evidence,
+)
 from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
@@ -53,6 +60,11 @@ __all__ = [
     "OperatingEconomicsForecastService",
     "GrossEconomicsForecastService",
     "normalize_company_historical_revenue",
+    "adapt_normalized_company_financials",
+    "adapt_normalized_financials",
+    "NormalizedFinancialsOperatingAdapter",
+    "normalized_company_financials_to_operating_observations",
+    "normalized_financials_to_operating_evidence",
     "RevenueForecastReconciler",
     "backlog_conversion",
     "capacity_utilization_price",

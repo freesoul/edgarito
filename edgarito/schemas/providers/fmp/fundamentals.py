@@ -69,6 +69,13 @@ class FinancialStatement(FmpModel):
 
 class IncomeStatement(FinancialStatement):
     revenue: Optional[Decimal] = None
+    gross_profit: Optional[Decimal] = Field(default=None, alias="grossProfit")
+    research_and_development_expenses: Optional[Decimal] = Field(
+        default=None, alias="researchAndDevelopmentExpenses"
+    )
+    selling_general_and_administrative_expenses: Optional[Decimal] = Field(
+        default=None, alias="sellingGeneralAndAdministrativeExpenses"
+    )
     operating_income: Optional[Decimal] = Field(default=None, alias="operatingIncome")
     net_income: Optional[Decimal] = Field(default=None, alias="netIncome")
 

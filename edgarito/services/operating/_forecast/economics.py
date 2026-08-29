@@ -17,6 +17,7 @@ from edgarito.schemas.forecasting import (
     ForecastOverride,
     ForecastPlan,
     ForecastStrategy,
+    ForecastValueBasis,
 )
 from edgarito.schemas.operating import (
     CompanyOperatingEconomicsForecast,
@@ -40,6 +41,7 @@ from edgarito.services.operating._forecast.consolidation import (
     _worst_confidence,
 )
 from edgarito.services.operating._forecast.contracts import _CONFIDENCE_RANK
+from edgarito.services.operating._forecast.opex_ebit import OperatingOpexEbitEngine
 
 _MARGIN = "gross_margin"
 _PROFIT = "gross_profit"
@@ -118,7 +120,7 @@ class _ExplicitPath:
 
 
 class OperatingEconomicsForecastService:
-    """Forecast segment gross margin and gross profit after revenue selection.
+    """Forecast gross economics, then apply the focused OPEX/EBIT stage.
 
     The exact metric precedence is independent for each segment and year.
     Margin selection is ``explicit margin > management margin > direct
@@ -139,6 +141,7 @@ class OperatingEconomicsForecastService:
             if isinstance(config, OperatingEconomicsForecastConfig)
             else OperatingEconomicsForecastConfig.model_validate(config or {})
         )
+        self.opex_ebit_engine = OperatingOpexEbitEngine()
 
     def forecast(
         self,
@@ -214,26 +217,6 @@ class OperatingEconomicsForecastService:
             for segment_id in ambiguous_segment_ids
         )
         normalized_segments = self._segments(supplied_segments, revenue_forecasts)
-        if not normalized_segments:
-            candidate_plan = self._coerce_plan(plan or forecast_plan)
-            candidates = (
-                (*candidate_plan.decisions, *candidate_plan.overrides)
-                if candidate_plan is not None
-                else ()
-            ) + self._coerce_overrides(
-                overrides if forecast_overrides is None else forecast_overrides
-            )
-            for candidate in candidates:
-                if (
-                    _metric_key(candidate.metric) in {_MARGIN, _PROFIT}
-                    and candidate.scope.value == "segment"
-                    and candidate.strategy == ForecastStrategy.EXPLICIT
-                ):
-                    raise ValueError(
-                        f"Explicit {_metric_key(candidate.metric)} target "
-                        f"'{candidate.scope_id}' does not match a supplied canonical segment"
-                    )
-            raise ValueError("Operating economics requires at least one segment")
         years = self._years(fiscal_years, revenue_forecasts, company_revenue)
         if company_revenue is not None and company_revenue.fiscal_years != years:
             raise ValueError("Revenue and operating-economics years must match")
@@ -247,6 +230,59 @@ class OperatingEconomicsForecastService:
         )
         all_observations = (*normalized_observations, *normalized_management)
         normalized_plan = self._coerce_plan(plan or forecast_plan)
+        if not normalized_segments and company_revenue is not None:
+            # Normalized financial facts are company-only. A synthetic
+            # consolidated scope lets the gross and OPEX stages consume those
+            # facts without pretending they describe an allocated segment.
+            company_segment = OperatingSegment(
+                segment_id="company",
+                name="Company",
+                scope="consolidated",
+                currency=company_revenue.unit if company_revenue.unit != "currency" else None,
+                source="normalized_historical",
+                confidence="medium",
+            )
+            growth: list[Decimal | None] = [None]
+            for previous, current in zip(
+                company_revenue.consolidated_revenue[:-1],
+                company_revenue.consolidated_revenue[1:],
+                strict=True,
+            ):
+                growth.append(
+                    (current / previous - Decimal(1)) * Decimal(100)
+                    if previous
+                    else None
+                )
+            synthetic_revenue = SegmentRevenueForecast(
+                segment=company_segment,
+                fiscal_years=years,
+                revenue=company_revenue.consolidated_revenue,
+                revenue_growth=tuple(growth),
+                source_by_year=company_revenue.source_by_year,
+                confidence_by_year=company_revenue.confidence_by_year,
+                unit=company_revenue.unit,
+            )
+            normalized_segments = (company_segment,)
+            revenue_forecasts = (synthetic_revenue,)
+        if not normalized_segments:
+            candidates = (
+                (*normalized_plan.decisions, *normalized_plan.overrides)
+                if normalized_plan is not None
+                else ()
+            ) + self._coerce_overrides(
+                overrides if forecast_overrides is None else forecast_overrides
+            )
+            for candidate in candidates:
+                if (
+                    _metric_key(candidate.metric)
+                    in {_MARGIN, _PROFIT, "r_and_d", "sg_and_a", "other_operating_items", "ebit"}
+                    and candidate.scope.value == "segment"
+                ):
+                    raise ValueError(
+                        f"Explicit {_metric_key(candidate.metric)} target "
+                        f"'{candidate.scope_id}' does not match a supplied canonical segment"
+                    )
+            raise ValueError("Operating economics requires at least one segment")
         explicit = self._explicit_paths(
             normalized_plan,
             overrides if forecast_overrides is None else forecast_overrides,
@@ -298,9 +334,24 @@ class OperatingEconomicsForecastService:
             fiscal_period=fiscal_period,
             period_key=period_key,
         )
+        company = self._apply_company_explicit_gross(
+            company,
+            explicit,
+            policy,
+        )
         # Attach the sibling result to the pre-existing revenue contract.  The
         # caller may also use the returned standalone contract directly.
-        return company
+        return self.opex_ebit_engine.apply(
+            company,
+            all_observations,
+            segments=normalized_segments,
+            plan=normalized_plan,
+            overrides=overrides if forecast_overrides is None else forecast_overrides,
+            config=policy,
+            fiscal_period=fiscal_period,
+            period_key=period_key,
+            ambiguous_segment_ids=ambiguous_ids,
+        )
 
     build = forecast
     forecast_company = forecast
@@ -418,8 +469,6 @@ class OperatingEconomicsForecastService:
             metric = _metric_key(record.metric)
             if metric not in {_MARGIN, _PROFIT}:
                 continue
-            if record.scope.value != "segment":
-                continue
             if record.strategy != ForecastStrategy.EXPLICIT:
                 continue
             path = record.explicit_path
@@ -441,18 +490,32 @@ class OperatingEconomicsForecastService:
                     )
                 if metric == _PROFIT and item < 0:
                     raise ValueError("Explicit gross profit cannot be negative")
-            canonical_id = canonical_operating_segment_id(record.scope_id) or record.scope_id
-            supplied_ids = {segment.segment_id for segment in segments}
-            if canonical_id in ambiguous_segment_ids:
-                raise ValueError(
-                    f"Explicit {metric} target '{record.scope_id}' is ambiguous "
-                    "among supplied canonical segments"
+            if record.basis is not None:
+                expected_basis = (
+                    ForecastValueBasis.PERCENT_OF_REVENUE
+                    if metric == _MARGIN
+                    else ForecastValueBasis.ABSOLUTE
                 )
-            if canonical_id not in supplied_ids:
-                raise ValueError(
-                    f"Explicit {metric} target '{record.scope_id}' does not match "
-                    "a supplied canonical segment"
-                )
+                if record.basis != expected_basis:
+                    raise ValueError(
+                        f"Explicit {metric} paths require basis={expected_basis.value}"
+                    )
+            if record.scope.value == "segment":
+                canonical_id = canonical_operating_segment_id(record.scope_id) or record.scope_id
+                supplied_ids = {segment.segment_id for segment in segments}
+                if canonical_id in ambiguous_segment_ids:
+                    raise ValueError(
+                        f"Explicit {metric} target '{record.scope_id}' is ambiguous "
+                        "among supplied canonical segments"
+                    )
+                if canonical_id not in supplied_ids:
+                    raise ValueError(
+                        f"Explicit {metric} target '{record.scope_id}' does not match "
+                        "a supplied canonical segment"
+                    )
+                target_id = canonical_id
+            else:
+                target_id = "company"
             if len(values) == 1:
                 values = values * len(years)
             path_references = (
@@ -460,7 +523,7 @@ class OperatingEconomicsForecastService:
                 if isinstance(record.provenance, EvidenceReference)
                 else ()
             )
-            paths[(canonical_id, metric)] = _ExplicitPath(
+            paths[(target_id, metric)] = _ExplicitPath(
                 values,
                 record.provenance,
                 path_references,
@@ -474,6 +537,8 @@ class OperatingEconomicsForecastService:
         if isinstance(value, ForecastOverride):
             return (value,)
         if isinstance(value, Mapping):
+            if {"scope", "metric", "strategy"}.issubset(value):
+                return (ForecastOverride.model_validate(value),)
             records = []
             for key, item in value.items():
                 if isinstance(item, ForecastOverride):
@@ -1603,6 +1668,291 @@ class OperatingEconomicsForecastService:
             result.append(sum(values, Decimal(0)) if len(values) == len(selected_segments) and values else None)
         return tuple(result)
 
+    def _apply_company_explicit_gross(
+        self,
+        company: CompanyOperatingEconomicsForecast,
+        explicit: Mapping[tuple[str, str], _ExplicitPath],
+        policy: OperatingEconomicsForecastConfig,
+    ) -> CompanyOperatingEconomicsForecast:
+        """Apply company gross paths after segment consolidation.
+
+        Segment consolidation remains the source of the base result.  A
+        company-scoped explicit path is the only gross input allowed to replace
+        that result, and this method updates every related audit field as one
+        immutable contract update.  The OPEX stage consequently sees explicit
+        company gross values as already selected and cannot replace them.
+        """
+
+        margin_path = explicit.get(("company", _MARGIN))
+        profit_path = explicit.get(("company", _PROFIT))
+        if margin_path is None and profit_path is None:
+            return company
+
+        years = company.fiscal_years
+        profits = list(company.consolidated_gross_profit)
+        margins = list(company.consolidated_gross_margin)
+        source_by_year = dict(company.source_by_year)
+        confidence_by_year = dict(company.confidence_by_year)
+        provenance_by_year = dict(company.provenance_by_year)
+        provenance_chain_by_year = dict(company.provenance_chain_by_year)
+        source_references = dict(company.source_provenance_by_year)
+        margin_provenance = dict(company.gross_margin_provenance_by_year)
+        margin_chains = dict(company.gross_margin_provenance_chain_by_year)
+        margin_references = dict(company.gross_margin_source_provenance_by_year)
+        profit_provenance = dict(company.gross_profit_provenance_by_year)
+        profit_chains = dict(company.gross_profit_provenance_chain_by_year)
+        profit_references = dict(company.gross_profit_source_provenance_by_year)
+        methods = dict(company.method_by_year)
+        audits = dict(company.audit_by_year)
+        warnings = list(company.warnings)
+        identity_warnings = list(company.diagnostics.identity_warnings)
+        margin_supported: list[int] = []
+        profit_supported: list[int] = []
+        margin_errors: list[Decimal] = []
+        profit_errors: list[Decimal] = []
+        explicit_margin_provenance = margin_path.provenance if margin_path else None
+        explicit_profit_provenance = profit_path.provenance if profit_path else None
+        explicit_margin_refs = margin_path.source_provenance if margin_path else ()
+        explicit_profit_refs = profit_path.source_provenance if profit_path else ()
+
+        for index, year in enumerate(years):
+            explicit_margin = margin_path.values[index] if margin_path else None
+            explicit_profit = profit_path.values[index] if profit_path else None
+            margin = explicit_margin
+            profit = explicit_profit
+            audit: list[str] = []
+            if explicit_margin is not None:
+                audit.append(f"explicit_company_gross_margin={explicit_margin}")
+            if explicit_profit is not None:
+                audit.append(f"explicit_company_gross_profit={explicit_profit}")
+            if explicit_margin is not None and explicit_profit is None:
+                if company.consolidated_revenue[index] not in (None, Decimal(0)):
+                    profit = (
+                        company.consolidated_revenue[index]
+                        * explicit_margin
+                        / Decimal(100)
+                    )
+                    audit.append(f"gross_profit_derived_from_company_revenue={profit}")
+                else:
+                    audit.append("gross_profit_unavailable_company_revenue_missing_or_zero")
+            elif explicit_profit is not None and explicit_margin is None:
+                if company.consolidated_revenue[index] not in (None, Decimal(0)):
+                    margin = (
+                        explicit_profit
+                        / company.consolidated_revenue[index]
+                        * Decimal(100)
+                    )
+                    if not policy.gross_margin_min <= margin <= policy.gross_margin_max:
+                        margin = None
+                        audit.append("gross_margin_unavailable_outside_configured_bounds")
+                    else:
+                        audit.append(f"gross_margin_derived_from_company_gross_profit={margin}")
+                else:
+                    audit.append("gross_margin_unavailable_company_revenue_missing_or_zero")
+            elif explicit_margin is not None and explicit_profit is not None:
+                if company.consolidated_revenue[index] not in (None, Decimal(0)):
+                    expected = (
+                        company.consolidated_revenue[index]
+                        * explicit_margin
+                        / Decimal(100)
+                    )
+                    error = abs(explicit_profit - expected)
+                    profit_errors.append(error)
+                    margin_errors.append(error)
+                    audit.append(f"gross_profit_expected_from_company_margin={expected}")
+                    audit.append(f"company_gross_identity_error={error}")
+                    if error:
+                        warning = (
+                            f"FY{year}: explicit company gross margin and gross profit "
+                            f"differ by {error}"
+                        )
+                        warnings.append(warning)
+                        identity_warnings.append(warning)
+                else:
+                    audit.append("company_gross_identity_unavailable_revenue_missing_or_zero")
+
+            profits[index] = profit
+            margins[index] = margin
+            if margin is not None:
+                margin_supported.append(year)
+            if profit is not None:
+                profit_supported.append(year)
+
+            provenance_values = tuple(
+                item
+                for item in (explicit_margin_provenance, explicit_profit_provenance)
+                if item is not None
+            )
+            references = tuple(
+                dict.fromkeys((*explicit_margin_refs, *explicit_profit_refs))
+            )
+            source_by_year[year] = "explicit"
+            confidence_by_year[year] = "high"
+            methods[year] = "+".join(
+                item
+                for item in (
+                    "forecast_plan_explicit_company_gross_margin"
+                    if explicit_margin is not None
+                    else None,
+                    "forecast_plan_explicit_company_gross_profit"
+                    if explicit_profit is not None
+                    else None,
+                )
+                if item is not None
+            )
+            audits[year] = tuple(audit)
+            for mapping in (
+                provenance_by_year,
+                provenance_chain_by_year,
+                source_references,
+                margin_provenance,
+                margin_chains,
+                margin_references,
+                profit_provenance,
+                profit_chains,
+                profit_references,
+            ):
+                mapping.pop(year, None)
+            if provenance_values:
+                provenance_by_year[year] = provenance_values[0]
+                provenance_chain_by_year[year] = provenance_values
+            source_references[year] = references
+            if margin is not None:
+                margin_origin = (
+                    explicit_margin_provenance
+                    if explicit_margin is not None
+                    else explicit_profit_provenance
+                )
+                margin_origin_refs = (
+                    explicit_margin_refs
+                    if explicit_margin is not None
+                    else explicit_profit_refs
+                )
+                if margin_origin is not None:
+                    margin_provenance[year] = margin_origin
+                    margin_chains[year] = (margin_origin,)
+                margin_references[year] = margin_origin_refs
+            if profit is not None:
+                profit_origin = (
+                    explicit_profit_provenance
+                    if explicit_profit is not None
+                    else explicit_margin_provenance
+                )
+                profit_origin_refs = (
+                    explicit_profit_refs
+                    if explicit_profit is not None
+                    else explicit_margin_refs
+                )
+                if profit_origin is not None:
+                    profit_provenance[year] = profit_origin
+                    profit_chains[year] = (profit_origin,)
+                profit_references[year] = profit_origin_refs
+
+        stale_prefix = tuple(
+            f"FY{year}: consolidated gross" for year in years
+        )
+        warnings = [
+            warning
+            for warning in warnings
+            if not any(prefix in warning for prefix in stale_prefix)
+        ]
+        diagnostics = company.diagnostics.model_copy(
+            update={
+                "completeness": (
+                    Decimal(len(set(margin_supported) & set(profit_supported)))
+                    / Decimal(len(years))
+                    if years
+                    else None
+                ),
+                "identity_warnings": tuple(dict.fromkeys(identity_warnings)),
+                "warnings": tuple(dict.fromkeys(warnings)),
+                "gross_margin": company.diagnostics.gross_margin.model_copy(
+                    update={
+                        "coverage": Decimal(len(margin_supported)) / Decimal(len(years)) if years else None,
+                        "supported_years": tuple(margin_supported),
+                        "confidence": "high" if margin_supported else "low",
+                        "reconstruction_error": sum(margin_errors, Decimal(0)) / Decimal(len(margin_errors)) if margin_errors else Decimal(0),
+                        "completeness": Decimal(len(margin_supported)) / Decimal(len(years)) if years else None,
+                        "identity_warnings": tuple(dict.fromkeys(identity_warnings)),
+                        "warnings": tuple(dict.fromkeys(warnings)),
+                    }
+                ),
+                "gross_profit": company.diagnostics.gross_profit.model_copy(
+                    update={
+                        "coverage": Decimal(len(profit_supported)) / Decimal(len(years)) if years else None,
+                        "supported_years": tuple(profit_supported),
+                        "confidence": "high" if profit_supported else "low",
+                        "reconstruction_error": sum(profit_errors, Decimal(0)) / Decimal(len(profit_errors)) if profit_errors else Decimal(0),
+                        "completeness": Decimal(len(profit_supported)) / Decimal(len(years)) if years else None,
+                        "identity_warnings": tuple(dict.fromkeys(identity_warnings)),
+                        "warnings": tuple(dict.fromkeys(warnings)),
+                    }
+                ),
+            }
+        )
+        years_output = tuple(
+            item.model_copy(
+                update={
+                    "gross_profit": profits[index],
+                    "gross_margin": margins[index],
+                    "source": source_by_year[year],
+                    "confidence": confidence_by_year[year],
+                    "provenance": provenance_by_year.get(year),
+                    "provenance_chain": provenance_chain_by_year.get(year, ()),
+                    "source_provenance": source_references.get(year, ()),
+                    "gross_margin_provenance": margin_provenance.get(year),
+                    "gross_margin_provenance_chain": margin_chains.get(year, ()),
+                    "gross_margin_source_provenance": margin_references.get(year, ()),
+                    "gross_profit_provenance": profit_provenance.get(year),
+                    "gross_profit_provenance_chain": profit_chains.get(year, ()),
+                    "gross_profit_source_provenance": profit_references.get(year, ()),
+                    "method": methods[year],
+                    "audit": audits.get(year, ()),
+                    "expected_gross_profit": (
+                        company.consolidated_revenue[index] * margins[index] / Decimal(100)
+                        if company.consolidated_revenue[index] is not None
+                        and margins[index] is not None
+                        else None
+                    ),
+                    "identity_error": (
+                        abs(
+                            profits[index]
+                            - company.consolidated_revenue[index]
+                            * margins[index]
+                            / Decimal(100)
+                        )
+                        if profits[index] is not None
+                        and company.consolidated_revenue[index] is not None
+                        and margins[index] is not None
+                        else None
+                    ),
+                }
+            )
+            for index, (item, year) in enumerate(zip(company.years, years, strict=True))
+        )
+        return company.model_copy(
+            update={
+                "consolidated_gross_profit": tuple(profits),
+                "consolidated_gross_margin": tuple(margins),
+                "source_by_year": source_by_year,
+                "confidence_by_year": confidence_by_year,
+                "provenance_by_year": provenance_by_year,
+                "provenance_chain_by_year": provenance_chain_by_year,
+                "source_provenance_by_year": source_references,
+                "gross_margin_provenance_by_year": margin_provenance,
+                "gross_margin_provenance_chain_by_year": margin_chains,
+                "gross_margin_source_provenance_by_year": margin_references,
+                "gross_profit_provenance_by_year": profit_provenance,
+                "gross_profit_provenance_chain_by_year": profit_chains,
+                "gross_profit_source_provenance_by_year": profit_references,
+                "method_by_year": methods,
+                "audit_by_year": audits,
+                "diagnostics": diagnostics,
+                "warnings": tuple(dict.fromkeys(warnings)),
+                "years": years_output,
+            }
+        )
+
     def _consolidate(
         self,
         company_id: str,
@@ -1904,6 +2254,21 @@ def _metric_key(value: Any) -> str:
         return _COST
     if normalized in _REVENUE_ALIASES or normalized.endswith("_revenue") or normalized.endswith("_sales"):
         return _REVENUE
+    if normalized in {
+        "research_and_development",
+        "research_and_development_expense",
+        "research_development",
+    }:
+        return "r_and_d"
+    if normalized in {
+        "selling_general_and_administrative",
+        "selling_general_and_administrative_expense",
+    }:
+        return "sg_and_a"
+    if normalized in {"other_operating_item", "other_operating_income_expense"}:
+        return "other_operating_items"
+    if normalized in {"operating_income_loss"}:
+        return "operating_income"
     return normalized
 
 

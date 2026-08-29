@@ -27,6 +27,9 @@ from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.multistage import (
     AdaptiveMultistageFcffForecastService,
 )
+from edgarito.services.operating._forecast.financials_adapter import (
+    normalized_company_financials_to_operating_observations,
+)
 from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
@@ -248,6 +251,19 @@ class OperatingForecastPipelineService:
             else (item.fiscal_year for item in seed.observations)
         )
         values = _evidence_values(evidence)
+        normalized_financial_observations = (
+            normalized_company_financials_to_operating_observations(
+                financials,
+                as_of=as_of,
+                availability_mode=availability_mode,
+            )
+            if hasattr(financials, "observations")
+            else ()
+        )
+        values["observations"] = (
+            *_as_items(values.get("observations") or ()),
+            *normalized_financial_observations,
+        )
         if segments is not None:
             values["segments"] = _as_items(segments)
         if definitions is not None:

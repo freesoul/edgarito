@@ -24,6 +24,7 @@ class AlphaVantageConceptDefinition:
     concept: FinancialConcept
     response_name: str
     source_concept: str
+    absolute_value: bool = False
 
 
 CONCEPT_DEFINITIONS = (
@@ -31,6 +32,23 @@ CONCEPT_DEFINITIONS = (
         FinancialConcept.REVENUE,
         "income_statement",
         "totalRevenue",
+    ),
+    AlphaVantageConceptDefinition(
+        FinancialConcept.GROSS_PROFIT,
+        "income_statement",
+        "grossProfit",
+    ),
+    AlphaVantageConceptDefinition(
+        FinancialConcept.RESEARCH_AND_DEVELOPMENT_EXPENSE,
+        "income_statement",
+        "researchAndDevelopment",
+        absolute_value=True,
+    ),
+    AlphaVantageConceptDefinition(
+        FinancialConcept.SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE,
+        "income_statement",
+        "sellingGeneralAndAdministrative",
+        absolute_value=True,
     ),
     AlphaVantageConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
@@ -211,6 +229,8 @@ class AlphaVantageNormalizer:
             value: Optional[Decimal] = getattr(report, attribute_name)
             if value is None:
                 continue
+            if definition.absolute_value:
+                value = abs(value)
 
             if granularity == Granularity.ANNUAL:
                 fiscal_year = report.fiscal_date_ending.year

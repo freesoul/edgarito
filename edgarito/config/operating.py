@@ -48,7 +48,7 @@ class OperatingUnitsConfiguration(_OperatingConfigModel):
 
 
 class OperatingExtractionConfiguration(_OperatingConfigModel):
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     number_pattern: str = Field(min_length=1)
     year_pattern: str = Field(min_length=1)
     forward_pattern: str = Field(min_length=1)

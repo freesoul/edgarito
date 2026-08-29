@@ -43,8 +43,8 @@ from edgarito.services.guidance.documents import (
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "operating-evidence-v5"
-SCHEMA_VERSION = "operating-evidence-schema-v5"
+PROMPT_VERSION = "operating-evidence-v6"
+SCHEMA_VERSION = "operating-evidence-schema-v6"
 CONTEXT_VERSION = "operating-context-v3"
 OPERATING_EXTRACTION_CONFIG_VERSION = (
     f"{OPERATING_EXTRACTION.cache_version}|units:{OPERATING_UNITS.cache_version}"
@@ -88,6 +88,16 @@ cost_of_revenue (aliases are accepted). These are evidence only: do not
 calculate gross profit, gross margin, or any forecast in the response. Negative
 gross margin is permitted when the filing states a gross loss; preserve the
 reported period, units, scope, component flags, and supporting text.
+
+When explicitly stated, also copy segment R&D and SG&A as positive monetary
+observations using driver IDs `r_and_d` and `sg_and_a`. Copy company or segment
+management guidance, reported operating income/EBIT, and explicitly identified
+signed other-operating items using `operating_income`, `ebit`, or
+`other_operating_items`. Positive other-operating items increase operating
+income; negative items decrease it. Do not calculate residuals, allocate
+company expenses to segments, or infer a forecast from these facts. Event
+driven restructuring and impairment amounts are evidence only unless a future
+amount is explicitly stated by management.
 
 Copy supporting_text verbatim from the visible source context and keep it
 concise. Every numeric value, including a fiscal year, must appear in that
@@ -135,6 +145,24 @@ _GROSS_PROFIT_DRIVER_IDS = OPERATING_EXTRACTION.gross_profit_driver_ids or froze
 _COST_OF_REVENUE_DRIVER_IDS = (
     OPERATING_EXTRACTION.cost_of_revenue_driver_ids
     or frozenset({"cost_of_revenue", "cost_of_sales", "cost_of_goods_sold", "cogs"})
+)
+_OPEX_DRIVER_IDS = frozenset(
+    {
+        "r_and_d",
+        "research_and_development",
+        "research_and_development_expense",
+        "sg_and_a",
+        "selling_general_and_administrative",
+        "selling_general_and_administrative_expense",
+        "other_operating_items",
+        "other_operating_item",
+        "other_operating_income",
+        "other_operating_expense",
+        "recurring_other_operating_items",
+        "operating_income",
+        "operating_income_loss",
+        "ebit",
+    }
 )
 
 
@@ -742,6 +770,8 @@ class OperatingEvidenceExtractor:
             return "Gross-margin observation unit is not a percentage or ratio unit"
         if driver_id in _GROSS_PROFIT_DRIVER_IDS | _COST_OF_REVENUE_DRIVER_IDS and not _is_currency_unit(item.unit):
             return "Gross-profit or cost observation unit is not a currency unit"
+        if driver_id in _OPEX_DRIVER_IDS and not _is_currency_unit(item.unit):
+            return "Operating-expense or EBIT observation unit is not a currency unit"
         for (segment_id, _definition_id), definition in definitions.items():
             if segment_id != item.segment_id:
                 continue

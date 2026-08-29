@@ -13,6 +13,7 @@ from edgarito.schemas.forecasting import (
     ForecastProvenance,
     ForecastScope,
     ForecastStrategy,
+    ForecastValueBasis,
 )
 from edgarito.schemas.forward import (
     ForwardEstimateProviderDiagnostic,
@@ -31,6 +32,12 @@ from edgarito.schemas.market import (
     ReferenceValueUnit,
     SecurityMarketData,
     StockSplit,
+)
+from edgarito.schemas.normalization.financials import (
+    FinancialConcept,
+    FinancialObservation,
+    FinancialStatement,
+    NormalizedCompanyFinancials,
 )
 from edgarito.schemas.operating import (
     CompanyGrossEconomicsForecast,
@@ -160,6 +167,10 @@ __all__ = [
     "ForwardEstimateProviderStatus",
     "ForwardRevenueEstimate",
     "ForwardRevenueEstimateResult",
+    "FinancialConcept",
+    "FinancialObservation",
+    "FinancialStatement",
+    "NormalizedCompanyFinancials",
     "ForecastDecision",
     "ForecastMetric",
     "ForecastOverride",
@@ -167,6 +178,7 @@ __all__ = [
     "ForecastProvenance",
     "ForecastScope",
     "ForecastStrategy",
+    "ForecastValueBasis",
     "DiscoveredKpiTerm",
     "DiscoveredKpiVocabularyResponse",
     "KpiVocabularyAudit",

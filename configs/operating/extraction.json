@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "number_pattern": "(?<![A-Za-z])[-+]?\\d[\\d,]*(?:\\.\\d+)?",
   "year_pattern": "\\b(?:FY\\s*)?(?:19|20|21|22)\\d{2}\\b",
   "forward_pattern": "\\b(?:expect(?:s|ed|ing)?|outlook|forecast(?:s|ed|ing)?|anticipat(?:e|es|ed|ing)|project(?:s|ed|ing)?|target(?:s|ed|ing)?|plan(?:s|ned|ning)?|will)\\b",
@@ -44,7 +44,12 @@
     {"keyword": "facility", "pattern": "\\bfacilit(?:y|ies)\\b"},
     {"keyword": "gross margin", "pattern": "\\bgross\\s+(?:profit|income)\\s+margin\\b|\\bgross\\s+margin\\b"},
     {"keyword": "gross profit", "pattern": "\\bgross\\s+(?:profit|income)\\b"},
-    {"keyword": "cost of revenue", "pattern": "\\bcost\\s+of\\s+(?:revenue|sales|goods\\s+sold)\\b|\\bcogs\\b"}
+    {"keyword": "cost of revenue", "pattern": "\\bcost\\s+of\\s+(?:revenue|sales|goods\\s+sold)\\b|\\bcogs\\b"},
+    {"keyword": "research and development", "pattern": "\\bresearch(?:\\s+and|&)\\s+development\\b|\\br&d\\b"},
+    {"keyword": "selling general and administrative", "pattern": "\\bselling\\s*,?\\s*general\\s*(?:and|&)\\s*administrative\\b|\\bsg&a\\b"},
+    {"keyword": "operating income", "pattern": "\\boperating\\s+income(?:\\s+loss)?\\b|\\bebit\\b"},
+    {"keyword": "other operating items", "pattern": "\\bother\\s+operating\\s+(?:income|expense|items?)\\b"},
+    {"keyword": "restructuring and impairment", "pattern": "\\brestructur(?:e|ing)\\b|\\bimpair(?:ment|ed)?\\b"}
   ],
   "currency_unit_pattern": "(?:^|/)(?:usd|eur|gbp|jpy|cny|cad|aud|chf|currency)(?:/|$)",
   "count_unit_exclusions": [
@@ -66,7 +71,13 @@
     "gross_profit": ["gross_income", "gross_profit_amount"],
     "gross_income": ["gross_profit"],
     "cost_of_revenue": ["cost_of_sales", "cost_of_goods_sold", "cogs"],
-    "cost_of_sales": ["cost_of_revenue", "cost_of_goods_sold", "cogs"]
+    "cost_of_sales": ["cost_of_revenue", "cost_of_goods_sold", "cogs"],
+    "r_and_d": ["research_and_development", "research_and_development_expense"],
+    "research_and_development": ["r_and_d", "research_and_development_expense"],
+    "sg_and_a": ["selling_general_and_administrative", "selling_general_and_administrative_expense"],
+    "selling_general_and_administrative": ["sg_and_a", "selling_general_and_administrative_expense"],
+    "other_operating_items": ["other_operating_item"],
+    "operating_income": ["operating_income_loss", "ebit"]
   },
   "implied_revenue_driver_ids": [
     "revenue",

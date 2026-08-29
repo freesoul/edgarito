@@ -416,7 +416,10 @@ class OperatingDriverObservation(BaseModel):
     @field_validator("driver_id")
     @classmethod
     def normalize_identifiers(cls, value: str) -> str:
-        return _normalize_required_text(value, "Operating observation identifier")
+        normalized = _normalize_required_text(value, "Operating observation identifier")
+        if normalized.casefold().replace("-", "_").replace(" ", "_") == "ebit":
+            return "operating_income"
+        return normalized
 
     @field_validator("segment_id")
     @classmethod
@@ -512,6 +515,19 @@ class OperatingDriverObservation(BaseModel):
     def validate_range(self) -> "OperatingDriverObservation":
         if self.value is None and self.low is None and self.high is None:
             raise ValueError("Operating observation requires a value or range")
+        metric = self.driver_id.casefold().replace("-", "_").replace(" ", "_")
+        if metric in {
+            "r_and_d",
+            "research_and_development",
+            "research_and_development_expense",
+            "sg_and_a",
+            "selling_general_and_administrative",
+            "selling_general_and_administrative_expense",
+        } and any(
+            value is not None and value < 0
+            for value in (self.value, self.low, self.high)
+        ):
+            raise ValueError("R&D and SG&A observations cannot be negative")
         if self.low is not None and self.high is not None and self.low > self.high:
             raise ValueError("Operating observation low cannot exceed high")
         if self.value is not None:
@@ -1128,7 +1144,30 @@ class ExtractedOperatingObservation(BaseModel):
             "gross_income",
             "gross_income_amount",
         }
-        if not margin_metric and not gross_profit_metric and any(
+        signed_metric = metric in {
+            "other_operating_items",
+            "other_operating_item",
+            "other_operating_income",
+            "other_operating_expense",
+            "recurring_other_operating_items",
+            "operating_income",
+            "operating_income_loss",
+            "ebit",
+        }
+        expense_metric = metric in {
+            "r_and_d",
+            "research_and_development",
+            "research_and_development_expense",
+            "sg_and_a",
+            "selling_general_and_administrative",
+            "selling_general_and_administrative_expense",
+        }
+        if expense_metric and any(
+            value is not None and value < 0
+            for value in (self.value, self.low, self.high)
+        ):
+            raise ValueError("Extracted R&D and SG&A observations cannot be negative")
+        if not margin_metric and not gross_profit_metric and not signed_metric and any(
             value is not None and value < 0
             for value in (self.value, self.low, self.high)
         ):
@@ -1587,16 +1626,48 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    metric: Literal["gross_margin", "gross_profit"]
+    @model_serializer(mode="wrap")
+    def serialize_metric_diagnostics(self, handler):
+        data = handler(self)
+        if self.metric in {"gross_margin", "gross_profit"}:
+            for field in (
+                "normalized_ratio",
+                "historical_years",
+                "residual_magnitude",
+                "provenance",
+            ):
+                data.pop(field, None)
+        return data
+
+    metric: Literal[
+        "gross_margin",
+        "gross_profit",
+        "r_and_d",
+        "sg_and_a",
+        "other_operating_items",
+        "ebit",
+    ]
     coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
     supported_years: tuple[int, ...] = ()
     confidence: Literal["high", "medium", "low"] = "low"
     reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
+    normalized_ratio: Decimal | None = Field(default=None, allow_inf_nan=True)
+    historical_years: tuple[int, ...] = ()
+    residual_magnitude: Decimal | None = Field(default=None, allow_inf_nan=True)
+    provenance: tuple[
+        AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...
+    ] = ()
     warnings: tuple[str, ...] = ()
     identity_warnings: tuple[str, ...] = ()
 
-    @field_validator("coverage", "reconstruction_error", "completeness")
+    @field_validator(
+        "coverage",
+        "reconstruction_error",
+        "completeness",
+        "normalized_ratio",
+        "residual_magnitude",
+    )
     @classmethod
     def validate_metrics(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Operating economics diagnostics")
@@ -1606,6 +1677,13 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
     def validate_years(cls, value: tuple[int, ...]) -> tuple[int, ...]:
         if value:
             _validate_year_sequence(value, "Operating economics supported years")
+        return value
+
+    @field_validator("historical_years")
+    @classmethod
+    def validate_historical_years(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if value:
+            _validate_year_sequence(value, "Operating economics historical years")
         return value
 
     @field_validator("confidence", mode="before")
@@ -1641,11 +1719,38 @@ class OperatingEconomicsDiagnostics(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    @model_serializer(mode="wrap")
+    def serialize_diagnostics(self, handler):
+        data = handler(self)
+        if all(
+            getattr(self, metric).coverage is None
+            and not getattr(self, metric).warnings
+            and not getattr(self, metric).identity_warnings
+            for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit")
+        ):
+            for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit"):
+                data.pop(metric, None)
+        return data
+
     gross_margin: OperatingEconomicsMetricDiagnostics = Field(
         default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_margin")
     )
     gross_profit: OperatingEconomicsMetricDiagnostics = Field(
         default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_profit")
+    )
+    r_and_d: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="r_and_d")
+    )
+    sg_and_a: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="sg_and_a")
+    )
+    other_operating_items: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="other_operating_items"
+        )
+    )
+    ebit: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="ebit")
     )
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
     identity_warnings: tuple[str, ...] = ()
@@ -1679,11 +1784,67 @@ class OperatingEconomicsDiagnostics(BaseModel):
 
         return self.gross_profit
 
+    @property
+    def research_and_development(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.r_and_d
+
+    @property
+    def selling_general_and_administrative(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.sg_and_a
+
 
 class OperatingEconomicsYear(BaseModel):
     """Selected segment economics for one fiscal year."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @model_serializer(mode="wrap")
+    def serialize_year(self, handler):
+        data = handler(self)
+        if (
+            self.r_and_d is None
+            and self.sg_and_a is None
+            and self.other_operating_items is None
+            and self.ebit is None
+            and self.reported_ebit is None
+            and self.explicit_ebit_target is None
+            and self.ebit_reconstruction_error is None
+            and self.explicit_ebit_reconstruction_error is None
+            and self.reported_ebit_reconstruction_error is None
+        ):
+            for field in (
+                "r_and_d",
+                "sg_and_a",
+                "other_operating_items",
+                "ebit",
+                "reported_ebit",
+                "explicit_ebit_target",
+                "ebit_reconstruction_error",
+                "explicit_ebit_reconstruction_error",
+                "reported_ebit_reconstruction_error",
+                "r_and_d_source",
+                "r_and_d_method",
+                "r_and_d_confidence",
+                "r_and_d_provenance",
+                "r_and_d_audit",
+                "sg_and_a_source",
+                "sg_and_a_method",
+                "sg_and_a_confidence",
+                "sg_and_a_provenance",
+                "sg_and_a_audit",
+                "other_operating_items_source",
+                "other_operating_items_method",
+                "other_operating_items_confidence",
+                "other_operating_items_provenance",
+                "other_operating_items_audit",
+                "ebit_source",
+                "ebit_method",
+                "ebit_confidence",
+                "ebit_provenance",
+                "ebit_audit",
+            ):
+                data.pop(field, None)
+        return data
 
     fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
     fiscal_period: str = "FY"
@@ -1691,6 +1852,15 @@ class OperatingEconomicsYear(BaseModel):
     revenue: Decimal | None = None
     gross_margin: Decimal | None = None
     gross_profit: Decimal | None = None
+    r_and_d: Decimal | None = None
+    sg_and_a: Decimal | None = None
+    other_operating_items: Decimal | None = None
+    ebit: Decimal | None = None
+    reported_ebit: Decimal | None = None
+    explicit_ebit_target: Decimal | None = None
+    ebit_reconstruction_error: Decimal | None = None
+    explicit_ebit_reconstruction_error: Decimal | None = None
+    reported_ebit_reconstruction_error: Decimal | None = None
     source: str = "unavailable"
     confidence: Literal["high", "medium", "low"] = "low"
     provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
@@ -1706,6 +1876,26 @@ class OperatingEconomicsYear(BaseModel):
     audit: tuple[str, ...] = ()
     expected_gross_profit: Decimal | None = None
     identity_error: Decimal | None = None
+    r_and_d_source: str = "unavailable"
+    r_and_d_method: str = "unavailable"
+    r_and_d_confidence: Literal["high", "medium", "low"] = "low"
+    r_and_d_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    r_and_d_audit: tuple[str, ...] = ()
+    sg_and_a_source: str = "unavailable"
+    sg_and_a_method: str = "unavailable"
+    sg_and_a_confidence: Literal["high", "medium", "low"] = "low"
+    sg_and_a_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    sg_and_a_audit: tuple[str, ...] = ()
+    other_operating_items_source: str = "unavailable"
+    other_operating_items_method: str = "unavailable"
+    other_operating_items_confidence: Literal["high", "medium", "low"] = "low"
+    other_operating_items_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    other_operating_items_audit: tuple[str, ...] = ()
+    ebit_source: str = "unavailable"
+    ebit_method: str = "unavailable"
+    ebit_confidence: Literal["high", "medium", "low"] = "low"
+    ebit_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    ebit_audit: tuple[str, ...] = ()
 
     @field_validator("fiscal_period")
     @classmethod
@@ -1717,10 +1907,32 @@ class OperatingEconomicsYear(BaseModel):
     def normalize_period_key(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value, "Operating economics period key")
 
-    @field_validator("revenue", "gross_margin", "gross_profit", "expected_gross_profit", "identity_error")
+    @field_validator(
+        "revenue",
+        "gross_margin",
+        "gross_profit",
+        "r_and_d",
+        "sg_and_a",
+        "other_operating_items",
+        "ebit",
+        "reported_ebit",
+        "explicit_ebit_target",
+        "expected_gross_profit",
+        "identity_error",
+        "ebit_reconstruction_error",
+        "explicit_ebit_reconstruction_error",
+        "reported_ebit_reconstruction_error",
+    )
     @classmethod
     def validate_values(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Operating economics values")
+
+    @field_validator("r_and_d", "sg_and_a")
+    @classmethod
+    def validate_positive_expenses(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("R&D and SG&A cannot be negative")
+        return value
 
     @field_validator("source", "method")
     @classmethod
@@ -1737,10 +1949,35 @@ class OperatingEconomicsYear(BaseModel):
     def normalize_audit(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(_normalize_required_text(item, "Operating economics audit") for item in value)
 
+    @field_validator(
+        "r_and_d_audit",
+        "sg_and_a_audit",
+        "other_operating_items_audit",
+        "ebit_audit",
+    )
+    @classmethod
+    def normalize_metric_audit(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            _normalize_required_text(item, "Operating economics metric audit")
+            for item in value
+        )
+
     @model_validator(mode="after")
     def validate_identity_error(self) -> "OperatingEconomicsYear":
         if self.identity_error is not None and self.identity_error < 0:
             raise ValueError("Operating economics identity error cannot be negative")
+        if self.ebit_reconstruction_error is not None and self.ebit_reconstruction_error < 0:
+            raise ValueError("EBIT reconstruction error cannot be negative")
+        if (
+            self.explicit_ebit_reconstruction_error is not None
+            and self.explicit_ebit_reconstruction_error < 0
+        ):
+            raise ValueError("Explicit EBIT reconstruction error cannot be negative")
+        if (
+            self.reported_ebit_reconstruction_error is not None
+            and self.reported_ebit_reconstruction_error < 0
+        ):
+            raise ValueError("Reported EBIT reconstruction error cannot be negative")
         return self
 
 
@@ -1749,11 +1986,60 @@ class SegmentOperatingEconomicsForecast(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    @model_serializer(mode="wrap")
+    def serialize_segment_economics(self, handler):
+        data = handler(self)
+        if all(
+            value is None
+            for path in (
+                self.r_and_d,
+                self.sg_and_a,
+                self.other_operating_items,
+                self.ebit,
+            )
+            for value in path
+        ):
+            for field in (
+                "r_and_d",
+                "sg_and_a",
+                "other_operating_items",
+                "ebit",
+                "r_and_d_source_by_year",
+                "r_and_d_method_by_year",
+                "r_and_d_confidence_by_year",
+                "r_and_d_provenance_by_year",
+                "r_and_d_audit_by_year",
+                "sg_and_a_source_by_year",
+                "sg_and_a_method_by_year",
+                "sg_and_a_confidence_by_year",
+                "sg_and_a_provenance_by_year",
+                "sg_and_a_audit_by_year",
+                "other_operating_items_source_by_year",
+                "other_operating_items_method_by_year",
+                "other_operating_items_confidence_by_year",
+                "other_operating_items_provenance_by_year",
+                "other_operating_items_audit_by_year",
+                "ebit_source_by_year",
+                "ebit_method_by_year",
+                "ebit_confidence_by_year",
+                "ebit_provenance_by_year",
+                "ebit_audit_by_year",
+            ):
+                data.pop(field, None)
+        return data
+
     segment: OperatingSegment
     fiscal_years: tuple[int, ...]
     revenue: tuple[Decimal | None, ...]
     gross_margin: tuple[Decimal | None, ...]
     gross_profit: tuple[Decimal | None, ...]
+    # These fields remain empty unless direct segment-scoped evidence or a
+    # segment-scoped explicit path supports them. Consolidated OPEX is never
+    # allocated to segments.
+    r_and_d: tuple[Decimal | None, ...] = ()
+    sg_and_a: tuple[Decimal | None, ...] = ()
+    other_operating_items: tuple[Decimal | None, ...] = ()
+    ebit: tuple[Decimal | None, ...] = ()
     years: tuple[OperatingEconomicsYear, ...] = ()
     source_by_year: dict[int, str] = Field(default_factory=dict)
     confidence_by_year: dict[int, str] = Field(default_factory=dict)
@@ -1766,6 +2052,26 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     gross_profit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
     gross_profit_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
     gross_profit_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    r_and_d_source_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_method_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    r_and_d_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    sg_and_a_source_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_method_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    sg_and_a_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    other_operating_items_source_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_method_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    other_operating_items_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    ebit_source_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_method_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    ebit_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     method_by_year: dict[int, str] = Field(default_factory=dict)
     audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     diagnostics: OperatingEconomicsDiagnostics = Field(
@@ -1790,17 +2096,50 @@ class SegmentOperatingEconomicsForecast(BaseModel):
             for item in value
         )
 
-    @field_validator("gross_margin", "gross_profit")
+    @field_validator(
+        "gross_margin",
+        "gross_profit",
+        "r_and_d",
+        "sg_and_a",
+        "other_operating_items",
+        "ebit",
+    )
     @classmethod
     def validate_economics_values(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
         return tuple(_finite_decimal(item, "Segment economics values") for item in value)
+
+    @field_validator("r_and_d", "sg_and_a")
+    @classmethod
+    def validate_segment_expenses(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        if any(item is not None and item < 0 for item in value):
+            raise ValueError("Segment R&D and SG&A cannot be negative")
+        return value
 
     @field_validator("unit")
     @classmethod
     def normalize_unit(cls, value: str) -> str:
         return _normalize_required_text(value, "Segment economics unit")
 
-    @field_validator("source_by_year", "confidence_by_year", "method_by_year", mode="before")
+    @field_validator(
+        "source_by_year",
+        "confidence_by_year",
+        "method_by_year",
+        "r_and_d_source_by_year",
+        "r_and_d_method_by_year",
+        "r_and_d_confidence_by_year",
+        "sg_and_a_source_by_year",
+        "sg_and_a_method_by_year",
+        "sg_and_a_confidence_by_year",
+        "other_operating_items_source_by_year",
+        "other_operating_items_method_by_year",
+        "other_operating_items_confidence_by_year",
+        "ebit_source_by_year",
+        "ebit_method_by_year",
+        "ebit_confidence_by_year",
+        mode="before",
+    )
     @classmethod
     def normalize_year_maps(cls, value: dict[int, str] | None) -> dict[int, str]:
         return {int(year): str(getattr(item, "value", item)).strip() for year, item in (value or {}).items()}
@@ -1821,7 +2160,26 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     @model_validator(mode="after")
     def validate_forecast(self) -> "SegmentOperatingEconomicsForecast":
         length = len(self.fiscal_years)
-        if any(len(path) != length for path in (self.revenue, self.gross_margin, self.gross_profit)):
+        if not self.r_and_d:
+            object.__setattr__(self, "r_and_d", (None,) * length)
+        if not self.sg_and_a:
+            object.__setattr__(self, "sg_and_a", (None,) * length)
+        if not self.other_operating_items:
+            object.__setattr__(self, "other_operating_items", (None,) * length)
+        if not self.ebit:
+            object.__setattr__(self, "ebit", (None,) * length)
+        if any(
+            len(path) != length
+            for path in (
+                self.revenue,
+                self.gross_margin,
+                self.gross_profit,
+                self.r_and_d,
+                self.sg_and_a,
+                self.other_operating_items,
+                self.ebit,
+            )
+        ):
             raise ValueError("Segment economics paths must match fiscal_years")
         if self.years and tuple(item.fiscal_year for item in self.years) != self.fiscal_years:
             raise ValueError("Segment economics year records must match fiscal_years")
@@ -1849,6 +2207,41 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                 self.gross_profit_source_provenance_by_year,
                 "gross_profit_source_provenance_by_year",
             ),
+            (self.r_and_d_source_by_year, "r_and_d_source_by_year"),
+            (self.r_and_d_method_by_year, "r_and_d_method_by_year"),
+            (self.r_and_d_confidence_by_year, "r_and_d_confidence_by_year"),
+            (self.r_and_d_provenance_by_year, "r_and_d_provenance_by_year"),
+            (self.r_and_d_audit_by_year, "r_and_d_audit_by_year"),
+            (self.sg_and_a_source_by_year, "sg_and_a_source_by_year"),
+            (self.sg_and_a_method_by_year, "sg_and_a_method_by_year"),
+            (self.sg_and_a_confidence_by_year, "sg_and_a_confidence_by_year"),
+            (self.sg_and_a_provenance_by_year, "sg_and_a_provenance_by_year"),
+            (self.sg_and_a_audit_by_year, "sg_and_a_audit_by_year"),
+            (
+                self.other_operating_items_source_by_year,
+                "other_operating_items_source_by_year",
+            ),
+            (
+                self.other_operating_items_method_by_year,
+                "other_operating_items_method_by_year",
+            ),
+            (
+                self.other_operating_items_confidence_by_year,
+                "other_operating_items_confidence_by_year",
+            ),
+            (
+                self.other_operating_items_provenance_by_year,
+                "other_operating_items_provenance_by_year",
+            ),
+            (
+                self.other_operating_items_audit_by_year,
+                "other_operating_items_audit_by_year",
+            ),
+            (self.ebit_source_by_year, "ebit_source_by_year"),
+            (self.ebit_method_by_year, "ebit_method_by_year"),
+            (self.ebit_confidence_by_year, "ebit_confidence_by_year"),
+            (self.ebit_provenance_by_year, "ebit_provenance_by_year"),
+            (self.ebit_audit_by_year, "ebit_audit_by_year"),
             (self.method_by_year, "method_by_year"),
             (self.audit_by_year, "audit_by_year"),
         ):
@@ -1864,6 +2257,10 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                         revenue=revenue,
                         gross_margin=margin,
                         gross_profit=profit,
+                        r_and_d=self.r_and_d[index],
+                        sg_and_a=self.sg_and_a[index],
+                        other_operating_items=self.other_operating_items[index],
+                        ebit=self.ebit[index],
                         source=self.source_by_year.get(year, "unavailable"),
                         confidence=self.confidence_by_year.get(year, "low"),
                         provenance=self.provenance_by_year.get(year),
@@ -1877,9 +2274,35 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                         gross_profit_source_provenance=self.gross_profit_source_provenance_by_year.get(year, ()),
                         method=self.method_by_year.get(year, "unavailable"),
                         audit=self.audit_by_year.get(year, ()),
+                        r_and_d_source=self.r_and_d_source_by_year.get(year, "unavailable"),
+                        r_and_d_method=self.r_and_d_method_by_year.get(year, "unavailable"),
+                        r_and_d_confidence=self.r_and_d_confidence_by_year.get(year, "low"),
+                        r_and_d_provenance=self.r_and_d_provenance_by_year.get(year),
+                        r_and_d_audit=self.r_and_d_audit_by_year.get(year, ()),
+                        sg_and_a_source=self.sg_and_a_source_by_year.get(year, "unavailable"),
+                        sg_and_a_method=self.sg_and_a_method_by_year.get(year, "unavailable"),
+                        sg_and_a_confidence=self.sg_and_a_confidence_by_year.get(year, "low"),
+                        sg_and_a_provenance=self.sg_and_a_provenance_by_year.get(year),
+                        sg_and_a_audit=self.sg_and_a_audit_by_year.get(year, ()),
+                        other_operating_items_source=self.other_operating_items_source_by_year.get(year, "unavailable"),
+                        other_operating_items_method=self.other_operating_items_method_by_year.get(year, "unavailable"),
+                        other_operating_items_confidence=self.other_operating_items_confidence_by_year.get(year, "low"),
+                        other_operating_items_provenance=self.other_operating_items_provenance_by_year.get(year),
+                        other_operating_items_audit=self.other_operating_items_audit_by_year.get(year, ()),
+                        ebit_source=self.ebit_source_by_year.get(year, "unavailable"),
+                        ebit_method=self.ebit_method_by_year.get(year, "unavailable"),
+                        ebit_confidence=self.ebit_confidence_by_year.get(year, "low"),
+                        ebit_provenance=self.ebit_provenance_by_year.get(year),
+                        ebit_audit=self.ebit_audit_by_year.get(year, ()),
                     )
-                    for year, revenue, margin, profit in zip(
-                        self.fiscal_years, self.revenue, self.gross_margin, self.gross_profit, strict=True
+                    for index, (year, revenue, margin, profit) in enumerate(
+                        zip(
+                            self.fiscal_years,
+                            self.revenue,
+                            self.gross_margin,
+                            self.gross_profit,
+                            strict=True,
+                        )
                     )
                 ),
             )
@@ -1892,6 +2315,22 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     @property
     def gross_profit_by_year(self) -> dict[int, Decimal | None]:
         return dict(zip(self.fiscal_years, self.gross_profit, strict=True))
+
+    @property
+    def r_and_d_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.r_and_d, strict=True))
+
+    @property
+    def sg_and_a_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.sg_and_a, strict=True))
+
+    @property
+    def other_operating_items_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.other_operating_items, strict=True))
+
+    @property
+    def ebit_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.ebit, strict=True))
 
     @property
     def margin_provenance(self):
@@ -1918,6 +2357,22 @@ class SegmentOperatingEconomicsForecast(BaseModel):
         return self.diagnostics.gross_profit
 
     @property
+    def r_and_d_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.r_and_d
+
+    @property
+    def sg_and_a_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.sg_and_a
+
+    @property
+    def other_operating_items_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.other_operating_items
+
+    @property
+    def ebit_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.ebit
+
+    @property
     def gross_margin_coverage(self) -> Decimal | None:
         return self.diagnostics.gross_margin.coverage
 
@@ -1935,19 +2390,66 @@ class SegmentOperatingEconomicsForecast(BaseModel):
 
 
 class OperatingEconomicsForecastConfig(BaseModel):
-    """Small deterministic policy surface for gross-economics normalization."""
+    """Deterministic policy surface for gross economics and company OPEX."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    historical_window: int = Field(default=3, ge=1, le=10)
-    normalization_method: Literal["median", "weighted_recent"] = "median"
+    historical_window: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices(
+            "historical_window",
+            "opex_historical_window",
+            "ratio_historical_window",
+        ),
+    )
+    normalization_method: Literal["median", "weighted_recent"] = Field(
+        default="median",
+        validation_alias=AliasChoices(
+            "normalization_method",
+            "ratio_normalization_method",
+            "opex_normalization_method",
+        ),
+    )
     gross_margin_min: Decimal = Decimal("-100")
     gross_margin_max: Decimal = Decimal("100")
+    other_operating_items_stability_threshold: Decimal = Field(
+        default=Decimal("0.25"),
+        validation_alias=AliasChoices(
+            "other_operating_items_stability_threshold",
+            "other_operating_stability_threshold",
+            "other_item_stability_threshold",
+            "other_stability_threshold",
+            "residual_stability_threshold",
+        ),
+    )
+    other_operating_items_materiality_threshold: Decimal = Field(
+        default=Decimal("0.01"),
+        validation_alias=AliasChoices(
+            "other_operating_items_materiality_threshold",
+            "other_operating_materiality_threshold",
+            "other_item_materiality_threshold",
+            "other_materiality_threshold",
+            "residual_materiality_threshold",
+        ),
+    )
 
     @field_validator("gross_margin_min", "gross_margin_max")
     @classmethod
     def validate_bounds(cls, value: Decimal) -> Decimal:
         return _finite_decimal(value, "Gross-margin bounds")
+
+    @field_validator(
+        "other_operating_items_stability_threshold",
+        "other_operating_items_materiality_threshold",
+    )
+    @classmethod
+    def validate_other_thresholds(cls, value: Decimal) -> Decimal:
+        normalized = _finite_decimal(value, "Other-operating-item threshold")
+        if normalized is None or normalized < 0:
+            raise ValueError("Other-operating-item thresholds cannot be negative")
+        return normalized
 
     @model_validator(mode="after")
     def validate_margin_bounds(self) -> "OperatingEconomicsForecastConfig":
@@ -2569,9 +3071,56 @@ class CompanyOperatingForecast(BaseModel):
 
 
 class CompanyOperatingEconomicsForecast(BaseModel):
-    """Consolidated gross economics using the revenue consolidation set."""
+    """Consolidated gross economics plus staged company OPEX and EBIT."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @model_serializer(mode="wrap")
+    def serialize_company_economics(self, handler):
+        data = handler(self)
+        if all(
+            value is None
+            for path in (
+                self.consolidated_r_and_d,
+                self.consolidated_sg_and_a,
+                self.consolidated_other_operating_items,
+                self.consolidated_ebit,
+            )
+            for value in path
+        ):
+            for field in (
+                "consolidated_r_and_d",
+                "consolidated_sg_and_a",
+                "consolidated_other_operating_items",
+                "consolidated_ebit",
+                "reported_ebit_by_year",
+                "explicit_ebit_target_by_year",
+                "ebit_reconstruction_error_by_year",
+                "explicit_ebit_reconstruction_error_by_year",
+                "reported_ebit_reconstruction_error_by_year",
+                "r_and_d_source_by_year",
+                "r_and_d_method_by_year",
+                "r_and_d_confidence_by_year",
+                "r_and_d_provenance_by_year",
+                "r_and_d_audit_by_year",
+                "sg_and_a_source_by_year",
+                "sg_and_a_method_by_year",
+                "sg_and_a_confidence_by_year",
+                "sg_and_a_provenance_by_year",
+                "sg_and_a_audit_by_year",
+                "other_operating_items_source_by_year",
+                "other_operating_items_method_by_year",
+                "other_operating_items_confidence_by_year",
+                "other_operating_items_provenance_by_year",
+                "other_operating_items_audit_by_year",
+                "ebit_source_by_year",
+                "ebit_method_by_year",
+                "ebit_confidence_by_year",
+                "ebit_provenance_by_year",
+                "ebit_audit_by_year",
+            ):
+                data.pop(field, None)
+        return data
 
     company_id: str
     fiscal_years: tuple[int, ...]
@@ -2587,6 +3136,26 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     consolidated_gross_margin: tuple[Decimal | None, ...] = Field(
         validation_alias=AliasChoices("consolidated_gross_margin", "gross_margin")
     )
+    consolidated_r_and_d: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("consolidated_r_and_d", "r_and_d")
+    )
+    consolidated_sg_and_a: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("consolidated_sg_and_a", "sg_and_a")
+    )
+    consolidated_other_operating_items: tuple[Decimal | None, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "consolidated_other_operating_items", "other_operating_items"
+        ),
+    )
+    consolidated_ebit: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("consolidated_ebit", "ebit")
+    )
+    reported_ebit_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    explicit_ebit_target_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    ebit_reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    explicit_ebit_reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    reported_ebit_reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
     years: tuple[OperatingEconomicsYear, ...] = ()
     source_by_year: dict[int, str] = Field(default_factory=dict)
     confidence_by_year: dict[int, str] = Field(default_factory=dict)
@@ -2599,6 +3168,26 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     gross_profit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
     gross_profit_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
     gross_profit_source_provenance_by_year: dict[int, tuple[EvidenceReference, ...]] = Field(default_factory=dict)
+    r_and_d_source_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_method_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    r_and_d_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    r_and_d_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    sg_and_a_source_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_method_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    sg_and_a_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    sg_and_a_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    other_operating_items_source_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_method_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    other_operating_items_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    other_operating_items_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    ebit_source_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_method_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    ebit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    ebit_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     method_by_year: dict[int, str] = Field(default_factory=dict)
     audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     diagnostics: OperatingEconomicsDiagnostics = Field(
@@ -2628,17 +3217,50 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             for item in value
         )
 
-    @field_validator("consolidated_gross_profit", "consolidated_gross_margin")
+    @field_validator(
+        "consolidated_gross_profit",
+        "consolidated_gross_margin",
+        "consolidated_r_and_d",
+        "consolidated_sg_and_a",
+        "consolidated_other_operating_items",
+        "consolidated_ebit",
+    )
     @classmethod
     def validate_company_economics(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
         return tuple(_finite_decimal(item, "Company economics values") for item in value)
+
+    @field_validator("consolidated_r_and_d", "consolidated_sg_and_a")
+    @classmethod
+    def validate_company_expenses(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        if any(item is not None and item < 0 for item in value):
+            raise ValueError("Company R&D and SG&A cannot be negative")
+        return value
 
     @field_validator("unit")
     @classmethod
     def normalize_unit(cls, value: str) -> str:
         return _normalize_required_text(value, "Company economics unit")
 
-    @field_validator("source_by_year", "confidence_by_year", "method_by_year", mode="before")
+    @field_validator(
+        "source_by_year",
+        "confidence_by_year",
+        "method_by_year",
+        "r_and_d_source_by_year",
+        "r_and_d_method_by_year",
+        "r_and_d_confidence_by_year",
+        "sg_and_a_source_by_year",
+        "sg_and_a_method_by_year",
+        "sg_and_a_confidence_by_year",
+        "other_operating_items_source_by_year",
+        "other_operating_items_method_by_year",
+        "other_operating_items_confidence_by_year",
+        "ebit_source_by_year",
+        "ebit_method_by_year",
+        "ebit_confidence_by_year",
+        mode="before",
+    )
     @classmethod
     def normalize_year_maps(cls, value: dict[int, str] | None) -> dict[int, str]:
         return {int(year): str(getattr(item, "value", item)).strip() for year, item in (value or {}).items()}
@@ -2656,15 +3278,70 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     def normalize_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(_normalize_required_text(item, "Company economics warning") for item in value)
 
+    @field_validator("reported_ebit_by_year")
+    @classmethod
+    def validate_reported_ebit_map(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        return {
+            int(year): _finite_decimal(amount, "Reported EBIT audit values")
+            for year, amount in value.items()
+        }
+
+    @field_validator("explicit_ebit_target_by_year")
+    @classmethod
+    def validate_explicit_ebit_target_map(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        return {
+            int(year): _finite_decimal(amount, "Explicit EBIT target values")
+            for year, amount in value.items()
+        }
+
+    @field_validator("ebit_reconstruction_error_by_year")
+    @classmethod
+    def validate_ebit_error_map(cls, value: dict[int, Decimal]) -> dict[int, Decimal]:
+        return {
+            int(year): _non_negative_decimal(
+                amount, "EBIT reconstruction errors"
+            )
+            for year, amount in value.items()
+        }
+
+    @field_validator(
+        "explicit_ebit_reconstruction_error_by_year",
+        "reported_ebit_reconstruction_error_by_year",
+    )
+    @classmethod
+    def validate_target_error_maps(cls, value: dict[int, Decimal]) -> dict[int, Decimal]:
+        return {
+            int(year): _non_negative_decimal(amount, "EBIT reconstruction errors")
+            for year, amount in value.items()
+        }
+
     @model_validator(mode="after")
     def validate_forecast(self) -> "CompanyOperatingEconomicsForecast":
         length = len(self.fiscal_years)
+        if not self.consolidated_r_and_d:
+            object.__setattr__(self, "consolidated_r_and_d", (None,) * length)
+        if not self.consolidated_sg_and_a:
+            object.__setattr__(self, "consolidated_sg_and_a", (None,) * length)
+        if not self.consolidated_other_operating_items:
+            object.__setattr__(
+                self, "consolidated_other_operating_items", (None,) * length
+            )
+        if not self.consolidated_ebit:
+            object.__setattr__(self, "consolidated_ebit", (None,) * length)
         if any(
             len(path) != length
             for path in (
                 self.consolidated_revenue,
                 self.consolidated_gross_profit,
                 self.consolidated_gross_margin,
+                self.consolidated_r_and_d,
+                self.consolidated_sg_and_a,
+                self.consolidated_other_operating_items,
+                self.consolidated_ebit,
             )
         ):
             raise ValueError("Company economics paths must match fiscal_years")
@@ -2697,6 +3374,55 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                 self.gross_profit_source_provenance_by_year,
                 "gross_profit_source_provenance_by_year",
             ),
+            (self.r_and_d_source_by_year, "r_and_d_source_by_year"),
+            (self.r_and_d_method_by_year, "r_and_d_method_by_year"),
+            (self.r_and_d_confidence_by_year, "r_and_d_confidence_by_year"),
+            (self.r_and_d_provenance_by_year, "r_and_d_provenance_by_year"),
+            (self.r_and_d_audit_by_year, "r_and_d_audit_by_year"),
+            (self.sg_and_a_source_by_year, "sg_and_a_source_by_year"),
+            (self.sg_and_a_method_by_year, "sg_and_a_method_by_year"),
+            (self.sg_and_a_confidence_by_year, "sg_and_a_confidence_by_year"),
+            (self.sg_and_a_provenance_by_year, "sg_and_a_provenance_by_year"),
+            (self.sg_and_a_audit_by_year, "sg_and_a_audit_by_year"),
+            (
+                self.other_operating_items_source_by_year,
+                "other_operating_items_source_by_year",
+            ),
+            (
+                self.other_operating_items_method_by_year,
+                "other_operating_items_method_by_year",
+            ),
+            (
+                self.other_operating_items_confidence_by_year,
+                "other_operating_items_confidence_by_year",
+            ),
+            (
+                self.other_operating_items_provenance_by_year,
+                "other_operating_items_provenance_by_year",
+            ),
+            (
+                self.other_operating_items_audit_by_year,
+                "other_operating_items_audit_by_year",
+            ),
+            (self.ebit_source_by_year, "ebit_source_by_year"),
+            (self.ebit_method_by_year, "ebit_method_by_year"),
+            (self.ebit_confidence_by_year, "ebit_confidence_by_year"),
+            (self.ebit_provenance_by_year, "ebit_provenance_by_year"),
+            (self.ebit_audit_by_year, "ebit_audit_by_year"),
+            (self.reported_ebit_by_year, "reported_ebit_by_year"),
+            (self.explicit_ebit_target_by_year, "explicit_ebit_target_by_year"),
+            (
+                self.ebit_reconstruction_error_by_year,
+                "ebit_reconstruction_error_by_year",
+            ),
+            (
+                self.explicit_ebit_reconstruction_error_by_year,
+                "explicit_ebit_reconstruction_error_by_year",
+            ),
+            (
+                self.reported_ebit_reconstruction_error_by_year,
+                "reported_ebit_reconstruction_error_by_year",
+            ),
             (self.method_by_year, "method_by_year"),
             (self.audit_by_year, "audit_by_year"),
         ):
@@ -2712,6 +3438,15 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         revenue=revenue,
                         gross_profit=profit,
                         gross_margin=margin,
+                        r_and_d=self.consolidated_r_and_d[index],
+                        sg_and_a=self.consolidated_sg_and_a[index],
+                        other_operating_items=self.consolidated_other_operating_items[index],
+                        ebit=self.consolidated_ebit[index],
+                        reported_ebit=self.reported_ebit_by_year.get(year),
+                        explicit_ebit_target=self.explicit_ebit_target_by_year.get(year),
+                        ebit_reconstruction_error=self.ebit_reconstruction_error_by_year.get(year),
+                        explicit_ebit_reconstruction_error=self.explicit_ebit_reconstruction_error_by_year.get(year),
+                        reported_ebit_reconstruction_error=self.reported_ebit_reconstruction_error_by_year.get(year),
                         source=self.source_by_year.get(year, "unavailable"),
                         confidence=self.confidence_by_year.get(year, "low"),
                         provenance=self.provenance_by_year.get(year),
@@ -2725,13 +3460,35 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         gross_profit_source_provenance=self.gross_profit_source_provenance_by_year.get(year, ()),
                         method=self.method_by_year.get(year, "unavailable"),
                         audit=self.audit_by_year.get(year, ()),
+                        r_and_d_source=self.r_and_d_source_by_year.get(year, "unavailable"),
+                        r_and_d_method=self.r_and_d_method_by_year.get(year, "unavailable"),
+                        r_and_d_confidence=self.r_and_d_confidence_by_year.get(year, "low"),
+                        r_and_d_provenance=self.r_and_d_provenance_by_year.get(year),
+                        r_and_d_audit=self.r_and_d_audit_by_year.get(year, ()),
+                        sg_and_a_source=self.sg_and_a_source_by_year.get(year, "unavailable"),
+                        sg_and_a_method=self.sg_and_a_method_by_year.get(year, "unavailable"),
+                        sg_and_a_confidence=self.sg_and_a_confidence_by_year.get(year, "low"),
+                        sg_and_a_provenance=self.sg_and_a_provenance_by_year.get(year),
+                        sg_and_a_audit=self.sg_and_a_audit_by_year.get(year, ()),
+                        other_operating_items_source=self.other_operating_items_source_by_year.get(year, "unavailable"),
+                        other_operating_items_method=self.other_operating_items_method_by_year.get(year, "unavailable"),
+                        other_operating_items_confidence=self.other_operating_items_confidence_by_year.get(year, "low"),
+                        other_operating_items_provenance=self.other_operating_items_provenance_by_year.get(year),
+                        other_operating_items_audit=self.other_operating_items_audit_by_year.get(year, ()),
+                        ebit_source=self.ebit_source_by_year.get(year, "unavailable"),
+                        ebit_method=self.ebit_method_by_year.get(year, "unavailable"),
+                        ebit_confidence=self.ebit_confidence_by_year.get(year, "low"),
+                        ebit_provenance=self.ebit_provenance_by_year.get(year),
+                        ebit_audit=self.ebit_audit_by_year.get(year, ()),
                     )
-                    for year, revenue, profit, margin in zip(
-                        self.fiscal_years,
-                        self.consolidated_revenue,
-                        self.consolidated_gross_profit,
-                        self.consolidated_gross_margin,
-                        strict=True,
+                    for index, (year, revenue, profit, margin) in enumerate(
+                        zip(
+                            self.fiscal_years,
+                            self.consolidated_revenue,
+                            self.consolidated_gross_profit,
+                            self.consolidated_gross_margin,
+                            strict=True,
+                        )
                     )
                 ),
             )
@@ -2760,6 +3517,40 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         return dict(zip(self.fiscal_years, self.consolidated_gross_margin, strict=True))
 
     @property
+    def r_and_d(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_r_and_d
+
+    @property
+    def sg_and_a(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_sg_and_a
+
+    @property
+    def other_operating_items(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_other_operating_items
+
+    @property
+    def ebit(self) -> tuple[Decimal | None, ...]:
+        return self.consolidated_ebit
+
+    @property
+    def r_and_d_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.consolidated_r_and_d, strict=True))
+
+    @property
+    def sg_and_a_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.consolidated_sg_and_a, strict=True))
+
+    @property
+    def other_operating_items_by_year(self) -> dict[int, Decimal | None]:
+        return dict(
+            zip(self.fiscal_years, self.consolidated_other_operating_items, strict=True)
+        )
+
+    @property
+    def ebit_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.consolidated_ebit, strict=True))
+
+    @property
     def margin_provenance(self):
         return self.gross_margin_provenance_by_year
 
@@ -2782,6 +3573,22 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     @property
     def profit_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
         return self.diagnostics.gross_profit
+
+    @property
+    def r_and_d_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.r_and_d
+
+    @property
+    def sg_and_a_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.sg_and_a
+
+    @property
+    def other_operating_items_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.other_operating_items
+
+    @property
+    def ebit_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.ebit
 
     @property
     def gross_margin_coverage(self) -> Decimal | None:

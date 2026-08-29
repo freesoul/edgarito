@@ -34,6 +34,25 @@ CONCEPT_DEFINITIONS = (
         FinancialConcept.REVENUE, "income_statements", ("TotalRevenue",)
     ),
     YahooConceptDefinition(
+        FinancialConcept.GROSS_PROFIT, "income_statements", ("GrossProfit",)
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.RESEARCH_AND_DEVELOPMENT_EXPENSE,
+        "income_statements",
+        (
+            "ResearchAndDevelopment",
+            "ResearchAndDevelopmentExpense",
+        ),
+    ),
+    YahooConceptDefinition(
+        FinancialConcept.SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE,
+        "income_statements",
+        (
+            "SellingGeneralAndAdministrative",
+            "SellingGeneralAndAdministrativeExpense",
+        ),
+    ),
+    YahooConceptDefinition(
         FinancialConcept.OPERATING_INCOME,
         "income_statements",
         ("OperatingIncome", "TotalOperatingIncomeAsReported"),
