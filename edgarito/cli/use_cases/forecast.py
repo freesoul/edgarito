@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 
 from edgarito.cli.presentation.console import ForecastConsolePresenter
 from edgarito.cli.use_cases.context import call_with_context, dependency
@@ -14,6 +15,7 @@ from edgarito.config.valuation import (
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.schemas.forecasting import (
+    FcffForecastMethod,
     FcffForecastParameters,
     SimplifiedFcfForecastParameters,
 )
@@ -21,7 +23,16 @@ from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.free_cash_flow import (
     SimplifiedFcfForecastService,
 )
+from edgarito.services.forecasting.orchestration import (
+    DriverBasedForecastIncompleteError,
+    FcffForecastOrchestrationService,
+)
+from edgarito.services.operating.contracts import OperatingForecastQualityError
 from edgarito.services.valuation import DepreciableAssetLifeResolver
+
+
+class OperatingEvidenceUnavailableError(ValueError):
+    """Signals that hybrid evidence could not be obtained or was unusable."""
 
 
 def load_selected_valuation_profile(args, *, context=None):
@@ -93,6 +104,10 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
         if args.forecast_method is not None
         else profile.forecast.default_method
     )
+    fcff_forecast_method = FcffForecastMethod(
+        getattr(args, "fcff_forecast_method", None)
+        or FcffForecastMethod.NORMALIZED.value
+    )
     fcff_driver_arguments = (
         args.operating_margin,
         args.tax_rate,
@@ -101,6 +116,11 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
         args.operating_working_capital_to_revenue,
     )
     if forecast_method == ForecastMethod.SIMPLIFIED:
+        if fcff_forecast_method != FcffForecastMethod.NORMALIZED:
+            raise ValueError(
+                "--fcff-forecast-method applies only to FCFF; simplified forecasts "
+                "use --forecast-method simplified"
+            )
         if any(value is not None for value in fcff_driver_arguments):
             raise ValueError(
                 "FCFF driver options cannot be used with --forecast-method simplified"
@@ -142,6 +162,8 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
             context=context,
         )
         service = fcff_service_type()
+    if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED:
+        raise DriverBasedForecastIncompleteError()
     retrieve = dependency(context, "_retrieve_financials", retrieve_financials)
     financials = await call_with_context(
         retrieve,
@@ -150,9 +172,110 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
         service.required_concepts(),
         context=context,
     )
-    forecast = service.forecast(financials, parameters)
+    if fcff_forecast_method == FcffForecastMethod.NORMALIZED:
+        forecast = service.forecast(financials, parameters)
+    else:
+        try:
+            evidence = await _retrieve_hybrid_evidence(
+                args,
+                financials,
+                service,
+                parameters,
+                context=context,
+            )
+            orchestration_type = dependency(
+                context,
+                "FcffForecastOrchestrationService",
+                FcffForecastOrchestrationService,
+            )
+            result = orchestration_type(fcff_service=service).forecast(
+                financials,
+                parameters,
+                method=fcff_forecast_method,
+                evidence=evidence,
+            )
+            forecast = result.forecast
+        except (
+            OperatingForecastQualityError,
+            OperatingEvidenceUnavailableError,
+        ) as exc:
+            if fcff_forecast_method != FcffForecastMethod.AUTO:
+                raise
+            orchestration_type = dependency(
+                context,
+                "FcffForecastOrchestrationService",
+                FcffForecastOrchestrationService,
+            )
+            fallback_quality = (
+                exc.result
+                if isinstance(exc, OperatingForecastQualityError)
+                else {"accepted": False, "reason": str(exc)}
+            )
+            result = orchestration_type(fcff_service=service).forecast(
+                financials,
+                parameters,
+                method=FcffForecastMethod.AUTO,
+                operating_quality=fallback_quality,
+            )
+            forecast = result.forecast
     print(presenter_type().render(forecast))
     return 0
+
+
+async def _retrieve_hybrid_evidence(
+    args,
+    financials,
+    service,
+    parameters,
+    *,
+    context=None,
+):
+    """Retrieve explicit hybrid evidence without changing normalized defaults."""
+
+    configured = dependency(context, "OPERATING_EVIDENCE", None)
+    if configured is not None:
+        return configured
+    try:
+        from edgarito.cli.use_cases.operating_evidence import (
+            operating_evidence_provider,
+            retrieve_operating_evidence,
+        )
+    except ImportError as exc:
+        raise OperatingEvidenceUnavailableError(
+            "Hybrid FCFF operating evidence is unavailable"
+        ) from exc
+
+    provider_factory = dependency(
+        context, "_operating_evidence_provider", operating_evidence_provider
+    )
+    baseline = service.forecast(financials, parameters)
+    market = market_for_args(args, context=context)
+    async with call_with_context(
+        provider_factory,
+        args,
+        financials,
+        market=market,
+        context=context,
+    ) as (provider, rejection):
+        if rejection is not None:
+            raise OperatingEvidenceUnavailableError(
+                f"Hybrid FCFF operating evidence unavailable: {rejection}"
+            )
+        evidence, warnings = await call_with_context(
+            retrieve_operating_evidence,
+            financials,
+            baseline,
+            datetime.date.today(),
+            provider=provider,
+            args=args,
+            context=context,
+        )
+    if evidence is None:
+        detail = warnings[-1] if warnings else "no usable operating evidence returned"
+        raise OperatingEvidenceUnavailableError(
+            f"Hybrid FCFF operating evidence unavailable: {detail}"
+        )
+    return evidence
 
 
 def fcff_parameters(
@@ -216,7 +339,9 @@ def market_for_args(args: argparse.Namespace, *, context=None) -> Market:
 
 # Keep the historical private names available inside this focused module.
 _load_selected_valuation_profile = load_selected_valuation_profile
-_resolve_depreciable_asset_life_configuration = resolve_depreciable_asset_life_configuration
+_resolve_depreciable_asset_life_configuration = (
+    resolve_depreciable_asset_life_configuration
+)
 _run_forecast = run_forecast
 _fcff_parameters = fcff_parameters
 _market_for_args = market_for_args

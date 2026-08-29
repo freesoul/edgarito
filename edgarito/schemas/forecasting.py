@@ -3,7 +3,7 @@
 import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import Mapping, Optional
 
 from pydantic import (
     AliasChoices,
@@ -68,6 +68,431 @@ class ForecastValue(BaseModel):
         if normalized not in {"high", "medium", "low"}:
             raise ValueError("Forecast value confidence must be high, medium, or low")
         return normalized
+
+
+class _CaseInsensitiveStrEnum(str, Enum):
+    """String enum that accepts the serialized value without case surprises."""
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            for member in cls:
+                if member.value.casefold() == normalized:
+                    return member
+        return None
+
+
+class FcffForecastMethod(_CaseInsensitiveStrEnum):
+    """Available FCFF planning methods.
+
+    ``driver_based`` is intentionally a planning value for this foundation
+    step.  Its execution remains explicitly unsupported by the orchestration
+    service rather than silently falling back to another method.
+    """
+
+    NORMALIZED = "normalized"
+    HYBRID = "hybrid"
+    DRIVER_BASED = "driver_based"
+    AUTO = "auto"
+
+
+class ForecastScope(_CaseInsensitiveStrEnum):
+    """Scope of a forecast decision or manual override."""
+
+    COMPANY = "company"
+    SEGMENT = "segment"
+
+
+class ForecastMetric(_CaseInsensitiveStrEnum):
+    """Provider-neutral FCFF metrics used by planning decisions."""
+
+    REVENUE = "revenue"
+    SEGMENT_REVENUE = "segment_revenue"
+    GROSS_MARGIN = "gross_margin"
+    GROSS_PROFIT = "gross_profit"
+    R_AND_D = "r_and_d"
+    SG_AND_A = "sg_and_a"
+    REVENUE_GROWTH = "revenue_growth"
+    OPERATING_MARGIN = "operating_margin"
+    TAX = "tax"
+    TAX_RATE = "tax_rate"
+    DEPRECIATION_AND_AMORTIZATION = "depreciation_and_amortization"
+    DEPRECIATION_TO_REVENUE = "depreciation_to_revenue"
+    CAPEX = "capex"
+    CAPEX_TO_REVENUE = "capex_to_revenue"
+    OPERATING_WORKING_CAPITAL = "operating_working_capital"
+    OPERATING_WORKING_CAPITAL_TO_REVENUE = "operating_working_capital_to_revenue"
+    DELTA_NWC = "delta_nwc"
+    FCFF = "fcff"
+
+
+class ForecastStrategy(_CaseInsensitiveStrEnum):
+    """How a decision obtains or derives its forecast value."""
+
+    DRIVER = "driver"
+    CONSOLIDATED = "consolidated"
+    EXPLICIT = "explicit"
+    RATIO = "ratio"
+    RESIDUAL = "residual"
+    IGNORE = "ignore"
+
+
+class ForecastProvenance(BaseModel):
+    """Small provider-neutral provenance payload for a manual override."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", from_attributes=True)
+
+    source: Optional[str] = None
+    origin: Optional[str] = None
+    methodology: Optional[str] = None
+    reference: Optional[str] = None
+
+    @field_validator("source", "origin", "methodology", "reference")
+    @classmethod
+    def normalize_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forecast provenance text cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_detail(self) -> "ForecastProvenance":
+        if not any(
+            value is not None
+            for value in (self.source, self.origin, self.methodology, self.reference)
+        ):
+            raise ValueError("Forecast provenance requires at least one detail")
+        return self
+
+
+def _metric_value(value: ForecastMetric | str) -> str:
+    return value.value if isinstance(value, ForecastMetric) else str(value)
+
+
+def _decision_key(value: "ForecastDecision") -> tuple[str, str, str]:
+    return (value.scope.value, value.scope_id, _metric_value(value.metric))
+
+
+def _override_key(value: "ForecastOverride") -> tuple[str, str, str]:
+    return (value.scope.value, value.scope_id, _metric_value(value.metric))
+
+
+def _normalize_keyed_records(value):
+    if not isinstance(value, Mapping):
+        return tuple(value)
+    if {"scope", "metric", "strategy"}.issubset(value):
+        return (value,)
+    records = []
+    for key, item in value.items():
+        if not isinstance(item, Mapping):
+            records.append(item)
+            continue
+        payload = dict(item)
+        if isinstance(key, tuple):
+            if len(key) == 2:
+                payload.setdefault("scope", key[0])
+                payload.setdefault("metric", key[1])
+            elif len(key) == 3:
+                payload.setdefault("scope", key[0])
+                payload.setdefault("scope_id", key[1])
+                payload.setdefault("metric", key[2])
+        records.append(payload)
+    return tuple(records)
+
+
+class ForecastDecision(BaseModel):
+    """One immutable, auditable choice for a scoped forecast metric."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope: ForecastScope
+    scope_id: str = Field(
+        default="company",
+        validation_alias=AliasChoices("scope_id", "segment_id", "scope_key"),
+    )
+    metric: ForecastMetric | str
+    strategy: ForecastStrategy
+    rationale: str = "Deterministic FCFF planning decision"
+    confidence: str = "medium"
+    explicit_path: Optional[tuple[Decimal, ...]] = Field(
+        default=None,
+        validation_alias=AliasChoices("explicit_path", "path"),
+    )
+    provenance: Optional[str | ForecastProvenance] = None
+
+    @field_validator("scope_id", "rationale")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forecast decision text cannot be blank")
+        return normalized
+
+    @field_validator("metric", mode="before")
+    @classmethod
+    def normalize_metric(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if not normalized:
+                raise ValueError("Forecast decision metric cannot be blank")
+            try:
+                return ForecastMetric(normalized)
+            except ValueError:
+                return normalized
+        return value
+
+    @field_validator("explicit_path", mode="before")
+    @classmethod
+    def normalize_explicit_path(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, Decimal)):
+            return (value,)
+        return tuple(value)
+
+    @field_validator("explicit_path")
+    @classmethod
+    def validate_explicit_path(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and not value:
+            raise ValueError("Forecast explicit paths cannot be empty")
+        if value is not None and any(not item.is_finite() for item in value):
+            raise ValueError("Forecast explicit paths must contain finite values")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope_identity(self) -> "ForecastDecision":
+        if self.scope == ForecastScope.COMPANY and self.scope_id != "company":
+            raise ValueError("Company forecast decisions require scope_id='company'")
+        if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
+            raise ValueError("Segment forecast decisions require a segment scope_id")
+        return self
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"high", "medium", "low"}:
+            raise ValueError(
+                "Forecast decision confidence must be high, medium, or low"
+            )
+        return normalized
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        return _decision_key(self)
+
+
+class ForecastOverride(BaseModel):
+    """A manual strategy/path override keyed by scope and metric."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope: ForecastScope
+    scope_id: str = Field(
+        default="company",
+        validation_alias=AliasChoices("scope_id", "segment_id", "scope_key"),
+    )
+    metric: ForecastMetric | str
+    strategy: ForecastStrategy
+    explicit_path: Optional[tuple[Decimal, ...]] = Field(
+        default=None,
+        validation_alias=AliasChoices("explicit_path", "path"),
+    )
+    provenance: Optional[str | ForecastProvenance] = None
+
+    @field_validator("scope_id")
+    @classmethod
+    def normalize_scope_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forecast override scope_id cannot be blank")
+        return normalized
+
+    @field_validator("metric", mode="before")
+    @classmethod
+    def normalize_metric(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if not normalized:
+                raise ValueError("Forecast override metric cannot be blank")
+            try:
+                return ForecastMetric(normalized)
+            except ValueError:
+                return normalized
+        return value
+
+    @field_validator("explicit_path", mode="before")
+    @classmethod
+    def normalize_explicit_path(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, Decimal)):
+            return (value,)
+        return tuple(value)
+
+    @field_validator("explicit_path")
+    @classmethod
+    def validate_explicit_path(
+        cls, value: Optional[tuple[Decimal, ...]]
+    ) -> Optional[tuple[Decimal, ...]]:
+        if value is not None and not value:
+            raise ValueError("Forecast override paths cannot be empty")
+        if value is not None and any(not item.is_finite() for item in value):
+            raise ValueError("Forecast override paths must contain finite values")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope_identity(self) -> "ForecastOverride":
+        if self.scope == ForecastScope.COMPANY and self.scope_id != "company":
+            raise ValueError("Company forecast overrides require scope_id='company'")
+        if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
+            raise ValueError("Segment forecast overrides require a segment scope_id")
+        return self
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        return _override_key(self)
+
+    @property
+    def path(self) -> Optional[tuple[Decimal, ...]]:
+        """Compatibility alias for the explicit override path."""
+
+        return self.explicit_path
+
+
+class ForecastPlan(BaseModel):
+    """Immutable method resolution and decision audit for one FCFF forecast."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requested: FcffForecastMethod = Field(
+        validation_alias=AliasChoices("requested", "requested_method")
+    )
+    resolved: FcffForecastMethod = Field(
+        validation_alias=AliasChoices("resolved", "resolved_method")
+    )
+    decisions: tuple[ForecastDecision, ...] = ()
+    overrides: tuple[ForecastOverride, ...] = ()
+    rationale: str = "Deterministic FCFF forecast method resolution"
+    warnings: tuple[str, ...] = ()
+    audit: tuple[str, ...] = Field(
+        default=(), validation_alias=AliasChoices("audit", "audit_records")
+    )
+    confidence: str = "medium"
+
+    @field_validator("decisions", "overrides", mode="before")
+    @classmethod
+    def normalize_records(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, Mapping):
+            return _normalize_keyed_records(value)
+        return tuple(value)
+
+    @field_validator("warnings", "audit", mode="before")
+    @classmethod
+    def normalize_text_records(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        return tuple(value)
+
+    @field_validator("warnings", "audit")
+    @classmethod
+    def validate_text_records(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(item.strip() for item in value)
+        if any(not item for item in normalized):
+            raise ValueError("Forecast plan audit text cannot be blank")
+        return normalized
+
+    @field_validator("rationale")
+    @classmethod
+    def validate_rationale(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Forecast plan rationale cannot be blank")
+        return normalized
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"high", "medium", "low"}:
+            raise ValueError("Forecast plan confidence must be high, medium, or low")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_records(self) -> "ForecastPlan":
+        decisions = tuple(sorted(self.decisions, key=_decision_key))
+        overrides = tuple(sorted(self.overrides, key=_override_key))
+        decision_keys = tuple(_decision_key(item) for item in decisions)
+        override_keys = tuple(_override_key(item) for item in overrides)
+        if len(decision_keys) != len(set(decision_keys)):
+            raise ValueError(
+                "Forecast plan decisions must be unique by scope and metric"
+            )
+        if len(override_keys) != len(set(override_keys)):
+            raise ValueError("Forecast overrides must be unique by scope and metric")
+        if self.requested == FcffForecastMethod.AUTO:
+            if self.resolved not in {
+                FcffForecastMethod.NORMALIZED,
+                FcffForecastMethod.HYBRID,
+            }:
+                raise ValueError(
+                    "AUTO forecast plans must resolve to normalized or hybrid"
+                )
+        elif self.resolved != self.requested:
+            raise ValueError(
+                "Explicit forecast plans must resolve to their requested method"
+            )
+        object.__setattr__(self, "decisions", decisions)
+        object.__setattr__(self, "overrides", overrides)
+        return self
+
+    @property
+    def requested_method(self) -> FcffForecastMethod:
+        return self.requested
+
+    @property
+    def resolved_method(self) -> FcffForecastMethod:
+        return self.resolved
+
+    @property
+    def method(self) -> FcffForecastMethod:
+        """Alias for the concrete method selected for execution."""
+
+        return self.resolved
+
+    @property
+    def audit_records(self) -> tuple[str, ...]:
+        return self.audit
+
+    def decision(
+        self,
+        scope: ForecastScope | str,
+        metric: ForecastMetric | str,
+        scope_id: str = "company",
+    ) -> ForecastDecision | None:
+        key = (ForecastScope(scope).value, scope_id, _metric_value(metric))
+        return next(
+            (item for item in self.decisions if _decision_key(item) == key), None
+        )
+
+
+# Explicit aliases keep the FCFF-specific names available without introducing
+# a second schema or changing the existing ``config.valuation.ForecastMethod``.
+FcffForecastDecision = ForecastDecision
+FcffForecastMetric = ForecastMetric
+FcffForecastOverride = ForecastOverride
+FcffForecastPlan = ForecastPlan
+FcffForecastScope = ForecastScope
+FcffForecastStrategy = ForecastStrategy
 
 
 class ForecastSeedType(str, Enum):
@@ -1046,6 +1471,13 @@ class ForwardGrowthOutlook(BaseModel):
 
 __all__ = [
     "AdaptiveMultistagePlan",
+    "FcffForecastMethod",
+    "FcffForecastDecision",
+    "FcffForecastMetric",
+    "FcffForecastOverride",
+    "FcffForecastPlan",
+    "FcffForecastScope",
+    "FcffForecastStrategy",
     "FcffForecast",
     "FcffForecastDcfStub",
     "FcffForecastDriver",
@@ -1053,7 +1485,14 @@ __all__ = [
     "FcffForecastParameters",
     "FcffForecastYtdAnchor",
     "ForecastAssumptionSource",
+    "ForecastDecision",
+    "ForecastMetric",
+    "ForecastOverride",
+    "ForecastPlan",
+    "ForecastProvenance",
+    "ForecastScope",
     "ForecastSeedType",
+    "ForecastStrategy",
     "ForecastValue",
     "ForwardGrowthEvidence",
     "ForwardGrowthOutlook",

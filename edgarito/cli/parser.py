@@ -5,6 +5,7 @@ from pathlib import Path
 
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.forecasting import FcffForecastMethod
 from edgarito.schemas.normalization.financials import FinancialConcept
 from edgarito.schemas.valuation.selection import (
     BusinessArchetype,
@@ -122,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--method",
         choices=("fcff", "simplified"),
         help="Forecast method; overrides the selected profile",
+    )
+    forecast.add_argument(
+        "--fcff-forecast-method",
+        choices=[method.value for method in FcffForecastMethod],
+        default=None,
+        help=(
+            "FCFF planning method (normalized, hybrid, driver_based, or auto); "
+            "distinct from --forecast-method"
+        ),
     )
     forecast.add_argument(
         "--years",
@@ -271,6 +281,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "FCFF projection strategy; defaults to adaptive multistage from the "
             "selected profile"
+        ),
+    )
+    valuation.add_argument(
+        "--fcff-forecast-method",
+        choices=[method.value for method in FcffForecastMethod],
+        default=None,
+        help=(
+            "FCFF planning method; distinct from --projection-method and existing "
+            "valuation model selection"
         ),
     )
     valuation.add_argument(

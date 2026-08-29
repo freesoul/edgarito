@@ -4,7 +4,7 @@ import argparse
 import datetime
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -66,6 +66,7 @@ from edgarito.enums.edgar.period import FiscalPeriod
 from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.enums.provider import ProviderName
+from edgarito.schemas.forecasting import FcffForecastMethod
 from edgarito.schemas.guidance.management import GuidanceOverlayResult
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
@@ -110,6 +111,9 @@ from edgarito.services.forecasting.forward_estimates import (
 )
 from edgarito.services.forecasting.multistage import (
     AdaptiveMultistageFcffForecastService,
+)
+from edgarito.services.forecasting.orchestration import (
+    DriverBasedForecastIncompleteError,
 )
 from edgarito.services.operating.contracts import (
     OperatingForecastQualityError,
@@ -933,6 +937,10 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
     else:
         profile = ValuationProfileLoader.load(args.profile)
     selected_model = args.model
+    fcff_forecast_method = FcffForecastMethod(
+        getattr(args, "fcff_forecast_method", None)
+        or FcffForecastMethod.AUTO.value
+    )
     if selected_model == "auto":
         archetype = profile.model_selection.business_archetype
         if archetype is None:
@@ -970,6 +978,11 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
             archetype,
             "both" if profile.relative_valuation.enabled else "fcff-dcf",
         )
+    if (
+        fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
+        and selected_model in {"fcff-dcf", "both"}
+    ):
+        raise DriverBasedForecastIncompleteError()
     if getattr(args, "excel_output", None) is not None and selected_model not in {
         "fcff-dcf",
         "comparables",
@@ -1031,14 +1044,28 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
             context=context,
         ),
     )
+    # Keep the historical AUTO/omitted valuation path intact.  Explicit
+    # normalized FCFF opts out of operating discovery; explicit HYBRID reuses
+    # the existing conditional pipeline below rather than changing other
+    # valuation-model runners.
+    operating_provider = (
+        _disabled_operating_evidence_provider
+        if fcff_forecast_method == FcffForecastMethod.NORMALIZED
+        else _operating_evidence_provider
+    )
     async with call_with_context(
-        _operating_evidence_provider,
+        operating_provider,
         args,
         financials,
         market=market,
         context=context,
     ) as (provider, provider_rejection):
         if provider_rejection is not None:
+            if fcff_forecast_method == FcffForecastMethod.HYBRID:
+                raise ValueError(
+                    "Hybrid FCFF operating evidence unavailable: "
+                    f"{provider_rejection}"
+                )
             operating_audit = OperatingForecastQualityResult(
                 accepted=False,
                 reason=provider_rejection,
@@ -1103,6 +1130,15 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                     context=context,
                 )
             else:
+                if fcff_forecast_method == FcffForecastMethod.HYBRID:
+                    detail = (
+                        operating_warnings[-1]
+                        if operating_warnings
+                        else "discovery returned no usable evidence"
+                    )
+                    raise ValueError(
+                        "Hybrid FCFF operating evidence unavailable: " f"{detail}"
+                    )
                 operating_audit = OperatingForecastQualityResult(
                     accepted=False,
                     reason=(
@@ -1435,6 +1471,8 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                     availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
                 )
             except OperatingForecastQualityError as exc:
+                if fcff_forecast_method == FcffForecastMethod.HYBRID:
+                    raise
                 operating_audit = call_with_context(
                     _retain_operating_audit_metadata,
                     exc.result,
@@ -1497,6 +1535,8 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                 availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
             )
         except OperatingForecastQualityError as exc:
+            if fcff_forecast_method == FcffForecastMethod.HYBRID:
+                raise
             operating_audit = call_with_context(
                 _retain_operating_audit_metadata,
                 exc.result,
@@ -1591,6 +1631,20 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
         dependencies=context,
     )
     return 0
+
+
+@asynccontextmanager
+async def _disabled_operating_evidence_provider(
+    args,
+    financials,
+    *,
+    market=None,
+    context=None,
+):
+    """Keep explicit normalized FCFF independent of operating discovery."""
+
+    del args, financials, market, context
+    yield None, "Operating evidence disabled by normalized FCFF method"
 async def _run_valuation_models(args: argparse.Namespace, *, context=None) -> int:
     ValuationProfileOverrides = _resolve_valuation_collaborator(
         context, "ValuationProfileOverrides"
