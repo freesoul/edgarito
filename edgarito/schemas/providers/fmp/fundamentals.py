@@ -77,6 +77,12 @@ class IncomeStatement(FinancialStatement):
         default=None, alias="sellingGeneralAndAdministrativeExpenses"
     )
     operating_income: Optional[Decimal] = Field(default=None, alias="operatingIncome")
+    pretax_income: Optional[Decimal] = Field(
+        default=None, alias="incomeBeforeTax"
+    )
+    income_tax_expense: Optional[Decimal] = Field(
+        default=None, alias="incomeTaxExpense"
+    )
     net_income: Optional[Decimal] = Field(default=None, alias="netIncome")
 
 

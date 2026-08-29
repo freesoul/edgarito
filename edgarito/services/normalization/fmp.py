@@ -64,6 +64,20 @@ CONCEPT_DEFINITIONS = (
         "operating_income",
     ),
     FmpConceptDefinition(
+        FinancialConcept.PRETAX_INCOME,
+        "annual_income_statements",
+        "quarterly_income_statements",
+        "incomeBeforeTax",
+        "pretax_income",
+    ),
+    FmpConceptDefinition(
+        FinancialConcept.INCOME_TAX_EXPENSE,
+        "annual_income_statements",
+        "quarterly_income_statements",
+        "incomeTaxExpense",
+        "income_tax_expense",
+    ),
+    FmpConceptDefinition(
         FinancialConcept.NET_INCOME,
         "annual_income_statements",
         "quarterly_income_statements",

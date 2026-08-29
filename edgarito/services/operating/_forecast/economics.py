@@ -29,6 +29,7 @@ from edgarito.schemas.operating import (
     OperatingEconomicsMetricDiagnostics,
     OperatingEconomicsYear,
     OperatingSegment,
+    SegmentOperatingEconomicsDiagnostics,
     SegmentOperatingEconomicsForecast,
     SegmentRevenueForecast,
     canonical_operating_segment_id,
@@ -41,7 +42,11 @@ from edgarito.services.operating._forecast.consolidation import (
     _worst_confidence,
 )
 from edgarito.services.operating._forecast.contracts import _CONFIDENCE_RANK
+from edgarito.services.operating._forecast.normalization import (
+    _management_guidance_to_observation,
+)
 from edgarito.services.operating._forecast.opex_ebit import OperatingOpexEbitEngine
+from edgarito.services.operating._forecast.tax_nopat import OperatingTaxNopatEngine
 
 _MARGIN = "gross_margin"
 _PROFIT = "gross_profit"
@@ -142,6 +147,7 @@ class OperatingEconomicsForecastService:
             else OperatingEconomicsForecastConfig.model_validate(config or {})
         )
         self.opex_ebit_engine = OperatingOpexEbitEngine()
+        self.tax_nopat_engine = OperatingTaxNopatEngine()
 
     def forecast(
         self,
@@ -225,8 +231,10 @@ class OperatingEconomicsForecastService:
             for item in self._observation_items(observations)
         )
         normalized_management = tuple(
-            self._coerce_observation(item, management=True)
+            observation
             for item in self._observation_items(management_constraints)
+            for observation in (self._coerce_observation(item, management=True),)
+            if observation is not None
         )
         all_observations = (*normalized_observations, *normalized_management)
         normalized_plan = self._coerce_plan(plan or forecast_plan)
@@ -341,7 +349,7 @@ class OperatingEconomicsForecastService:
         )
         # Attach the sibling result to the pre-existing revenue contract.  The
         # caller may also use the returned standalone contract directly.
-        return self.opex_ebit_engine.apply(
+        company = self.opex_ebit_engine.apply(
             company,
             all_observations,
             segments=normalized_segments,
@@ -351,6 +359,16 @@ class OperatingEconomicsForecastService:
             fiscal_period=fiscal_period,
             period_key=period_key,
             ambiguous_segment_ids=ambiguous_ids,
+        )
+        return self.tax_nopat_engine.apply(
+            company,
+            all_observations,
+            segments=normalized_segments,
+            plan=normalized_plan,
+            overrides=overrides if forecast_overrides is None else forecast_overrides,
+            config=policy,
+            fiscal_period=fiscal_period,
+            period_key=period_key,
         )
 
     build = forecast
@@ -425,8 +443,19 @@ class OperatingEconomicsForecastService:
         return tuple(value or ())
 
     @staticmethod
-    def _coerce_observation(value, management: bool = False) -> OperatingDriverObservation:
-        observation = value if isinstance(value, OperatingDriverObservation) else OperatingDriverObservation.model_validate(value)
+    def _coerce_observation(
+        value, management: bool = False
+    ) -> OperatingDriverObservation | None:
+        if management and not isinstance(value, (OperatingDriverObservation, Mapping)):
+            guidance_observation = _management_guidance_to_observation(value)
+            if guidance_observation is None:
+                if hasattr(value, "metric"):
+                    return None
+                observation = OperatingDriverObservation.model_validate(value)
+            else:
+                observation = guidance_observation
+        else:
+            observation = value if isinstance(value, OperatingDriverObservation) else OperatingDriverObservation.model_validate(value)
         if management and observation.origin != "management_guidance":
             observation = observation.model_copy(update={"origin": "management_guidance"})
         return observation
@@ -437,6 +466,12 @@ class OperatingEconomicsForecastService:
             return ()
         if isinstance(value, (OperatingDriverObservation, Mapping)):
             return (value,)
+        if hasattr(value, "records"):
+            return tuple(value.records)
+        if hasattr(value, "eligible_records"):
+            return tuple(value.eligible_records)
+        if hasattr(value, "applications"):
+            return tuple(item.guidance for item in value.applications)
         if isinstance(value, (str, bytes)):
             return (value,)
         try:
@@ -789,7 +824,7 @@ class OperatingEconomicsForecastService:
             if years and (margin_attempted or profit_attempted)
             else None
         )
-        diagnostics = OperatingEconomicsDiagnostics(
+        diagnostics = SegmentOperatingEconomicsDiagnostics(
             gross_margin=margin_diag,
             gross_profit=profit_diag,
             completeness=completeness,

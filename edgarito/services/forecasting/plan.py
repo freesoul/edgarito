@@ -298,6 +298,7 @@ class FcffForecastPlanService:
                 metric=override.metric,
                 strategy=override.strategy,
                 explicit_path=override.explicit_path,
+                basis=override.basis,
                 provenance=override.provenance,
                 rationale="Manual FCFF forecast override takes precedence",
                 confidence="high",

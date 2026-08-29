@@ -43,7 +43,19 @@ class IncomeStatementReport(FinancialReport):
         default=None, alias="sellingGeneralAndAdministrative"
     )
     operating_income: Optional[Decimal] = Field(default=None, alias="operatingIncome")
+    income_before_tax: Optional[Decimal] = Field(
+        default=None, alias="incomeBeforeTax"
+    )
+    income_tax_expense: Optional[Decimal] = Field(
+        default=None, alias="incomeTaxExpense"
+    )
     net_income: Optional[Decimal] = Field(default=None, alias="netIncome")
+
+    @property
+    def pretax_income(self) -> Optional[Decimal]:
+        """Compatibility name for Alpha Vantage's income-before-tax field."""
+
+        return self.income_before_tax
 
 
 class BalanceSheetReport(FinancialReport):

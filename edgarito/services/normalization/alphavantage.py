@@ -56,6 +56,16 @@ CONCEPT_DEFINITIONS = (
         "operatingIncome",
     ),
     AlphaVantageConceptDefinition(
+        FinancialConcept.PRETAX_INCOME,
+        "income_statement",
+        "incomeBeforeTax",
+    ),
+    AlphaVantageConceptDefinition(
+        FinancialConcept.INCOME_TAX_EXPENSE,
+        "income_statement",
+        "incomeTaxExpense",
+    ),
+    AlphaVantageConceptDefinition(
         FinancialConcept.NET_INCOME,
         "income_statement",
         "netIncome",

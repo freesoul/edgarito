@@ -404,6 +404,7 @@ class OperatingDriverObservation(BaseModel):
         "management_guidance",
         "derived",
         "extracted_evidence",
+        "forward_evidence",
     ]
     confidence: Literal["high", "medium", "low"]
     provenance: AssumptionProvenance | EvidenceReference | None = None
@@ -1153,6 +1154,8 @@ class ExtractedOperatingObservation(BaseModel):
             "operating_income",
             "operating_income_loss",
             "ebit",
+            "income_tax_expense",
+            "tax_expense",
         }
         expense_metric = metric in {
             "r_and_d",
@@ -1637,6 +1640,13 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
                 "provenance",
             ):
                 data.pop(field, None)
+        if self.metric not in {"tax_rate", "tax", "nopat"}:
+            for field in (
+                "historical_rates",
+                "normalized_rate",
+                "dispersion",
+            ):
+                data.pop(field, None)
         return data
 
     metric: Literal[
@@ -1646,6 +1656,9 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
         "sg_and_a",
         "other_operating_items",
         "ebit",
+        "tax_rate",
+        "tax",
+        "nopat",
     ]
     coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
     supported_years: tuple[int, ...] = ()
@@ -1653,6 +1666,28 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
     reconstruction_error: Decimal | None = Field(default=None, allow_inf_nan=True)
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
     normalized_ratio: Decimal | None = Field(default=None, allow_inf_nan=True)
+    # Tax-rate diagnostics use explicit names rather than overloading the
+    # expense-ratio field. These remain optional so old economics payloads keep
+    # their historical serialization shape.
+    historical_rates: tuple[Decimal, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "historical_rates",
+            "historical_effective_tax_rates",
+            "individual_rates",
+            "individual_historical_rates",
+        ),
+    )
+    normalized_rate: Decimal | None = Field(
+        default=None,
+        allow_inf_nan=True,
+        validation_alias=AliasChoices("normalized_rate", "normalized_tax_rate"),
+    )
+    dispersion: Decimal | None = Field(
+        default=None,
+        allow_inf_nan=True,
+        validation_alias=AliasChoices("dispersion", "historical_dispersion"),
+    )
     historical_years: tuple[int, ...] = ()
     residual_magnitude: Decimal | None = Field(default=None, allow_inf_nan=True)
     provenance: tuple[
@@ -1667,6 +1702,8 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
         "completeness",
         "normalized_ratio",
         "residual_magnitude",
+        "normalized_rate",
+        "dispersion",
     )
     @classmethod
     def validate_metrics(cls, value: Decimal | None) -> Decimal | None:
@@ -1678,6 +1715,11 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
         if value:
             _validate_year_sequence(value, "Operating economics supported years")
         return value
+
+    @field_validator("historical_rates")
+    @classmethod
+    def validate_historical_rates(cls, value: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
+        return tuple(_finite_decimal(item, "Historical effective tax rates") for item in value)
 
     @field_validator("historical_years")
     @classmethod
@@ -1711,7 +1753,30 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
         ):
             if value is not None and not Decimal(0) <= value <= Decimal(1):
                 raise ValueError(f"Operating economics {label} must be between 0 and 1")
+        if any(
+            value < Decimal(0) or value > Decimal(100)
+            for value in self.historical_rates
+        ):
+            raise ValueError("Historical tax rates must be between 0 and 100 percentage points")
+        if self.normalized_rate is not None and not Decimal(0) <= self.normalized_rate <= Decimal(100):
+            raise ValueError("Normalized tax rate must be between 0 and 100 percentage points")
         return self
+
+    @property
+    def historical_effective_tax_rates(self) -> tuple[Decimal, ...]:
+        return self.historical_rates
+
+    @property
+    def individual_rates(self) -> tuple[Decimal, ...]:
+        return self.historical_rates
+
+    @property
+    def normalized_tax_rate(self) -> Decimal | None:
+        return self.normalized_rate
+
+    @property
+    def tax_rate(self) -> Decimal | None:
+        return self.normalized_rate
 
 
 class OperatingEconomicsDiagnostics(BaseModel):
@@ -1729,6 +1794,16 @@ class OperatingEconomicsDiagnostics(BaseModel):
             for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit")
         ):
             for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit"):
+                data.pop(metric, None)
+        if all(
+            getattr(self, metric).coverage is None
+            and not getattr(self, metric).warnings
+            and not getattr(self, metric).identity_warnings
+            and not getattr(self, metric).historical_rates
+            and getattr(self, metric).normalized_rate is None
+            for metric in ("tax_rate", "tax", "nopat")
+        ):
+            for metric in ("tax_rate", "tax", "nopat"):
                 data.pop(metric, None)
         return data
 
@@ -1751,6 +1826,15 @@ class OperatingEconomicsDiagnostics(BaseModel):
     )
     ebit: OperatingEconomicsMetricDiagnostics = Field(
         default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="ebit")
+    )
+    tax_rate: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="tax_rate")
+    )
+    tax: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="tax")
+    )
+    nopat: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="nopat")
     )
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
     identity_warnings: tuple[str, ...] = ()
@@ -1844,6 +1928,28 @@ class OperatingEconomicsYear(BaseModel):
                 "ebit_audit",
             ):
                 data.pop(field, None)
+        if self.tax_rate is None and self.tax is None and self.nopat is None:
+            for field in (
+                "tax_rate",
+                "tax",
+                "nopat",
+                "tax_rate_source",
+                "tax_rate_method",
+                "tax_rate_confidence",
+                "tax_rate_provenance",
+                "tax_rate_audit",
+                "tax_source",
+                "tax_method",
+                "tax_confidence",
+                "tax_provenance",
+                "tax_audit",
+                "nopat_source",
+                "nopat_method",
+                "nopat_confidence",
+                "nopat_provenance",
+                "nopat_audit",
+            ):
+                data.pop(field, None)
         return data
 
     fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
@@ -1856,6 +1962,9 @@ class OperatingEconomicsYear(BaseModel):
     sg_and_a: Decimal | None = None
     other_operating_items: Decimal | None = None
     ebit: Decimal | None = None
+    tax_rate: Decimal | None = None
+    tax: Decimal | None = None
+    nopat: Decimal | None = None
     reported_ebit: Decimal | None = None
     explicit_ebit_target: Decimal | None = None
     ebit_reconstruction_error: Decimal | None = None
@@ -1896,6 +2005,21 @@ class OperatingEconomicsYear(BaseModel):
     ebit_confidence: Literal["high", "medium", "low"] = "low"
     ebit_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
     ebit_audit: tuple[str, ...] = ()
+    tax_rate_source: str = "unavailable"
+    tax_rate_method: str = "unavailable"
+    tax_rate_confidence: Literal["high", "medium", "low"] = "low"
+    tax_rate_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    tax_rate_audit: tuple[str, ...] = ()
+    tax_source: str = "unavailable"
+    tax_method: str = "unavailable"
+    tax_confidence: Literal["high", "medium", "low"] = "low"
+    tax_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    tax_audit: tuple[str, ...] = ()
+    nopat_source: str = "unavailable"
+    nopat_method: str = "unavailable"
+    nopat_confidence: Literal["high", "medium", "low"] = "low"
+    nopat_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    nopat_audit: tuple[str, ...] = ()
 
     @field_validator("fiscal_period")
     @classmethod
@@ -1922,6 +2046,9 @@ class OperatingEconomicsYear(BaseModel):
         "ebit_reconstruction_error",
         "explicit_ebit_reconstruction_error",
         "reported_ebit_reconstruction_error",
+        "tax_rate",
+        "tax",
+        "nopat",
     )
     @classmethod
     def validate_values(cls, value: Decimal | None) -> Decimal | None:
@@ -1932,6 +2059,13 @@ class OperatingEconomicsYear(BaseModel):
     def validate_positive_expenses(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value < 0:
             raise ValueError("R&D and SG&A cannot be negative")
+        return value
+
+    @field_validator("tax_rate")
+    @classmethod
+    def validate_tax_rate(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not Decimal(0) <= value <= Decimal(100):
+            raise ValueError("Operating tax rates must be between 0 and 100 percentage points")
         return value
 
     @field_validator("source", "method")
@@ -1954,6 +2088,9 @@ class OperatingEconomicsYear(BaseModel):
         "sg_and_a_audit",
         "other_operating_items_audit",
         "ebit_audit",
+        "tax_rate_audit",
+        "tax_audit",
+        "nopat_audit",
     )
     @classmethod
     def normalize_metric_audit(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -1979,6 +2116,72 @@ class OperatingEconomicsYear(BaseModel):
         ):
             raise ValueError("Reported EBIT reconstruction error cannot be negative")
         return self
+
+
+class SegmentOperatingEconomicsDiagnostics(BaseModel):
+    """Segment economics diagnostics without company-only tax metrics."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @model_serializer(mode="wrap")
+    def serialize_segment_diagnostics(self, handler):
+        data = handler(self)
+        if all(
+            getattr(self, metric).coverage is None
+            and not getattr(self, metric).warnings
+            and not getattr(self, metric).identity_warnings
+            for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit")
+        ):
+            for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit"):
+                data.pop(metric, None)
+        return data
+
+    gross_margin: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_margin")
+    )
+    gross_profit: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="gross_profit")
+    )
+    r_and_d: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="r_and_d")
+    )
+    sg_and_a: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="sg_and_a")
+    )
+    other_operating_items: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="other_operating_items"
+        )
+    )
+    ebit: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="ebit")
+    )
+    completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
+    identity_warnings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @field_validator("completeness")
+    @classmethod
+    def validate_completeness(cls, value: Decimal | None) -> Decimal | None:
+        value = _finite_decimal(value, "Segment economics completeness")
+        if value is not None and not Decimal(0) <= value <= Decimal(1):
+            raise ValueError("Segment economics completeness must be between 0 and 1")
+        return value
+
+    @field_validator("identity_warnings", "warnings")
+    @classmethod
+    def normalize_warnings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            _normalize_required_text(item, "Segment economics warning") for item in value
+        )
+
+    @property
+    def margin(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.gross_margin
+
+    @property
+    def profit(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.gross_profit
 
 
 class SegmentOperatingEconomicsForecast(BaseModel):
@@ -2035,7 +2238,8 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     gross_profit: tuple[Decimal | None, ...]
     # These fields remain empty unless direct segment-scoped evidence or a
     # segment-scoped explicit path supports them. Consolidated OPEX is never
-    # allocated to segments.
+    # allocated to segments. Tax and NOPAT are company-only and are therefore
+    # intentionally absent from this contract.
     r_and_d: tuple[Decimal | None, ...] = ()
     sg_and_a: tuple[Decimal | None, ...] = ()
     other_operating_items: tuple[Decimal | None, ...] = ()
@@ -2074,8 +2278,8 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     ebit_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     method_by_year: dict[int, str] = Field(default_factory=dict)
     audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
-    diagnostics: OperatingEconomicsDiagnostics = Field(
-        default_factory=OperatingEconomicsDiagnostics
+    diagnostics: SegmentOperatingEconomicsDiagnostics = Field(
+        default_factory=SegmentOperatingEconomicsDiagnostics
     )
     warnings: tuple[str, ...] = ()
     unit: str = "currency"
@@ -2183,6 +2387,13 @@ class SegmentOperatingEconomicsForecast(BaseModel):
             raise ValueError("Segment economics paths must match fiscal_years")
         if self.years and tuple(item.fiscal_year for item in self.years) != self.fiscal_years:
             raise ValueError("Segment economics year records must match fiscal_years")
+        if any(
+            item.tax_rate is not None or item.tax is not None or item.nopat is not None
+            for item in self.years
+        ):
+            raise ValueError(
+                "Segment economics cannot carry company-only tax or NOPAT values"
+            )
         for mapping, label in (
             (self.source_by_year, "source_by_year"),
             (self.confidence_by_year, "confidence_by_year"),
@@ -2388,9 +2599,8 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     def gross_profit_supported_years(self) -> tuple[int, ...]:
         return self.diagnostics.gross_profit.supported_years
 
-
 class OperatingEconomicsForecastConfig(BaseModel):
-    """Deterministic policy surface for gross economics and company OPEX."""
+    """Deterministic policy surface for gross economics, OPEX, and tax."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -2434,6 +2644,55 @@ class OperatingEconomicsForecastConfig(BaseModel):
             "residual_materiality_threshold",
         ),
     )
+    tax_rate_normalization_method: Literal["median", "weighted_recent"] = Field(
+        default="median",
+        validation_alias=AliasChoices(
+            "tax_rate_normalization_method",
+            "tax_normalization_method",
+            "tax_ratio_normalization_method",
+            "tax_rate_normalization",
+        ),
+    )
+    tax_rate_fallback: Decimal | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "tax_rate_fallback",
+            "configured_tax_rate_fallback",
+            "fallback_tax_rate",
+            "tax_fallback",
+        ),
+    )
+    tax_rate_dispersion_threshold: Decimal = Field(
+        default=Decimal("0.25"),
+        validation_alias=AliasChoices(
+            "tax_rate_dispersion_threshold",
+            "tax_rate_stability_threshold",
+            "tax_dispersion_threshold",
+        ),
+    )
+    tax_rate_high_confidence_dispersion_threshold: Decimal = Field(
+        default=Decimal("0.05"),
+        validation_alias=AliasChoices(
+            "tax_rate_high_confidence_dispersion_threshold",
+            "tax_high_confidence_dispersion_threshold",
+            "tax_rate_high_confidence_threshold",
+        ),
+    )
+    tax_rate_medium_confidence_dispersion_threshold: Decimal = Field(
+        default=Decimal("0.15"),
+        validation_alias=AliasChoices(
+            "tax_rate_medium_confidence_dispersion_threshold",
+            "tax_medium_confidence_dispersion_threshold",
+            "tax_rate_medium_confidence_threshold",
+        ),
+    )
+    negative_ebit_policy: Literal["mechanical", "unavailable"] = Field(
+        default="mechanical",
+        validation_alias=AliasChoices(
+            "negative_ebit_policy",
+            "negative_ebit_tax_policy",
+        ),
+    )
 
     @field_validator("gross_margin_min", "gross_margin_max")
     @classmethod
@@ -2451,6 +2710,25 @@ class OperatingEconomicsForecastConfig(BaseModel):
             raise ValueError("Other-operating-item thresholds cannot be negative")
         return normalized
 
+    @field_validator(
+        "tax_rate_fallback",
+        "tax_rate_dispersion_threshold",
+        "tax_rate_high_confidence_dispersion_threshold",
+        "tax_rate_medium_confidence_dispersion_threshold",
+    )
+    @classmethod
+    def validate_tax_configuration(cls, value: Decimal | None) -> Decimal | None:
+        normalized = _finite_decimal(value, "Tax-rate configuration")
+        if normalized is not None and normalized < 0:
+            raise ValueError("Tax-rate configuration cannot be negative")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_tax_configuration_bounds(self) -> "OperatingEconomicsForecastConfig":
+        if self.tax_rate_fallback is not None and self.tax_rate_fallback > Decimal("100"):
+            raise ValueError("Tax-rate fallback must be between 0 and 100 percentage points")
+        return self
+
     @model_validator(mode="after")
     def validate_margin_bounds(self) -> "OperatingEconomicsForecastConfig":
         if self.gross_margin_min >= self.gross_margin_max:
@@ -2458,6 +2736,18 @@ class OperatingEconomicsForecastConfig(BaseModel):
         if self.gross_margin_max > Decimal("100"):
             raise ValueError("Gross-margin maximum cannot exceed 100 percentage points")
         return self
+
+    @property
+    def tax_normalization_method(self) -> str:
+        return self.tax_rate_normalization_method
+
+    @property
+    def fallback_tax_rate(self) -> Decimal | None:
+        return self.tax_rate_fallback
+
+    @property
+    def tax_rate_stability_threshold(self) -> Decimal:
+        return self.tax_rate_dispersion_threshold
 
 
 class SegmentRevenueForecast(BaseModel):
@@ -3120,7 +3410,67 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                 "ebit_audit_by_year",
             ):
                 data.pop(field, None)
+        if all(value is None for path in (self.tax_rate, self.tax, self.nopat) for value in path):
+            for field in (
+                "tax_rate",
+                "tax",
+                "nopat",
+                "tax_rate_source_by_year",
+                "tax_rate_method_by_year",
+                "tax_rate_confidence_by_year",
+                "tax_rate_provenance_by_year",
+                "tax_rate_audit_by_year",
+                "tax_source_by_year",
+                "tax_method_by_year",
+                "tax_confidence_by_year",
+                "tax_provenance_by_year",
+                "tax_audit_by_year",
+                "nopat_source_by_year",
+                "nopat_method_by_year",
+                "nopat_confidence_by_year",
+                "nopat_provenance_by_year",
+                "nopat_audit_by_year",
+            ):
+                data.pop(field, None)
+            historical_fields = (
+                "historical_pretax_income_by_year",
+                "historical_income_tax_expense_by_year",
+                "historical_effective_tax_rate_by_year",
+                "historical_pretax_income_provenance_by_year",
+                "historical_income_tax_expense_provenance_by_year",
+                "historical_effective_tax_rate_provenance_by_year",
+                "historical_effective_tax_rate_provenance_chain_by_year",
+                "historical_effective_tax_rate_audit_by_year",
+            )
+            if not any(getattr(self, field) for field in historical_fields):
+                for field in historical_fields:
+                    data.pop(field, None)
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_historical_tax_year_keys(cls, value):
+        if not isinstance(value, Mapping):
+            return value
+        for field in (
+            "historical_pretax_income_by_year",
+            "historical_income_tax_expense_by_year",
+            "historical_effective_tax_rate_by_year",
+            "historical_pretax_income_provenance_by_year",
+            "historical_income_tax_expense_provenance_by_year",
+            "historical_effective_tax_rate_provenance_by_year",
+            "historical_effective_tax_rate_provenance_chain_by_year",
+            "historical_effective_tax_rate_audit_by_year",
+        ):
+            raw = value.get(field)
+            if not isinstance(raw, Mapping):
+                continue
+            normalized_years = [int(year) for year in raw]
+            if len(normalized_years) != len(set(normalized_years)):
+                raise ValueError(
+                    f"Company economics {field} must contain unique historical years"
+                )
+        return value
 
     company_id: str
     fiscal_years: tuple[int, ...]
@@ -3150,6 +3500,15 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     )
     consolidated_ebit: tuple[Decimal | None, ...] = Field(
         default=(), validation_alias=AliasChoices("consolidated_ebit", "ebit")
+    )
+    tax_rate: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("tax_rate", "consolidated_tax_rate")
+    )
+    tax: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("tax", "consolidated_tax")
+    )
+    nopat: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("nopat", "consolidated_nopat")
     )
     reported_ebit_by_year: dict[int, Decimal] = Field(default_factory=dict)
     explicit_ebit_target_by_year: dict[int, Decimal] = Field(default_factory=dict)
@@ -3188,6 +3547,29 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     ebit_confidence_by_year: dict[int, str] = Field(default_factory=dict)
     ebit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
     ebit_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    tax_rate_source_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_rate_method_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_rate_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_rate_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    tax_rate_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    tax_source_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_method_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    tax_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    tax_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    nopat_source_by_year: dict[int, str] = Field(default_factory=dict)
+    nopat_method_by_year: dict[int, str] = Field(default_factory=dict)
+    nopat_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    nopat_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    nopat_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    historical_pretax_income_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    historical_income_tax_expense_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    historical_effective_tax_rate_by_year: dict[int, Decimal] = Field(default_factory=dict)
+    historical_pretax_income_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    historical_income_tax_expense_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    historical_effective_tax_rate_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    historical_effective_tax_rate_provenance_chain_by_year: dict[int, tuple[AssumptionProvenance | EvidenceReference | ForecastProvenance | str, ...]] = Field(default_factory=dict)
+    historical_effective_tax_rate_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     method_by_year: dict[int, str] = Field(default_factory=dict)
     audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     diagnostics: OperatingEconomicsDiagnostics = Field(
@@ -3224,10 +3606,22 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         "consolidated_sg_and_a",
         "consolidated_other_operating_items",
         "consolidated_ebit",
+        "tax_rate",
+        "tax",
+        "nopat",
     )
     @classmethod
     def validate_company_economics(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
         return tuple(_finite_decimal(item, "Company economics values") for item in value)
+
+    @field_validator("tax_rate")
+    @classmethod
+    def validate_tax_rate_path(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        if any(item is not None and not Decimal(0) <= item <= Decimal(100) for item in value):
+            raise ValueError("Company operating tax rates must be between 0 and 100 percentage points")
+        return value
 
     @field_validator("consolidated_r_and_d", "consolidated_sg_and_a")
     @classmethod
@@ -3259,6 +3653,15 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         "ebit_source_by_year",
         "ebit_method_by_year",
         "ebit_confidence_by_year",
+        "tax_rate_source_by_year",
+        "tax_rate_method_by_year",
+        "tax_rate_confidence_by_year",
+        "tax_source_by_year",
+        "tax_method_by_year",
+        "tax_confidence_by_year",
+        "nopat_source_by_year",
+        "nopat_method_by_year",
+        "nopat_confidence_by_year",
         mode="before",
     )
     @classmethod
@@ -3319,6 +3722,30 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             for year, amount in value.items()
         }
 
+    @field_validator(
+        "historical_pretax_income_by_year",
+        "historical_income_tax_expense_by_year",
+        "historical_effective_tax_rate_by_year",
+    )
+    @classmethod
+    def validate_historical_tax_maps(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        normalized = {
+            int(year): _finite_decimal(amount, "Historical tax evidence")
+            for year, amount in value.items()
+        }
+        return normalized
+
+    @field_validator("historical_effective_tax_rate_by_year")
+    @classmethod
+    def validate_historical_tax_rate_map(
+        cls, value: dict[int, Decimal]
+    ) -> dict[int, Decimal]:
+        if any(not Decimal(0) <= rate <= Decimal(100) for rate in value.values()):
+            raise ValueError("Historical effective tax rates must be between 0 and 100 percentage points")
+        return value
+
     @model_validator(mode="after")
     def validate_forecast(self) -> "CompanyOperatingEconomicsForecast":
         length = len(self.fiscal_years)
@@ -3332,6 +3759,12 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             )
         if not self.consolidated_ebit:
             object.__setattr__(self, "consolidated_ebit", (None,) * length)
+        if not self.tax_rate:
+            object.__setattr__(self, "tax_rate", (None,) * length)
+        if not self.tax:
+            object.__setattr__(self, "tax", (None,) * length)
+        if not self.nopat:
+            object.__setattr__(self, "nopat", (None,) * length)
         if any(
             len(path) != length
             for path in (
@@ -3342,6 +3775,9 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                 self.consolidated_sg_and_a,
                 self.consolidated_other_operating_items,
                 self.consolidated_ebit,
+                self.tax_rate,
+                self.tax,
+                self.nopat,
             )
         ):
             raise ValueError("Company economics paths must match fiscal_years")
@@ -3409,6 +3845,21 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             (self.ebit_confidence_by_year, "ebit_confidence_by_year"),
             (self.ebit_provenance_by_year, "ebit_provenance_by_year"),
             (self.ebit_audit_by_year, "ebit_audit_by_year"),
+            (self.tax_rate_source_by_year, "tax_rate_source_by_year"),
+            (self.tax_rate_method_by_year, "tax_rate_method_by_year"),
+            (self.tax_rate_confidence_by_year, "tax_rate_confidence_by_year"),
+            (self.tax_rate_provenance_by_year, "tax_rate_provenance_by_year"),
+            (self.tax_rate_audit_by_year, "tax_rate_audit_by_year"),
+            (self.tax_source_by_year, "tax_source_by_year"),
+            (self.tax_method_by_year, "tax_method_by_year"),
+            (self.tax_confidence_by_year, "tax_confidence_by_year"),
+            (self.tax_provenance_by_year, "tax_provenance_by_year"),
+            (self.tax_audit_by_year, "tax_audit_by_year"),
+            (self.nopat_source_by_year, "nopat_source_by_year"),
+            (self.nopat_method_by_year, "nopat_method_by_year"),
+            (self.nopat_confidence_by_year, "nopat_confidence_by_year"),
+            (self.nopat_provenance_by_year, "nopat_provenance_by_year"),
+            (self.nopat_audit_by_year, "nopat_audit_by_year"),
             (self.reported_ebit_by_year, "reported_ebit_by_year"),
             (self.explicit_ebit_target_by_year, "explicit_ebit_target_by_year"),
             (
@@ -3428,6 +3879,27 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         ):
             if not set(mapping).issubset(self.fiscal_years):
                 raise ValueError(f"Company economics {label} contains an unknown year")
+        historical_maps = (
+            self.historical_pretax_income_by_year,
+            self.historical_income_tax_expense_by_year,
+            self.historical_effective_tax_rate_by_year,
+            self.historical_pretax_income_provenance_by_year,
+            self.historical_income_tax_expense_provenance_by_year,
+            self.historical_effective_tax_rate_provenance_by_year,
+            self.historical_effective_tax_rate_provenance_chain_by_year,
+            self.historical_effective_tax_rate_audit_by_year,
+        )
+        historical_years = tuple(sorted({year for mapping in historical_maps for year in mapping}))
+        if historical_years:
+            if not self.fiscal_years:
+                raise ValueError(
+                    "Historical tax evidence requires a non-empty forecast horizon"
+                )
+            _validate_year_sequence(historical_years, "Company historical tax years")
+            if historical_years[-1] >= self.fiscal_years[0]:
+                raise ValueError(
+                    "Company historical tax years must be strictly before the forecast horizon"
+                )
         if not self.years:
             object.__setattr__(
                 self,
@@ -3442,6 +3914,9 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         sg_and_a=self.consolidated_sg_and_a[index],
                         other_operating_items=self.consolidated_other_operating_items[index],
                         ebit=self.consolidated_ebit[index],
+                        tax_rate=self.tax_rate[index],
+                        tax=self.tax[index],
+                        nopat=self.nopat[index],
                         reported_ebit=self.reported_ebit_by_year.get(year),
                         explicit_ebit_target=self.explicit_ebit_target_by_year.get(year),
                         ebit_reconstruction_error=self.ebit_reconstruction_error_by_year.get(year),
@@ -3480,6 +3955,21 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         ebit_confidence=self.ebit_confidence_by_year.get(year, "low"),
                         ebit_provenance=self.ebit_provenance_by_year.get(year),
                         ebit_audit=self.ebit_audit_by_year.get(year, ()),
+                        tax_rate_source=self.tax_rate_source_by_year.get(year, "unavailable"),
+                        tax_rate_method=self.tax_rate_method_by_year.get(year, "unavailable"),
+                        tax_rate_confidence=self.tax_rate_confidence_by_year.get(year, "low"),
+                        tax_rate_provenance=self.tax_rate_provenance_by_year.get(year),
+                        tax_rate_audit=self.tax_rate_audit_by_year.get(year, ()),
+                        tax_source=self.tax_source_by_year.get(year, "unavailable"),
+                        tax_method=self.tax_method_by_year.get(year, "unavailable"),
+                        tax_confidence=self.tax_confidence_by_year.get(year, "low"),
+                        tax_provenance=self.tax_provenance_by_year.get(year),
+                        tax_audit=self.tax_audit_by_year.get(year, ()),
+                        nopat_source=self.nopat_source_by_year.get(year, "unavailable"),
+                        nopat_method=self.nopat_method_by_year.get(year, "unavailable"),
+                        nopat_confidence=self.nopat_confidence_by_year.get(year, "low"),
+                        nopat_provenance=self.nopat_provenance_by_year.get(year),
+                        nopat_audit=self.nopat_audit_by_year.get(year, ()),
                     )
                     for index, (year, revenue, profit, margin) in enumerate(
                         zip(
@@ -3551,6 +4041,46 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         return dict(zip(self.fiscal_years, self.consolidated_ebit, strict=True))
 
     @property
+    def tax_rate_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.tax_rate, strict=True))
+
+    @property
+    def tax_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.tax, strict=True))
+
+    @property
+    def nopat_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.nopat, strict=True))
+
+    @property
+    def historical_tax_rate_by_year(self) -> dict[int, Decimal]:
+        return self.historical_effective_tax_rate_by_year
+
+    @property
+    def consolidated_tax_rate(self) -> tuple[Decimal | None, ...]:
+        return self.tax_rate
+
+    @property
+    def consolidated_tax(self) -> tuple[Decimal | None, ...]:
+        return self.tax
+
+    @property
+    def consolidated_nopat(self) -> tuple[Decimal | None, ...]:
+        return self.nopat
+
+    @property
+    def pretax_income_by_year(self) -> dict[int, Decimal]:
+        return self.historical_pretax_income_by_year
+
+    @property
+    def income_tax_expense_by_year(self) -> dict[int, Decimal]:
+        return self.historical_income_tax_expense_by_year
+
+    @property
+    def effective_tax_rate_by_year(self) -> dict[int, Decimal]:
+        return self.historical_effective_tax_rate_by_year
+
+    @property
     def margin_provenance(self):
         return self.gross_margin_provenance_by_year
 
@@ -3591,6 +4121,18 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         return self.diagnostics.ebit
 
     @property
+    def tax_rate_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.tax_rate
+
+    @property
+    def tax_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.tax
+
+    @property
+    def nopat_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.nopat
+
+    @property
     def gross_margin_coverage(self) -> Decimal | None:
         return self.diagnostics.gross_margin.coverage
 
@@ -3605,6 +4147,30 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     @property
     def gross_profit_supported_years(self) -> tuple[int, ...]:
         return self.diagnostics.gross_profit.supported_years
+
+    @property
+    def tax_rate_coverage(self) -> Decimal | None:
+        return self.diagnostics.tax_rate.coverage
+
+    @property
+    def tax_coverage(self) -> Decimal | None:
+        return self.diagnostics.tax.coverage
+
+    @property
+    def nopat_coverage(self) -> Decimal | None:
+        return self.diagnostics.nopat.coverage
+
+    @property
+    def tax_rate_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.tax_rate.supported_years
+
+    @property
+    def tax_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.tax.supported_years
+
+    @property
+    def nopat_supported_years(self) -> tuple[int, ...]:
+        return self.diagnostics.nopat.supported_years
 
 
 # The names below make the additive contract discoverable for both the

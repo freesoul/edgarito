@@ -11,6 +11,7 @@ from edgarito.schemas.forecasting import (
     ForecastAssumptionSource,
     ForecastSeedType,
 )
+from edgarito.services.financials.effective_tax import calculate_effective_tax_rate
 from edgarito.services.forecasting._fcff.contracts import (
     PERCENT,
     _ForecastContext,
@@ -116,10 +117,10 @@ def historical_values(
 
 
 def effective_tax_rate(period: _HistoricalDrivers) -> Decimal | None:
-    if period.pretax_income <= 0 or period.income_tax_expense < 0:
-        return None
-    rate = period.income_tax_expense / period.pretax_income * PERCENT
-    return rate if Decimal(0) <= rate <= PERCENT else None
+    return calculate_effective_tax_rate(
+        period.pretax_income,
+        period.income_tax_expense,
+    )
 
 
 def historical_fcff(

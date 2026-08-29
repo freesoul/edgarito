@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from edgarito.schemas.operating import (
+    EvidenceReference,
     OperatingDriverDefinition,
     OperatingDriverObservation,
     OperatingSegment,
@@ -188,7 +189,16 @@ def _normalize_management_constraints(
         else:
             items = list(_mapping_constraint_items(value, segments))
     else:
-        items = list(value)
+        if hasattr(value, "records"):
+            items = list(value.records)
+        elif hasattr(value, "eligible_records"):
+            items = list(value.eligible_records)
+        elif hasattr(value, "applications"):
+            items = [item.guidance for item in value.applications]
+        elif hasattr(value, "metric") and hasattr(value, "fiscal_year"):
+            items = [value]
+        else:
+            items = list(value)
 
     units_by_key: dict[tuple[str, str], str] = {}
     for definition in definitions:
@@ -201,6 +211,11 @@ def _normalize_management_constraints(
     for item in items:
         if isinstance(item, OperatingDriverObservation):
             result.append(item.model_copy(update={"origin": "management_guidance"}))
+            continue
+        if _is_tax_rate_guidance(item):
+            observation = _management_guidance_to_observation(item)
+            if observation is not None:
+                result.append(observation)
             continue
         if isinstance(item, Mapping):
             result.append(
@@ -224,6 +239,104 @@ def _normalize_management_constraints(
             "Management constraints must be operating observations or mappings"
         )
     return tuple(result)
+
+
+def _is_tax_rate_guidance(value: Any) -> bool:
+    metric = getattr(getattr(value, "metric", None), "value", getattr(value, "metric", None))
+    return str(metric).strip().casefold() == "tax_rate" and hasattr(value, "period_type")
+
+
+def _management_guidance_to_observation(
+    value: Any,
+) -> OperatingDriverObservation | None:
+    """Convert only eligible, unambiguous tax guidance into operating evidence."""
+
+    if not _is_tax_rate_guidance(value):
+        return None
+    if getattr(value, "evidence_verified", False) is not True:
+        return None
+    status = str(
+        getattr(getattr(value, "status", None), "value", getattr(value, "status", ""))
+    ).strip().casefold()
+    if status in {"withdrawn", "superseded", "inactive"}:
+        return None
+    if getattr(value, "eligible", True) is False or getattr(value, "is_eligible", True) is False:
+        return None
+    scope = str(
+        getattr(getattr(value, "scope", None), "value", getattr(value, "scope", ""))
+    ).strip().casefold()
+    if scope != "consolidated":
+        return None
+
+    period_type = str(
+        getattr(
+            getattr(value, "period_type", None),
+            "value",
+            getattr(value, "period_type", ""),
+        )
+    ).strip().casefold()
+    fiscal_year = value.fiscal_year
+    if fiscal_year is None:
+        return None
+    if period_type == "quarter":
+        fiscal_quarter = value.fiscal_quarter
+        if fiscal_quarter not in {1, 2, 3, 4}:
+            return None
+        fiscal_period = "FQ"
+        period_key = f"Q{fiscal_quarter}"
+    elif period_type == "fiscal_year":
+        if value.fiscal_quarter is not None:
+            return None
+        fiscal_period = "FY"
+        period_key = None
+    else:
+        # Multi-year and long-term guidance are not period-compatible tax-rate
+        # evidence and must never silently become an FY observation.
+        return None
+
+    unit = str(getattr(value, "unit", "")).strip().casefold()
+    if unit not in {"%", "percent", "percentage", "percentage_points", "pp"}:
+        return None
+    point = getattr(value, "point", None)
+    if point is None:
+        low = getattr(value, "low", None)
+        high = getattr(value, "high", None)
+        point = low if high is None else high if low is None else (low + high) / Decimal(2)
+    reference = EvidenceReference(
+        provider="sec",
+        accession=getattr(value, "accession_number", None),
+        filing_date=getattr(value, "filing_date", None),
+        document_name=getattr(value, "source_document", None),
+        supporting_text=getattr(value, "supporting_text", None),
+    )
+    extraction_confidence = getattr(value, "extraction_confidence", None)
+    if extraction_confidence is None:
+        confidence = "medium"
+    elif extraction_confidence >= Decimal("0.9"):
+        confidence = "high"
+    elif extraction_confidence >= Decimal("0.5"):
+        confidence = "medium"
+    else:
+        confidence = "low"
+    return OperatingDriverObservation(
+        segment_id="company",
+        driver_id="tax_rate",
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_period,
+        period_key=period_key,
+        value=point,
+        unit=str(getattr(value, "unit", "percent")),
+        scope="company",
+        scope_evidence="verified consolidated management tax-rate guidance",
+        basis=str(
+            getattr(getattr(value, "basis", None), "value", getattr(value, "basis", ""))
+        ),
+        origin="management_guidance",
+        confidence=confidence,
+        provenance=reference,
+        evidence=reference,
+        source_provenance=(reference,),
+    )
 
 
 def _mapping_constraint_items(
@@ -292,7 +405,14 @@ def _constraint_mapping_to_observation(
         "driver_id": driver_id,
         "fiscal_year": fiscal_year,
         "unit": value.get(
-            "unit", units_by_key.get((segment_id, driver_id), "currency")
+            "unit",
+            units_by_key.get(
+                (segment_id, driver_id),
+                "percent"
+                if str(driver_id).strip().casefold().replace("-", "_").replace(" ", "_")
+                in {"tax_rate", "effective_tax_rate"}
+                else "currency",
+            ),
         ),
         "origin": "management_guidance",
         "confidence": value.get("confidence", "high"),
@@ -346,7 +466,13 @@ def _constraint_tuple_to_observation(
             "driver_id": driver_id,
             "fiscal_year": fiscal_year,
             "constraint": constraint,
-            "unit": units_by_key.get((str(segment_id), str(driver_id)), "currency"),
+            "unit": units_by_key.get(
+                (str(segment_id), str(driver_id)),
+                "percent"
+                if str(driver_id).strip().casefold().replace("-", "_").replace(" ", "_")
+                in {"tax_rate", "effective_tax_rate"}
+                else "currency",
+            ),
         },
         units_by_key=units_by_key,
         segments=segments,

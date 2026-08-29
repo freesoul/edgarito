@@ -12,6 +12,18 @@ from edgarito.enums.granularity import Granularity
 from edgarito.enums.market import Market
 from edgarito.schemas.forecasting import FcffForecastParameters
 from edgarito.schemas.forward import ForwardRevenueEstimate
+from edgarito.schemas.guidance.management import (
+    GuidanceApplication,
+    GuidanceBasis,
+    GuidanceMetric,
+    GuidanceOverlayResult,
+    GuidancePeriodType,
+    GuidanceQualifier,
+    GuidanceScope,
+    GuidanceStatus,
+    GuidanceValueKind,
+    ManagementGuidance,
+)
 from edgarito.schemas.normalization.financials import (
     FinancialConcept,
     FinancialObservation,
@@ -23,7 +35,9 @@ from edgarito.schemas.operating import (
     OperatingDriverObservation,
     OperatingSegment,
 )
+from edgarito.services.financials.availability import ObservationAvailabilityMode
 from edgarito.services.forecasting._fcff.service import FcffForecastService
+from edgarito.services.guidance.resolver import ManagementGuidanceResolver
 from edgarito.services.operating._discovery.service import (
     OperatingEvidenceDiscoveryService,
 )
@@ -125,6 +139,29 @@ def _operating_fixture():
     return segment, definition, observations
 
 
+def _tax_guidance(value, filed):
+    return ManagementGuidance(
+        metric=GuidanceMetric.TAX_RATE,
+        fiscal_year=2025,
+        period_type=GuidancePeriodType.FISCAL_YEAR,
+        point=Decimal(value),
+        value_kind=GuidanceValueKind.PERCENTAGE,
+        unit="percent",
+        basis=GuidanceBasis.GAAP,
+        scope=GuidanceScope.CONSOLIDATED,
+        qualifier=GuidanceQualifier.POINT,
+        status=GuidanceStatus.ISSUED,
+        filing_date=filed,
+        accession_number=f"guidance-{value}",
+        filing_form="8-K",
+        source_document="ex991.htm",
+        source_document_type="EX-99.1",
+        supporting_text=f"We expect a tax rate of {value} percent.",
+        evidence_verified=True,
+        extraction_model="test",
+    )
+
+
 def test_integration_returns_independent_selected_details_and_materialized_parameters():
     result = OperatingForecastIntegrationService().integrate(
         segments=(),
@@ -180,6 +217,108 @@ def test_integration_normalizes_nested_segment_history_before_reconciliation():
 
     assert result.reconciliation.resolved_years[0].historical_revenue == Decimal("120")
     assert result.parameters.revenue_anchors[2024] == Decimal("120")
+
+
+def test_integration_resolves_raw_management_guidance_at_as_of_boundary():
+    pre = _tax_guidance("20", datetime.date(2024, 1, 15))
+    post = _tax_guidance("30", datetime.date(2024, 3, 15))
+    result = OperatingForecastIntegrationService().integrate(
+        segments=(),
+        definitions=(),
+        management_constraints=(pre, post),
+        historical_revenue={2025: Decimal("100")},
+        fiscal_years=(2025,),
+        parameters=FcffForecastParameters(forecast_years=1),
+        as_of=datetime.date(2024, 2, 1),
+    )
+
+    economics = result.independent_forecast.operating_economics
+    assert economics is not None
+    assert economics.tax_rate == (Decimal("20"),)
+    assert economics.tax_rate_provenance_by_year[2025].accession == "guidance-20"
+
+    without_snapshot = OperatingForecastIntegrationService().integrate(
+        segments=(),
+        definitions=(),
+        management_constraints=(post,),
+        historical_revenue={2025: Decimal("100")},
+        fiscal_years=(2025,),
+        parameters=FcffForecastParameters(forecast_years=1),
+    )
+    no_snapshot_economics = without_snapshot.independent_forecast.operating_economics
+    assert no_snapshot_economics is not None
+    assert no_snapshot_economics.tax_rate == (Decimal("30"),)
+
+
+def test_integration_re_resolves_later_guidance_container_at_current_as_of():
+    pre = _tax_guidance("20", datetime.date(2024, 1, 15))
+    post = _tax_guidance("30", datetime.date(2024, 3, 15))
+    later_snapshot = ManagementGuidanceResolver().resolve(
+        [pre, post], as_of=datetime.date(2024, 4, 1)
+    )
+
+    current_snapshot = OperatingForecastIntegrationService().integrate(
+        segments=(),
+        definitions=(),
+        management_constraints=later_snapshot,
+        historical_revenue={2025: Decimal("100")},
+        fiscal_years=(2025,),
+        parameters=FcffForecastParameters(forecast_years=1),
+        as_of=datetime.date(2024, 2, 1),
+    )
+
+    economics = current_snapshot.independent_forecast.operating_economics
+    assert economics is None
+
+
+def test_integration_filters_post_as_of_guidance_overlay_application():
+    post = _tax_guidance("30", datetime.date(2024, 3, 15))
+    overlay = GuidanceOverlayResult(
+        applications=(
+            GuidanceApplication(
+                driver="tax_rate",
+                fiscal_year=2025,
+                value=Decimal("30"),
+                guidance=post,
+                methodology="fixture application",
+            ),
+        )
+    )
+
+    result = OperatingForecastIntegrationService().integrate(
+        segments=(),
+        definitions=(),
+        management_constraints=overlay,
+        historical_revenue={2025: Decimal("100")},
+        fiscal_years=(2025,),
+        parameters=FcffForecastParameters(forecast_years=1),
+        as_of=datetime.date(2024, 2, 1),
+    )
+
+    assert result.independent_forecast.operating_economics is None
+
+
+@pytest.mark.parametrize(
+    "availability_mode",
+    [ObservationAvailabilityMode.POINT_IN_TIME, ObservationAvailabilityMode.CURRENT_SNAPSHOT],
+)
+def test_pipeline_as_of_remains_compatible_with_availability_modes(availability_mode):
+    segment, definition, observations = _operating_fixture()
+    result = OperatingForecastPipelineService().forecast(
+        _fcff_financials(),
+        evidence={
+            "segments": (segment,),
+            "definitions": (definition,),
+            "observations": observations,
+            "historical_revenue": {2024: Decimal("120")},
+        },
+        parameters=FcffForecastParameters(forecast_years=2),
+        as_of=datetime.date(2026, 1, 1),
+        availability_mode=availability_mode,
+    )
+
+    assert result.quality is not None
+    assert result.quality.accepted
 
 
 def test_pipeline_composes_operating_reconciliation_into_fcff_and_adaptive_plan():

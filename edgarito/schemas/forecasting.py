@@ -119,6 +119,7 @@ class ForecastMetric(_CaseInsensitiveStrEnum):
     OPERATING_MARGIN = "operating_margin"
     TAX = "tax"
     TAX_RATE = "tax_rate"
+    NOPAT = "nopat"
     DEPRECIATION_AND_AMORTIZATION = "depreciation_and_amortization"
     DEPRECIATION_TO_REVENUE = "depreciation_to_revenue"
     CAPEX = "capex"
@@ -144,12 +145,14 @@ class ForecastValueBasis(_CaseInsensitiveStrEnum):
     """Interpretation of an explicit operating-economics path.
 
     Gross-margin paths predate this field and remain percentage-point paths by
-    contract.  New expense paths must declare their basis so an amount cannot
-    accidentally be treated as a percentage (or vice versa).
+    contract. Tax-rate paths use ``PERCENTAGE_POINTS``; new amount/ratio paths
+    must declare their basis so an amount cannot accidentally be treated as a
+    percentage (or vice versa).
     """
 
     ABSOLUTE = "absolute"
     PERCENT_OF_REVENUE = "percent_of_revenue"
+    PERCENTAGE_POINTS = "percentage_points"
 
     @classmethod
     def _missing_(cls, value):
@@ -161,11 +164,12 @@ class ForecastValueBasis(_CaseInsensitiveStrEnum):
             "ratio",
             "percent",
             "percentage",
-            "percentage_points",
             "percentage_points_of_revenue",
             "percent_of_sales",
         }:
             return cls.PERCENT_OF_REVENUE
+        if normalized in {"percentage_points", "percentage_point", "pp"}:
+            return cls.PERCENTAGE_POINTS
         if normalized in {"amount", "currency", "absolute_amount"}:
             return cls.ABSOLUTE
         return None
@@ -216,6 +220,8 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
         "selling_general_and_administrative_expense": "sg_and_a",
         "operating_income": "ebit",
         "operating_income_loss": "ebit",
+        "effective_tax_rate": "tax_rate",
+        "tax_rate_percentage": "tax_rate",
     }.get(normalized_metric, normalized_metric)
     if normalized_metric not in {
         "gross_margin",
@@ -225,6 +231,43 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
         "other_operating_items",
         "ebit",
     }:
+        if normalized_metric == "tax":
+            if path is not None or strategy in {
+                ForecastStrategy.EXPLICIT,
+                ForecastStrategy.RATIO,
+                ForecastStrategy.RESIDUAL,
+            }:
+                raise ValueError(
+                    "Explicit TAX overrides are unsupported; TAX is a monetary output "
+                    "derived from EBIT and TAX_RATE"
+                )
+        elif normalized_metric == "tax_rate":
+            if strategy in {ForecastStrategy.EXPLICIT, ForecastStrategy.RATIO} and path is None:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} records require explicit_path"
+                )
+            if strategy == ForecastStrategy.RATIO:
+                raise ValueError(
+                    f"Ratio {normalized_metric} paths are not supported; use percentage-point values"
+                )
+            if path is not None and basis != ForecastValueBasis.PERCENTAGE_POINTS:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} paths require basis=percentage_points"
+                )
+            if path is not None and any(item < 0 or item > 100 for item in path):
+                raise ValueError(
+                    f"{normalized_metric} paths must be between 0 and 100 percentage points"
+                )
+        elif normalized_metric == "nopat":
+            if path is not None or strategy in {
+                ForecastStrategy.EXPLICIT,
+                ForecastStrategy.RATIO,
+                ForecastStrategy.RESIDUAL,
+            }:
+                raise ValueError(
+                    "Explicit NOPAT overrides are unsupported; NOPAT is calculated "
+                    "from EBIT and TAX_RATE"
+                )
         return
     if strategy == ForecastStrategy.EXPLICIT and path is None:
         raise ValueError(f"Explicit {normalized_metric} records require explicit_path")
@@ -292,13 +335,17 @@ def _validate_economics_scope(scope, metric) -> None:
         normalized_metric = "other_operating_items"
     if normalized_metric in {"ebit", "operating_income", "operating_income_loss"}:
         normalized_metric = "ebit"
-    if scope == ForecastScope.SEGMENT and normalized_metric in {
-        "other_operating_items",
-        "ebit",
-    }:
+    if normalized_metric in {"effective_tax_rate", "tax_rate_percentage"}:
+        normalized_metric = "tax_rate"
+    if scope == ForecastScope.SEGMENT and normalized_metric in {"other_operating_items", "ebit"}:
         raise ValueError(
             f"Segment {normalized_metric} decisions/overrides are unsupported; "
             "only segment R&D and SG&A are supported in this phase"
+        )
+    if scope == ForecastScope.SEGMENT and normalized_metric in {"tax", "tax_rate", "nopat"}:
+        raise ValueError(
+            f"Segment {normalized_metric} decisions/overrides are unsupported; "
+            "tax, tax rate, and NOPAT are company-only in this phase"
         )
 
 

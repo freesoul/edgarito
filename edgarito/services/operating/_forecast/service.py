@@ -598,6 +598,18 @@ def _has_economics_inputs(observations, plan, overrides) -> bool:
         "recurring_other_operating_items",
         "ebit",
         "operating_income",
+        "tax",
+        "tax_rate",
+        "effective_tax_rate",
+        "tax_rate_percentage",
+        "forward_tax_rate",
+        "tax_rate_guidance",
+        "nopat",
+        "pretax_income",
+        "pretax",
+        "pre_tax_income",
+        "income_tax_expense",
+        "tax_expense",
     }
     if any(
         str(getattr(item, "driver_id", "")).strip().casefold().replace("-", "_").replace(" ", "_")
@@ -680,6 +692,9 @@ def _has_explicit_economics_target(plan, overrides) -> bool:
             "sg_and_a",
             "other_operating_items",
             "ebit",
+            "tax",
+            "tax_rate",
+            "nopat",
         } and strategy in {"explicit", "ratio", "residual"} and scope == "segment":
             return True
     return False

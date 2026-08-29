@@ -21,6 +21,7 @@ from edgarito.schemas.forecasting import (
     ForecastScope,
     ForecastStrategy,
 )
+from edgarito.services.forecasting._fcff.paths import effective_tax_rate
 from edgarito.services.forecasting.orchestration import (
     DriverBasedForecastIncompleteError,
     FcffForecastOrchestrationService,
@@ -68,6 +69,25 @@ def test_forecast_metric_covers_future_driver_based_financial_lines():
         ForecastMetric.OPERATING_WORKING_CAPITAL.value,
         ForecastMetric.DELTA_NWC.value,
     } <= {metric.value for metric in ForecastMetric}
+
+
+@pytest.mark.parametrize(
+    ("pretax", "tax", "expected"),
+    [
+        (Decimal("100"), Decimal("25"), Decimal("25")),
+        (Decimal("100"), Decimal("0"), Decimal("0")),
+        (Decimal("0"), Decimal("0"), None),
+        (Decimal("-100"), Decimal("25"), None),
+        (Decimal("100"), Decimal("-1"), None),
+        (Decimal("100"), Decimal("101"), None),
+    ],
+)
+def test_fcff_effective_tax_rate_retains_strict_policy(pretax, tax, expected):
+    period = SimpleNamespace(
+        pretax_income=pretax,
+        income_tax_expense=tax,
+    )
+    assert effective_tax_rate(period) == expected
 
 
 def test_plan_contracts_are_immutable_unique_and_stably_serialized():

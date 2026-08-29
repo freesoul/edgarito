@@ -26,6 +26,8 @@ _CONCEPT_DRIVERS = {
     FinancialConcept.RESEARCH_AND_DEVELOPMENT_EXPENSE: "r_and_d",
     FinancialConcept.SELLING_GENERAL_AND_ADMINISTRATIVE_EXPENSE: "sg_and_a",
     FinancialConcept.OPERATING_INCOME: "operating_income",
+    FinancialConcept.PRETAX_INCOME: "pretax_income",
+    FinancialConcept.INCOME_TAX_EXPENSE: "income_tax_expense",
 }
 _EXPENSES = {"r_and_d", "sg_and_a"}
 
@@ -64,6 +66,9 @@ def normalized_company_financials_to_operating_observations(
                 f"Normalized {item.concept.value} from {item.source_concept}"
             ),
         )
+        # R&D and SG&A are canonical positive expense inputs. Tax expense is
+        # deliberately signed: a reported tax benefit is evidence and must be
+        # rejected by the strict effective-rate policy, not rewritten with abs.
         value = abs(item.value) if driver in _EXPENSES else item.value
         result.append(
             OperatingDriverObservation(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import copy
+from dataclasses import is_dataclass, replace
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
@@ -14,6 +16,7 @@ from edgarito.schemas.forecasting import (
     ForwardGrowthEvidence,
 )
 from edgarito.schemas.forward import ForwardRevenueEstimate
+from edgarito.schemas.guidance.management import ManagementGuidance
 from edgarito.schemas.operating import (
     CompanyOperatingForecast,
     OperatingDriverDefinition,
@@ -27,6 +30,7 @@ from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.multistage import (
     AdaptiveMultistageFcffForecastService,
 )
+from edgarito.services.guidance.resolver import ManagementGuidanceResolver
 from edgarito.services.operating._forecast.financials_adapter import (
     normalized_company_financials_to_operating_observations,
 )
@@ -77,6 +81,7 @@ class OperatingForecastIntegrationService:
         overrides: Any = (),
         forecast_overrides: Any | None = None,
         economics_config: Any | None = None,
+        as_of=None,
     ) -> _contracts.OperatingForecastIntegrationResult:
         if parameters is not None and fcff_parameters is not None:
             raise ValueError("Pass either parameters or fcff_parameters, not both")
@@ -132,6 +137,10 @@ class OperatingForecastIntegrationService:
             and not isinstance(historical_revenue, (str, bytes))
         ):
             historical_revenue = tuple(historical_revenue)
+        management_constraints = _resolve_management_guidance(
+            management_constraints,
+            as_of=as_of,
+        )
         independent = self.forecast_service.forecast(
             segments,
             definitions,
@@ -269,7 +278,10 @@ class OperatingForecastPipelineService:
         if definitions is not None:
             values["definitions"] = _as_items(definitions)
         if observations is not None:
-            values["observations"] = _as_items(observations)
+            values["observations"] = (
+                *_as_items(values.get("observations") or ()),
+                *_as_items(observations),
+            )
         values["definitions"] = _as_items(values.get("definitions") or ())
         values["observations"] = _as_items(values.get("observations") or ())
         initial_quality = self.quality_gate(values)
@@ -315,6 +327,7 @@ class OperatingForecastPipelineService:
             overrides=overrides,
             forecast_overrides=forecast_overrides,
             economics_config=economics_config,
+            as_of=as_of,
         )
         quality = self.quality_gate(values, integration.reconciled_forecast)
         if not quality.accepted:
@@ -627,6 +640,149 @@ def _as_items(value: Any) -> tuple[Any, ...]:
         return tuple(value)
     except TypeError:
         return (value,)
+
+
+def _resolve_management_guidance(value: Any, *, as_of) -> Any:
+    """Resolve raw guidance at the integration boundary when a snapshot exists."""
+
+    if as_of is None:
+        return value
+
+    container_field = _management_guidance_container_field(value)
+    items = (value,) if container_field else _as_items(value)
+    raw_guidance = [
+        record
+        for item in items
+        for record in _management_guidance_records(item)
+    ]
+    if not raw_guidance:
+        return value if container_field else items
+    resolved = ManagementGuidanceResolver().resolve(raw_guidance, as_of=as_of)
+    selected_ids = {id(record) for record in resolved.records}
+
+    if container_field:
+        return _rebuild_management_guidance_container(value, selected_ids)
+
+    rebuilt = []
+    for item in items:
+        item = _rebuild_management_guidance_item(item, selected_ids)
+        if item is not _DROPPED:
+            rebuilt.append(item)
+    return tuple(rebuilt)
+
+
+_GUIDANCE_CONTAINER_FIELDS = ("records", "eligible_records", "applications")
+_DROPPED = object()
+
+
+def _management_guidance_container_field(value: Any) -> str | None:
+    for field in _GUIDANCE_CONTAINER_FIELDS:
+        if hasattr(value, field):
+            return field
+    return None
+
+
+def _management_guidance_records(value: Any) -> tuple[ManagementGuidance, ...]:
+    if isinstance(value, ManagementGuidance):
+        return (value,)
+
+    field = _management_guidance_container_field(value)
+    if field in {"records", "eligible_records"}:
+        return tuple(
+            record
+            for item in _as_items(getattr(value, field))
+            for record in _management_guidance_records(item)
+        )
+    if field == "applications":
+        records = tuple(
+            application.guidance
+            for application in _as_items(getattr(value, field))
+            if isinstance(getattr(application, "guidance", None), ManagementGuidance)
+        )
+        evidence_only = tuple(
+            record
+            for item in _as_items(getattr(value, "evidence_only", ()))
+            for record in _management_guidance_records(item)
+        )
+        return records + evidence_only
+    guidance = getattr(value, "guidance", None)
+    return (guidance,) if isinstance(guidance, ManagementGuidance) else ()
+
+
+def _rebuild_management_guidance_item(value: Any, selected_ids: set[int]) -> Any:
+    if isinstance(value, ManagementGuidance):
+        return value if id(value) in selected_ids else _DROPPED
+
+    if isinstance(getattr(value, "guidance", None), ManagementGuidance):
+        return value if id(value.guidance) in selected_ids else _DROPPED
+
+    if _management_guidance_container_field(value):
+        return _rebuild_management_guidance_container(value, selected_ids)
+    return value
+
+
+def _rebuild_management_guidance_container(
+    value: Any, selected_ids: set[int]
+) -> Any:
+    field = _management_guidance_container_field(value)
+    if field is None:
+        return value
+
+    updates: dict[str, Any] = {}
+    entries = _as_items(getattr(value, field))
+    rebuilt_entries = []
+    for entry in entries:
+        rebuilt = _rebuild_management_guidance_item(entry, selected_ids)
+        if rebuilt is not _DROPPED:
+            rebuilt_entries.append(rebuilt)
+    updates[field] = _same_container_type(getattr(value, field), rebuilt_entries)
+
+    # GuidanceOverlayResult keeps rejected-but-useful guidance separately from
+    # applications. Filter that companion collection as well, while retaining
+    # its application objects and all other container metadata.
+    if hasattr(value, "evidence_only"):
+        evidence = _as_items(value.evidence_only)
+        rebuilt_evidence = []
+        for entry in evidence:
+            rebuilt = _rebuild_management_guidance_item(entry, selected_ids)
+            if rebuilt is not _DROPPED:
+                rebuilt_evidence.append(rebuilt)
+        updates["evidence_only"] = _same_container_type(evidence, rebuilt_evidence)
+
+    rebuilt = _copy_with_updates(value, updates)
+    if rebuilt is not None:
+        return rebuilt
+
+    # Provider-neutral containers are expected to be dataclasses or Pydantic
+    # models, but retain the filtering guarantee if an opaque container cannot
+    # be copied while preserving its shape.
+    return tuple(rebuilt_entries)
+
+
+def _same_container_type(original: Any, values: list[Any]) -> Any:
+    if isinstance(original, list):
+        return values
+    if isinstance(original, tuple):
+        return tuple(values)
+    return tuple(values)
+
+
+def _copy_with_updates(value: Any, updates: Mapping[str, Any]) -> Any | None:
+    model_copy = getattr(value, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update=dict(updates))
+    if is_dataclass(value):
+        return replace(value, **updates)
+    namedtuple_replace = getattr(value, "_replace", None)
+    if callable(namedtuple_replace):
+        return namedtuple_replace(**updates)
+    try:
+        copied = copy(value)
+        for field, field_value in updates.items():
+            setattr(copied, field, field_value)
+        return copied
+    except (AttributeError, TypeError):
+        return None
 
 
 def _financial_revenue_history(financials) -> dict[int, Decimal]:

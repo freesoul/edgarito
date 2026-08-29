@@ -16,6 +16,10 @@ from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
 )
+from edgarito.services.operating._forecast.tax_nopat import (
+    OperatingTaxForecastService,
+    OperatingTaxNopatEngine,
+)
 from edgarito.services.operating.extraction import (
     OperatingEvidenceExtractionError,
     OperatingEvidenceExtractor,
@@ -65,6 +69,8 @@ __all__ = [
     "NormalizedFinancialsOperatingAdapter",
     "normalized_company_financials_to_operating_observations",
     "normalized_financials_to_operating_evidence",
+    "OperatingTaxNopatEngine",
+    "OperatingTaxForecastService",
     "RevenueForecastReconciler",
     "backlog_conversion",
     "capacity_utilization_price",
