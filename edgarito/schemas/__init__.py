@@ -1,4 +1,6 @@
 from edgarito.schemas.forecasting import (
+    DriverBasedFcffForecastResult,
+    DriverBasedForecastReadiness,
     FcffForecastDecision,
     FcffForecastMethod,
     FcffForecastMetric,
@@ -139,6 +141,8 @@ __all__ = [
     "CountryRiskPremium",
     "CountryRiskPremiumSnapshot",
     "FcffForecastDecision",
+    "DriverBasedFcffForecastResult",
+    "DriverBasedForecastReadiness",
     "FcffForecastMethod",
     "FcffForecastMetric",
     "FcffForecastOverride",

@@ -2,6 +2,11 @@ from importlib import import_module
 
 __all__ = [
     "AdaptiveMultistageFcffForecastService",
+    "DriverBasedFcffForecastResult",
+    "DriverBasedFcffForecastService",
+    "DriverBasedForecastReadiness",
+    "ForecastContextBuild",
+    "build_forecast_context",
     "DriverBasedForecastIncompleteError",
     "FcffForecastOrchestrationService",
     "FcffForecastPlanService",
@@ -27,6 +32,26 @@ _LAZY_EXPORTS = {
     "AdaptiveMultistageFcffForecastService": (
         "edgarito.services.forecasting.multistage",
         "AdaptiveMultistageFcffForecastService",
+    ),
+    "DriverBasedFcffForecastService": (
+        "edgarito.services.forecasting._fcff.driver_based",
+        "DriverBasedFcffForecastService",
+    ),
+    "DriverBasedFcffForecastResult": (
+        "edgarito.services.forecasting._fcff.driver_based",
+        "DriverBasedFcffForecastResult",
+    ),
+    "DriverBasedForecastReadiness": (
+        "edgarito.services.forecasting._fcff.driver_based",
+        "DriverBasedForecastReadiness",
+    ),
+    "ForecastContextBuild": (
+        "edgarito.services.forecasting._fcff.context",
+        "ForecastContextBuild",
+    ),
+    "build_forecast_context": (
+        "edgarito.services.forecasting._fcff.context",
+        "build_forecast_context",
     ),
     "ForwardRevenueEstimateService": (
         "edgarito.services.forecasting.forward_estimates",

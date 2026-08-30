@@ -24,6 +24,10 @@ from edgarito.schemas.normalization.financials import (
 )
 from edgarito.services.cache.filesystem_cache import FileSystemCache
 from edgarito.services.export import CompanyAnalysisReportService, ExcelRenderer
+from edgarito.services.financials.availability import (
+    FinancialObservationAvailabilityService,
+    ObservationAvailabilityMode,
+)
 from edgarito.services.guidance.documents import (
     GuidanceDocumentSelector,
     is_exhibit_document,
@@ -192,6 +196,85 @@ async def retrieve_financials(
             make_cache=True,
             crosscheck=args.crosscheck,
         )
+
+
+def merge_normalized_financials(
+    *financials: NormalizedCompanyFinancials,
+    as_of: datetime.date | None = None,
+    availability_mode: ObservationAvailabilityMode = ObservationAvailabilityMode.POINT_IN_TIME,
+    availability_service: FinancialObservationAvailabilityService | None = None,
+) -> NormalizedCompanyFinancials:
+    """Merge deterministic annual/quarterly normalized retrieval results.
+
+    Observation identity includes the reporting granularity and period dates,
+    so annual and quarterly facts are never collapsed into one another. Exact
+    duplicates are resolved by filed date, accession, and input position while
+    issuer metadata remains anchored to the first result.
+    """
+
+    normalized = tuple(
+        item
+        if isinstance(item, NormalizedCompanyFinancials)
+        else NormalizedCompanyFinancials.model_validate(item)
+        for item in financials
+        if item is not None
+    )
+    if not normalized:
+        raise ValueError("At least one normalized financial result is required")
+    availability = availability_service or FinancialObservationAvailabilityService()
+    selected: dict[tuple, tuple[tuple, object]] = {}
+    for result_position, result in enumerate(normalized):
+        for observation_position, observation in enumerate(result.observations):
+            if as_of is not None and not availability.is_available(
+                observation,
+                as_of=as_of,
+                mode=availability_mode,
+                snapshot_retrieved_at=result.retrieved_at,
+            ):
+                continue
+            key = (
+                observation.concept.value,
+                observation.granularity.value,
+                observation.fiscal_year,
+                observation.fiscal_period.value,
+                observation.period_start,
+                observation.period_end,
+                observation.unit,
+            )
+            rank = (
+                observation.filed is not None,
+                observation.filed or datetime.date.min,
+                observation.accession_number or "",
+                -result_position,
+                -observation_position,
+            )
+            previous = selected.get(key)
+            if previous is None or rank > previous[0]:
+                selected[key] = (rank, observation)
+    observations = sorted(
+        (item for _rank, item in selected.values()),
+        key=lambda item: (
+            item.period_end,
+            item.granularity.value,
+            item.fiscal_year,
+            item.fiscal_period.value,
+            item.concept.value,
+            item.unit,
+            item.provider,
+            item.accession_number or "",
+        ),
+    )
+    primary = normalized[0]
+    retrieved_at = max(
+        (item.retrieved_at for item in normalized if item.retrieved_at is not None),
+        default=primary.retrieved_at,
+    )
+    return primary.model_copy(
+        update={"observations": observations, "retrieved_at": retrieved_at}
+    )
+
+
+_merge_normalized_financials = merge_normalized_financials
 
 
 async def run_financials(args: argparse.Namespace, *, context=None) -> int:

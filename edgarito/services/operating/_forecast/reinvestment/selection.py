@@ -337,6 +337,12 @@ class _ReinvestmentSelectionMixin:
         result = []
         known = {item.segment.segment_id for item in existing}
         for segment_id in sorted(known):
+            # ``company`` is a synthetic consolidated scope used when callers
+            # provide company-only operating evidence.  Its company paths are
+            # already selected by the company candidate and must not be
+            # reinterpreted as a second segment amount.
+            if segment_id == "company":
+                continue
             values = tuple(
                 item
                 for item in records

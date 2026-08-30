@@ -1,8 +1,8 @@
 """Execution seam for planned FCFF forecasts.
 
-The executor delegates all calculations to the existing FCFF service or the
-existing operating pipeline.  It owns method routing only; no forecast
-economics are duplicated here.
+The executor delegates calculations to the existing normalized service, the
+existing hybrid pipeline, or the explicit driver-based service.  It owns
+method routing only; no forecast economics are duplicated here.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from edgarito.schemas.forecasting import (
+    DriverBasedFcffForecastResult,
+    DriverBasedForecastReadiness,
     FcffForecast,
     FcffForecastMethod,
     FcffForecastParameters,
@@ -25,13 +27,27 @@ from edgarito.services.operating.contracts import OperatingForecastQualityError
 
 
 class DriverBasedForecastIncompleteError(RuntimeError):
-    """Raised instead of silently falling back from the planned driver method."""
+    """Raised when explicitly requested driver economics are incomplete."""
 
-    def __init__(self, plan: ForecastPlan | None = None) -> None:
+    def __init__(
+        self,
+        plan: ForecastPlan | None = None,
+        readiness: Any | None = None,
+        *,
+        driver_readiness: Any | None = None,
+    ) -> None:
         self.plan = plan
+        self.readiness = readiness or driver_readiness
+        self.driver_readiness = self.readiness
+        self.forecast_plan = plan
+        if self.readiness is None:
+            detail = "missing explicit operating economics"
+        else:
+            errors = getattr(self.readiness, "blocking_errors", ())
+            detail = "; ".join(str(item) for item in errors) or "incomplete requested economics"
         super().__init__(
-            "FCFF forecast method 'driver_based' is planned but its execution is "
-            "not implemented; no fallback forecast was used"
+            "FCFF method=driver_based is incomplete; no fallback forecast was used: "
+            + detail
         )
 
 
@@ -47,6 +63,10 @@ class ForecastOrchestrationResult:
     plan: ForecastPlan
     warnings: tuple[str, ...] = ()
     audit: tuple[str, ...] = ()
+    driver_readiness: Any | None = None
+    driver_validation: Any | None = None
+    driver_operating_forecast: Any | None = None
+    driver_operating_economics: Any | None = None
 
     @property
     def fcff_forecast(self) -> FcffForecast:
@@ -76,9 +96,21 @@ class ForecastOrchestrationResult:
     def forecast_plan(self) -> ForecastPlan:
         return self.plan
 
+    @property
+    def validation(self) -> Any | None:
+        return self.driver_validation
+
+    @property
+    def operating_forecast(self) -> Any | None:
+        return self.driver_operating_forecast
+
+    @property
+    def operating_economics(self) -> Any | None:
+        return self.driver_operating_economics
+
 
 class FcffForecastOrchestrationService:
-    """Plan and execute normalized or hybrid FCFF forecasts."""
+    """Plan and execute normalized, hybrid, or explicit driver FCFF forecasts."""
 
     def __init__(
         self,
@@ -88,6 +120,8 @@ class FcffForecastOrchestrationService:
         operating_quality_gate: Any | None = None,
         operating_pipeline: Any | None = None,
         operating_pipeline_service: Any | None = None,
+        driver_based_service: Any | None = None,
+        driver_service: Any | None = None,
     ) -> None:
         self.fcff_service = fcff_service or FcffForecastService()
         self.plan_service = plan_service or FcffForecastPlanService(
@@ -98,6 +132,9 @@ class FcffForecastOrchestrationService:
             )
         )
         self.operating_pipeline = operating_pipeline or operating_pipeline_service
+        # Keep driver construction lazy: normalized clients must not import or
+        # instantiate the operating-economics composition unless it is routed.
+        self.driver_based_service = driver_based_service or driver_service
 
     def forecast(
         self,
@@ -153,12 +190,47 @@ class FcffForecastOrchestrationService:
             overrides=overrides,
         )
         # Revalidate custom planner output so an invalid resolved method cannot
-        # bypass the dedicated driver-based execution error.
+        # bypass the explicit method-routing contract.
         plan = ForecastPlan.model_validate(plan, from_attributes=True)
         if plan.resolved == FcffForecastMethod.DRIVER_BASED:
-            raise DriverBasedForecastIncompleteError(plan)
-
-        if plan.resolved == FcffForecastMethod.NORMALIZED:
+            driver = self.driver_based_service or _default_driver_based_service()
+            forwarded = dict(pipeline_kwargs or {})
+            forwarded.update(operating_pipeline_kwargs or {})
+            forwarded.update(kwargs)
+            forwarded.setdefault("evidence", evidence)
+            forwarded.setdefault("operating_evidence", evidence)
+            forwarded.setdefault("parameters", parameters or FcffForecastParameters())
+            forwarded.setdefault("plan", plan)
+            forwarded.setdefault("forecast_plan", plan)
+            forwarded.setdefault("overrides", overrides)
+            forwarded.setdefault("as_of", as_of)
+            forwarded.setdefault("availability_mode", availability_mode)
+            result = _run_pipeline(driver, financials, forwarded)
+            forecast = getattr(result, "forecast", result)
+            if not isinstance(forecast, FcffForecast):
+                raise TypeError(
+                    "Driver-based FCFF service must return FcffForecast or a result "
+                    "with a FcffForecast forecast field"
+                )
+            pipeline_audit = tuple(
+                dict.fromkeys(
+                    (
+                        *getattr(result, "audit", ()),
+                        "driver_based_service=DriverBasedFcffForecastService",
+                        _validation_audit(result),
+                    )
+                )
+            )
+            driver_readiness = getattr(result, "readiness", None)
+            driver_validation = getattr(result, "validation", None)
+            driver_operating_forecast = getattr(
+                result, "company_operating_forecast", None
+            )
+            driver_operating_economics = getattr(
+                result, "company_operating_economics", None
+            )
+            result_warnings = tuple(getattr(result, "warnings", ()))
+        elif plan.resolved == FcffForecastMethod.NORMALIZED:
             forecast = self.fcff_service.forecast(
                 financials,
                 parameters,
@@ -166,6 +238,11 @@ class FcffForecastOrchestrationService:
                 availability_mode=availability_mode,
             )
             pipeline_audit: tuple[str, ...] = ()
+            driver_readiness = None
+            driver_validation = None
+            driver_operating_forecast = None
+            driver_operating_economics = None
+            result_warnings = ()
         else:
             pipeline = self.operating_pipeline or _default_operating_pipeline(
                 self.fcff_service
@@ -234,12 +311,18 @@ class FcffForecastOrchestrationService:
                             ),
                         }
                     )
+            driver_readiness = None
+            driver_validation = None
+            driver_operating_forecast = None
+            driver_operating_economics = None
+            result_warnings = ()
 
         warnings = tuple(
             dict.fromkeys(
                 (
                     *plan.warnings,
                     *getattr(forecast, "warnings", ()),
+                    *result_warnings,
                 )
             )
         )
@@ -249,6 +332,10 @@ class FcffForecastOrchestrationService:
             plan=plan,
             warnings=warnings,
             audit=audit,
+            driver_readiness=driver_readiness,
+            driver_validation=driver_validation,
+            driver_operating_forecast=driver_operating_forecast,
+            driver_operating_economics=driver_operating_economics,
         )
 
     run = forecast
@@ -262,6 +349,14 @@ def _default_operating_pipeline(fcff_service: FcffForecastService):
     from edgarito.services.operating.integration import OperatingForecastPipelineService
 
     return OperatingForecastPipelineService(fcff_service=fcff_service)
+
+
+def _default_driver_based_service():
+    from edgarito.services.forecasting._fcff.driver_based import (
+        DriverBasedFcffForecastService,
+    )
+
+    return DriverBasedFcffForecastService()
 
 
 def _default_operating_quality_gate():
@@ -319,11 +414,30 @@ def _pipeline_audit(result: Any) -> tuple[str, ...]:
     return ("operating_pipeline_quality=" + _quality_text(quality),)
 
 
+def _validation_audit(result: Any) -> str:
+    summary = getattr(result, "validation_summary", None)
+    if isinstance(summary, dict):
+        counts = summary.get("counts")
+        if isinstance(counts, dict):
+            return (
+                "driver_validation_findings="
+                + str(counts.get("total", 0))
+                + ";errors="
+                + str(counts.get("error", 0))
+            )
+    validation = getattr(result, "validation", None)
+    if validation is not None:
+        return "driver_validation_findings=" + str(len(getattr(validation, "findings", ())))
+    return "driver_validation_findings=unavailable"
+
+
 # Public spelling retained for callers that prefer a generic orchestration name.
 ForecastOrchestrationService = FcffForecastOrchestrationService
 
 
 __all__ = [
+    "DriverBasedFcffForecastResult",
+    "DriverBasedForecastReadiness",
     "DriverBasedForecastIncompleteError",
     "FcffForecastOrchestrationService",
     "ForecastOrchestrationResult",

@@ -158,6 +158,8 @@ async def _retrieve_operating_evidence(
     provider=None,
     args=None,
     metadata=None,
+    fiscal_years=None,
+    availability_mode=None,
     context=None,
 ):
     return await operating_evidence.retrieve_operating_evidence(
@@ -167,6 +169,8 @@ async def _retrieve_operating_evidence(
         provider=provider,
         args=args,
         metadata=metadata,
+        fiscal_years=fiscal_years,
+        availability_mode=availability_mode,
         context=context,
     )
 

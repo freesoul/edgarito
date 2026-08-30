@@ -105,6 +105,9 @@ from edgarito.services.export import (
 from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
+from edgarito.services.forecasting._fcff.driver_based import (
+    DriverBasedFcffForecastService,
+)
 from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.forward_estimates import (
     ForwardRevenueEstimateService,
@@ -114,6 +117,7 @@ from edgarito.services.forecasting.multistage import (
 )
 from edgarito.services.forecasting.orchestration import (
     DriverBasedForecastIncompleteError,
+    FcffForecastOrchestrationService,
 )
 from edgarito.services.operating.contracts import (
     OperatingForecastQualityError,
@@ -868,6 +872,9 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
     OperatingForecastPipelineService = _resolve_valuation_collaborator(
         context, "OperatingForecastPipelineService"
     )
+    FcffForecastOrchestrationService = _resolve_valuation_collaborator(
+        context, "FcffForecastOrchestrationService"
+    )
     ForwardRevenueEstimateService = _resolve_valuation_collaborator(
         context, "ForwardRevenueEstimateService"
     )
@@ -978,11 +985,6 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
             archetype,
             "both" if profile.relative_valuation.enabled else "fcff-dcf",
         )
-    if (
-        fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
-        and selected_model in {"fcff-dcf", "both"}
-    ):
-        raise DriverBasedForecastIncompleteError()
     if getattr(args, "excel_output", None) is not None and selected_model not in {
         "fcff-dcf",
         "comparables",
@@ -1027,12 +1029,14 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
     terminal_method = construction.terminal_method
     cash_flow_timing = construction.cash_flow_timing
     forecast_service = construction.forecast_service
+    driver_service = getattr(construction, "driver_service", None)
     bridge_resolver = construction.bridge_resolver
     financials = construction.financials
     valuation_date = construction.valuation_date
     forecast = construction.forecast
     seed_forecast = construction.seed_forecast
     guidance_overlay = construction.guidance_overlay
+    driver_target_years = getattr(construction, "driver_target_years", ())
     additional_warnings.extend(construction.warnings)
     operating_evidence = None
     operating_audit = OperatingForecastQualityResult(
@@ -1116,6 +1120,14 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                     provider=provider,
                     args=args,
                     metadata=operating_metadata,
+                    fiscal_years=driver_target_years,
+                    **(
+                        {
+                            "availability_mode": ObservationAvailabilityMode.CURRENT_SNAPSHOT
+                        }
+                        if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
+                        else {}
+                    ),
                     context=context,
                 )
             additional_warnings.extend(operating_warnings)
@@ -1155,6 +1167,26 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                 )
         else:
             operating_evidence = None
+    if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED:
+        # Explicit driver output is composed once, after discovery, and is
+        # never passed through the normalized/adaptive/reconciliation paths.
+        driver_result = call_with_context(
+            FcffForecastOrchestrationService(
+                fcff_service=forecast_service,
+                driver_based_service=driver_service,
+            ).forecast,
+            financials,
+            forecast_parameters,
+            method=FcffForecastMethod.DRIVER_BASED,
+            evidence=operating_evidence,
+            as_of=valuation_date,
+            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            context=context,
+        )
+        forecast = driver_result.forecast
+        seed_forecast = forecast
+        forecast_parameters = forecast.parameters
+        additional_warnings.extend(driver_result.warnings)
     bridge_configuration = profile.valuation.capital_bridge
     has_cli_debt_bridge = any(
         value is not None for value in (args.net_debt, args.gross_debt, args.cash)
@@ -1329,12 +1361,14 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
             "terminal_return_on_invested_capital": terminal_roic.value,
         }
     )
-    use_multistage = args.projection_method == "adaptive" or (
+    use_multistage = fcff_forecast_method != FcffForecastMethod.DRIVER_BASED and (
+        args.projection_method == "adaptive" or (
         args.projection_method is None
         and multistage_configuration.enabled
         and (
             terminal_method == TerminalValueMethod.PERPETUITY_GROWTH
             or multistage_configuration.stable_growth_rate is not None
+        )
         )
     )
     asset_life_resolution = None
@@ -1523,7 +1557,10 @@ async def _run_valuation(args: argparse.Namespace, *, context=None) -> int:
                 )
             )
         multistage_plan = multistage_plan.model_copy(update=plan_updates)
-    elif operating_evidence is not None:
+    elif (
+        operating_evidence is not None
+        and fcff_forecast_method != FcffForecastMethod.DRIVER_BASED
+    ):
         try:
             pipeline_result = OperatingForecastPipelineService(
                 fcff_service=forecast_service,

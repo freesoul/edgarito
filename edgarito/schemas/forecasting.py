@@ -3,7 +3,7 @@
 import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import (
     AliasChoices,
@@ -28,6 +28,7 @@ from edgarito.schemas.identifiers import SecurityIdentifiers as _SecurityIdentif
 
 class ForecastAssumptionSource(str, Enum):
     EXPLICIT = "explicit"
+    DRIVER_BASED = "driver_based"
     MANAGEMENT_GUIDANCE = "management_guidance"
     TRAILING_AVERAGE = "trailing_average"
     FORWARD_EVIDENCE = "forward_evidence"
@@ -86,9 +87,8 @@ class _CaseInsensitiveStrEnum(str, Enum):
 class FcffForecastMethod(_CaseInsensitiveStrEnum):
     """Available FCFF planning methods.
 
-    ``driver_based`` is intentionally a planning value for this foundation
-    step.  Its execution remains explicitly unsupported by the orchestration
-    service rather than silently falling back to another method.
+    ``driver_based`` is the explicit operating-economics execution path.  AUTO
+    intentionally never resolves to it; callers must request it explicitly.
     """
 
     NORMALIZED = "normalized"
@@ -1190,6 +1190,7 @@ class FcffForecast(BaseModel):
     seed_type: ForecastSeedType = ForecastSeedType.FISCAL_YEAR
     seed_methodology: str = "Latest complete fiscal year"
     seed_period_end: Optional[datetime.date] = None
+    fiscal_year_end: Optional[datetime.date] = None
     current_fiscal_year: Optional[int] = None
     actual_quarters: int = Field(default=0, ge=0, le=4)
     financial_snapshot_retrieved_at: Optional[datetime.datetime] = None
@@ -1296,6 +1297,232 @@ class FcffForecast(BaseModel):
     @property
     def transition_start_year(self) -> Optional[int]:
         return self.operating_transition_start_year
+
+
+class DriverBasedForecastReadiness(BaseModel):
+    """Immutable, non-scoring gate for an explicit driver-based forecast.
+
+    Completeness and contract failures are blocking.  Confidence and model
+    aggressiveness are deliberately represented as warnings so a caller can
+    distinguish an incomplete forecast from a complete but uncertain one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ready: bool = False
+    target_years: tuple[int, ...] = ()
+    missing_metrics_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    missing_metric_years: tuple[str, ...] = ()
+    identity_errors: tuple[str, ...] = ()
+    unit_errors: tuple[str, ...] = ()
+    sequence_errors: tuple[str, ...] = ()
+    seed_errors: tuple[str, ...] = ()
+    canonical_errors: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @field_validator("target_years")
+    @classmethod
+    def validate_target_years(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if value and tuple(sorted(value)) != value:
+            raise ValueError("Driver-based readiness target years must be sorted")
+        if len(value) != len(set(value)):
+            raise ValueError("Driver-based readiness target years must be unique")
+        return value
+
+    @field_validator("missing_metrics_by_year", mode="before")
+    @classmethod
+    def normalize_missing_metrics(cls, value):
+        if value is None:
+            return {}
+        return {
+            int(year): (
+                ()
+                if metrics is None
+                else
+                (metrics.strip(),)
+                if isinstance(metrics, str) and metrics.strip()
+                else tuple(
+                    str(item).strip() for item in metrics if str(item).strip()
+                )
+            )
+            for year, metrics in value.items()
+        }
+
+    @field_validator(
+        "missing_metric_years",
+        "identity_errors",
+        "unit_errors",
+        "sequence_errors",
+        "seed_errors",
+        "canonical_errors",
+        "diagnostics",
+        "warnings",
+        mode="before",
+    )
+    @classmethod
+    def normalize_readiness_text(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value.strip(),) if value.strip() else ()
+        return tuple(str(item).strip() for item in value if str(item).strip())
+
+    @model_validator(mode="after")
+    def derive_ready(self) -> "DriverBasedForecastReadiness":
+        missing_labels = tuple(
+            f"FY{year} {metric}"
+            for year, metrics in self.missing_metrics_by_year.items()
+            for metric in metrics
+        )
+        object.__setattr__(self, "missing_metric_years", missing_labels)
+        blocking = (
+            bool(self.missing_metrics_by_year)
+            or bool(self.identity_errors)
+            or bool(self.unit_errors)
+            or bool(self.sequence_errors)
+            or bool(self.seed_errors)
+            or bool(self.canonical_errors)
+        )
+        object.__setattr__(self, "ready", not blocking)
+        return self
+
+    @property
+    def missing_metrics(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                metric
+                for metrics in self.missing_metrics_by_year.values()
+                for metric in metrics
+            )
+        )
+
+    @property
+    def missing_years(self) -> tuple[int, ...]:
+        return tuple(self.missing_metrics_by_year)
+
+    @property
+    def blocking_errors(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    *self.missing_metric_years,
+                    *self.identity_errors,
+                    *self.unit_errors,
+                    *self.sequence_errors,
+                    *self.seed_errors,
+                    *self.canonical_errors,
+                )
+            )
+        )
+
+
+class DriverBasedFcffForecastResult(BaseModel):
+    """Complete driver forecast plus its operating and validation artifacts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    forecast: FcffForecast
+    company_operating_forecast: Any = None
+    company_operating_economics: Any = None
+    readiness: DriverBasedForecastReadiness
+    validation: Any = None
+    validation_summary: dict[str, Any] = Field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+    audit: tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def restore_nested_contracts(cls, value):
+        """Restore typed nested artifacts for JSON round trips."""
+
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        if isinstance(payload.get("company_operating_forecast"), Mapping):
+            from edgarito.schemas.operating import CompanyOperatingForecast
+
+            payload["company_operating_forecast"] = CompanyOperatingForecast.model_validate(
+                payload["company_operating_forecast"]
+            )
+        if isinstance(payload.get("company_operating_economics"), Mapping):
+            from edgarito.schemas.operating import CompanyOperatingEconomicsForecast
+
+            payload["company_operating_economics"] = CompanyOperatingEconomicsForecast.model_validate(
+                payload["company_operating_economics"]
+            )
+        if isinstance(payload.get("validation"), Mapping):
+            from edgarito.services.forecasting.validation.contracts import (
+                ForecastValidationResult,
+            )
+
+            payload["validation"] = ForecastValidationResult.model_validate(
+                payload["validation"]
+            )
+        return payload
+
+    @field_validator("warnings", "audit", mode="before")
+    @classmethod
+    def normalize_result_text(cls, value):
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        return tuple(str(item).strip() for item in value if str(item).strip())
+
+    @property
+    def fcff_forecast(self) -> FcffForecast:
+        return self.forecast
+
+    @property
+    def canonical_forecast(self) -> FcffForecast:
+        return self.forecast
+
+    @property
+    def observations(self) -> list["FcffForecastObservation"]:
+        """Compatibility view for callers that expect a forecast artifact."""
+
+        return self.forecast.observations
+
+    @property
+    def method(self) -> str:
+        return self.forecast.method
+
+    @property
+    def unit(self) -> str:
+        return self.forecast.unit
+
+    @property
+    def parameters(self) -> FcffForecastParameters:
+        return self.forecast.parameters
+
+    @property
+    def base_revenue(self) -> Decimal:
+        return self.forecast.base_revenue
+
+    @property
+    def base_operating_working_capital(self) -> Decimal:
+        return self.forecast.base_operating_working_capital
+
+    @property
+    def seed_type(self) -> ForecastSeedType:
+        return self.forecast.seed_type
+
+    @property
+    def economics(self) -> Any:
+        return self.company_operating_economics
+
+    @property
+    def operating_forecast(self) -> Any:
+        return self.company_operating_forecast
+
+    @property
+    def validation_result(self) -> Any:
+        return self.validation
+
+    @property
+    def audit_records(self) -> tuple[str, ...]:
+        return self.audit
 
 
 class AdaptiveMultistagePlan(BaseModel):

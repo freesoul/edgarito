@@ -24,11 +24,14 @@ from edgarito.cli.use_cases.forward_assumptions import (
 )
 from edgarito.config.valuation import ForecastValuationProfile
 from edgarito.enums.market import Market
-from edgarito.schemas.forecasting import FcffForecastParameters
+from edgarito.schemas.forecasting import FcffForecastMethod, FcffForecastParameters
 from edgarito.schemas.guidance.management import GuidanceOverlayResult
 from edgarito.schemas.normalization.financials import FinancialConcept
 from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
+)
+from edgarito.services.forecasting._fcff.driver_based import (
+    DriverBasedFcffForecastService,
 )
 from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.valuation import (
@@ -46,7 +49,7 @@ class ForecastConstructionResult:
     terminal_configuration: object
     terminal_method: TerminalValueMethod
     cash_flow_timing: CashFlowTiming
-    forecast_service: FcffForecastService
+    forecast_service: object
     bridge_resolver: FcffDcfCapitalBridgeResolver
     financials: object
     valuation_date: datetime.date
@@ -54,6 +57,8 @@ class ForecastConstructionResult:
     seed_forecast: object
     guidance_overlay: GuidanceOverlayResult | None
     warnings: tuple[str, ...]
+    driver_service: object | None = None
+    driver_target_years: tuple[int, ...] = ()
 
 
 def _resolve(dependencies, name: str, default):
@@ -87,6 +92,11 @@ async def construct_fcff_forecast(
     forecast_service_type = _resolve(
         dependencies, "FcffForecastService", FcffForecastService
     )
+    driver_service_type = _resolve(
+        dependencies,
+        "DriverBasedFcffForecastService",
+        DriverBasedFcffForecastService,
+    )
     bridge_resolver_type = _resolve(
         dependencies,
         "FcffDcfCapitalBridgeResolver",
@@ -116,10 +126,26 @@ async def construct_fcff_forecast(
         if args.cash_flow_timing is not None
         else profile.valuation.cash_flow_timing
     )
-    forecast_service = forecast_service_type()
+    requested_method = FcffForecastMethod(
+        getattr(args, "fcff_forecast_method", None)
+        or FcffForecastMethod.AUTO.value
+    )
+    driver_service = (
+        driver_service_type()
+        if requested_method == FcffForecastMethod.DRIVER_BASED
+        else None
+    )
+    normalized_forecast_service = (
+        None if driver_service is not None else forecast_service_type()
+    )
+    forecast_service = driver_service or normalized_forecast_service
     bridge_resolver = bridge_resolver_type()
     required_concepts = (
-        forecast_service.required_concepts()
+        (
+            driver_service.required_concepts()
+            if driver_service is not None
+            else normalized_forecast_service.required_concepts()
+        )
         | bridge_resolver.required_concepts()
         | profile_builder_type.required_concepts()
         | {
@@ -127,19 +153,58 @@ async def construct_fcff_forecast(
             FinancialConcept.STOCKHOLDERS_EQUITY,
         }
     )
-    with call_with_context(
-        valuation_step,
-        "retrieving financial data",
-        context=dependencies,
-    ):
-        financials = await call_with_context(
-            retrieve,
-            args,
-            None,
-            required_concepts,
+    try:
+        with call_with_context(
+            valuation_step,
+            "retrieving financial data",
             context=dependencies,
+        ):
+            financials = await call_with_context(
+                retrieve,
+                args,
+                None,
+                required_concepts,
+                context=dependencies,
+            )
+    except Exception as exc:
+        if requested_method != FcffForecastMethod.DRIVER_BASED:
+            raise
+        from edgarito.schemas.forecasting import DriverBasedForecastReadiness
+        from edgarito.services.forecasting.orchestration import (
+            DriverBasedForecastIncompleteError,
         )
+
+        raise DriverBasedForecastIncompleteError(
+            readiness=DriverBasedForecastReadiness(
+                seed_errors=(f"Normalized financial context unavailable: {exc}",),
+                diagnostics=(
+                    "Driver-based activation requires a real FY/TTM/YTD context "
+                    "before DCF construction",
+                ),
+            )
+        ) from exc
     valuation_date = datetime.date.today()
+    driver_target_years: tuple[int, ...] = ()
+    if requested_method == FcffForecastMethod.DRIVER_BASED:
+        try:
+            context_builder = getattr(forecast_service, "build_context", None)
+            if context_builder is None and normalized_forecast_service is not None:
+                context_builder = normalized_forecast_service.build_context
+            if context_builder is None:
+                raise ValueError("Driver-based service does not expose seed context")
+            context_build = context_builder(
+                financials,
+                forecast_parameters,
+                as_of=valuation_date,
+                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            )
+            selected_context = context_build.context
+            first_year = selected_context.current_fiscal_year or selected_context.base.fiscal_year + 1
+            driver_target_years = tuple(
+                first_year + index for index in range(forecast_parameters.forecast_years)
+            )
+        except Exception as exc:
+            warnings.append(f"Driver-based context preview unavailable: {exc}")
     warnings.extend(
         call_with_context(
             financial_snapshot_warnings,
@@ -153,14 +218,16 @@ async def construct_fcff_forecast(
         "building historical forecast",
         context=dependencies,
     ):
-        forecast = forecast_service.forecast(
-            financials,
-            forecast_parameters,
-            as_of=valuation_date,
-            availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
-        )
+        forecast = None
+        if requested_method != FcffForecastMethod.DRIVER_BASED:
+            forecast = forecast_service.forecast(
+                financials,
+                forecast_parameters,
+                as_of=valuation_date,
+                availability_mode=ObservationAvailabilityMode.CURRENT_SNAPSHOT,
+            )
     guidance_overlay: GuidanceOverlayResult | None = None
-    if openai_api_key and sec_backed_evidence_allowed:
+    if openai_api_key and sec_backed_evidence_allowed and requested_method != FcffForecastMethod.DRIVER_BASED:
         original_forecast_parameters = forecast_parameters
         try:
             with call_with_context(
@@ -212,6 +279,9 @@ async def construct_fcff_forecast(
         terminal_method=terminal_method,
         cash_flow_timing=cash_flow_timing,
         forecast_service=forecast_service,
+        driver_service=(
+            driver_service if requested_method == FcffForecastMethod.DRIVER_BASED else None
+        ),
         bridge_resolver=bridge_resolver,
         financials=financials,
         valuation_date=valuation_date,
@@ -219,6 +289,7 @@ async def construct_fcff_forecast(
         seed_forecast=forecast,
         guidance_overlay=guidance_overlay,
         warnings=tuple(warnings),
+        driver_target_years=driver_target_years,
     )
 
 

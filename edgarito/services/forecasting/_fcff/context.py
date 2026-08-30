@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterable
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -19,6 +20,149 @@ from edgarito.services.forecasting._fcff.contracts import (
     _HistoricalDrivers,
 )
 from edgarito.services.metrics.calculator import operating_working_capital_value
+
+
+@dataclass(frozen=True)
+class ForecastContextBuild:
+    """Available normalized facts and the selected canonical seed context.
+
+    This is intentionally an economics-neutral boundary.  In particular, it
+    never calls the FCFF future-driver path; consumers may use the historical
+    periods and seed metadata without making a normalized forecast.
+    """
+
+    financials: NormalizedCompanyFinancials
+    annual_periods: tuple[_HistoricalDrivers, ...]
+    context: _ForecastContext
+
+
+def available_financials(
+    financials: NormalizedCompanyFinancials,
+    *,
+    as_of: datetime.date | None = None,
+    availability_mode: Any = "point_in_time",
+    availability_service: Any | None = None,
+) -> NormalizedCompanyFinancials:
+    """Return a point-in-time copy using the existing availability policy."""
+
+    if as_of is None:
+        return financials
+    if availability_service is None:
+        from edgarito.services.financials.availability import (
+            FinancialObservationAvailabilityService,
+        )
+
+        availability_service = FinancialObservationAvailabilityService()
+    return financials.model_copy(
+        update={
+            "observations": [
+                item
+                for item in financials.observations
+                if availability_service.is_available(
+                    item,
+                    as_of=as_of,
+                    mode=availability_mode,
+                    snapshot_retrieved_at=financials.retrieved_at,
+                )
+            ]
+        }
+    )
+
+
+class _ContextOperations:
+    """Small callback object used by the provider-neutral context builder."""
+
+    @staticmethod
+    def _complete_quarterly_periods(financials):
+        return complete_quarterly_periods(financials, _DEFAULT_CORE_REQUIRED_CONCEPTS)
+
+    @staticmethod
+    def _forecast_seed_type(name):
+        from edgarito.schemas.forecasting import ForecastSeedType
+
+        return {
+            "fiscal_year": ForecastSeedType.FISCAL_YEAR,
+            "ttm": ForecastSeedType.TTM,
+            "ytd_plus_forecast": ForecastSeedType.YTD_PLUS_FORECAST,
+            "ytd_run_rate": ForecastSeedType.YTD_RUN_RATE,
+        }[name]
+
+    @staticmethod
+    def _fiscal_year_end(year, annual_end):
+        return fiscal_year_end(year, annual_end)
+
+    @staticmethod
+    def _future_date(base_date, years):
+        return future_date(base_date, years)
+
+    @staticmethod
+    def _quarter_index(period):
+        return quarter_index(period)
+
+    @staticmethod
+    def _aggregate_quarters(periods):
+        return aggregate_quarters(periods)
+
+    @staticmethod
+    def _annualize_ytd(actual, quarter_count, fiscal_end):
+        return annualize_ytd(actual, quarter_count, fiscal_end)
+
+
+_DEFAULT_CORE_REQUIRED_CONCEPTS = frozenset(
+    {
+        FinancialConcept.REVENUE,
+        FinancialConcept.OPERATING_INCOME,
+        FinancialConcept.PRETAX_INCOME,
+        FinancialConcept.INCOME_TAX_EXPENSE,
+        FinancialConcept.DEPRECIATION_AND_AMORTIZATION,
+        FinancialConcept.CAPITAL_EXPENDITURES,
+    }
+)
+
+
+def build_forecast_context(
+    financials: NormalizedCompanyFinancials,
+    parameters: Any,
+    *,
+    as_of: datetime.date | None = None,
+    availability_mode: Any = "point_in_time",
+    availability_service: Any | None = None,
+    core_required_concepts: Iterable[FinancialConcept] | None = None,
+) -> ForecastContextBuild:
+    """Select FY/TTM/YTD context without inferring any future ratio.
+
+    The selection logic is shared with :class:`FcffForecastService`; the only
+    operation performed here is filtering available facts and choosing the
+    historical seed.  Missing annual inputs retain the established diagnostic
+    message and are surfaced to explicit driver callers as a seed error.
+    """
+
+    if not isinstance(financials, NormalizedCompanyFinancials):
+        financials = NormalizedCompanyFinancials.model_validate(financials)
+    filtered = available_financials(
+        financials,
+        as_of=as_of,
+        availability_mode=availability_mode,
+        availability_service=availability_service,
+    )
+    required = frozenset(core_required_concepts or _DEFAULT_CORE_REQUIRED_CONCEPTS)
+    annual = complete_annual_periods(filtered, required)
+    if not annual:
+        raise_missing_inputs(filtered, required)
+    selected = forecast_context(
+        _ContextOperations(),
+        filtered,
+        annual,
+        parameters,
+        as_of,
+    )
+    return ForecastContextBuild(filtered, tuple(annual), selected)
+
+
+# Descriptive aliases for callers that want to make the seed-only contract
+# explicit.  All aliases execute the same FY/TTM/YTD selection code.
+build_seed_context = build_forecast_context
+select_forecast_context = build_forecast_context
 
 
 def forecast_context(

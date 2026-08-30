@@ -479,6 +479,9 @@ def revenue_anchor_source(forecast: FcffForecast, fiscal_year: int) -> str:
 def driver_method(source: str, driver_label: str, stage: str | None = None) -> str:
     method_by_source = {
         ForecastAssumptionSource.EXPLICIT.value: "explicit forecast driver",
+        ForecastAssumptionSource.DRIVER_BASED.value: (
+            "independent operating-economics forecast driver"
+        ),
         ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value: (
             "management guidance forecast driver"
         ),
@@ -548,6 +551,7 @@ def source_confidence(source: str) -> str:
     if source in {
         ForecastAssumptionSource.EXPLICIT.value,
         ForecastAssumptionSource.MANAGEMENT_GUIDANCE.value,
+        ForecastAssumptionSource.DRIVER_BASED.value,
         "historical_seed",
         "reported",
         "prior_forecast",

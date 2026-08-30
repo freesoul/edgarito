@@ -78,6 +78,9 @@ class DriverBasedCanonicalFcffAdapter:
             previous_revenue = (
                 economics.consolidated_revenue[index - 1]
                 if index > 0
+                else template.ytd_anchor.latest_annual_revenue
+                if template is not None
+                and template.ytd_anchor is not None
                 else template.base_revenue
                 if template is not None
                 else base_revenue
@@ -112,6 +115,13 @@ class DriverBasedCanonicalFcffAdapter:
                 "change_in_operating_working_capital": delta,
                 "fcff": fcff,
             }
+            output_unit = (
+                source.unit
+                if source is not None
+                else template.unit
+                if template is not None
+                else economics.unit
+            )
             result.append(
                 FcffForecastObservation(
                     forecast_year=source.forecast_year if source else index + 1,
@@ -131,7 +141,7 @@ class DriverBasedCanonicalFcffAdapter:
                     operating_working_capital=owc,
                     change_in_operating_working_capital=delta,
                     fcff=fcff,
-                    unit=source.unit if source is not None else economics.unit,
+                    unit=output_unit,
                     cell_audits=self._audits(economics, year, values),
                 )
             )
@@ -184,6 +194,8 @@ class DriverBasedCanonicalFcffAdapter:
             if template is not None and template.ytd_anchor is not None
             else fiscal_year_end
             if fiscal_year_end is not None
+            else template.fiscal_year_end
+            if template is not None and template.fiscal_year_end is not None
             else template.base_period_end
             if template is not None
             else base_period_end
@@ -265,7 +277,12 @@ class DriverBasedCanonicalFcffAdapter:
         actual_ytd_nopat = (
             anchor.actual_operating_income * (Decimal(1) - anchor.actual_tax_rate / _HUNDRED)
             if anchor.actual_tax_rate is not None
-            else anchor.actual_operating_income - anchor.actual_income_tax_expense
+            # Keep the fallback identical to FcffDcfService's read-only
+            # validation: when actual tax is unavailable, use the resolved
+            # first-year anchor rate rather than reconstructing NOPAT from a
+            # potentially differently signed tax expense.
+            else anchor.actual_operating_income
+            * (Decimal(1) - anchor.tax_rate / _HUNDRED)
         )
         fcff = (
             first.nopat

@@ -42,6 +42,7 @@ _DRIVER_BASED_COMPANY_METRICS = (
 )
 _DRIVER_BASED_DRIVER_METRICS = frozenset(
     {
+        ForecastMetric.REVENUE,
         ForecastMetric.R_AND_D,
         ForecastMetric.SG_AND_A,
         ForecastMetric.TAX,
@@ -182,8 +183,9 @@ class FcffForecastPlanService:
             )
         if resolved == FcffForecastMethod.DRIVER_BASED:
             warnings.append(
-                "driver_based is representable in the plan but execution is not "
-                "implemented"
+                "driver_based executes independent operating economics; the legacy "
+                "consolidated FcffForecastService future fallback is not used. "
+                "Deterministic per-metric normalized assumptions remain auditable"
             )
         if normalized_overrides:
             audit.append(f"manual_override_count={len(normalized_overrides)}")

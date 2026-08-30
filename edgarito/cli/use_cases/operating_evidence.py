@@ -41,6 +41,8 @@ async def retrieve_operating_evidence(
     provider=None,
     args: argparse.Namespace | None = None,
     metadata: Mapping[str, object] | None = None,
+    fiscal_years=None,
+    availability_mode=None,
     context=None,
 ) -> tuple[object | None, tuple[str, ...]]:
     provider = (
@@ -63,11 +65,17 @@ async def retrieve_operating_evidence(
             "financials": financials,
             "company_id": financials.company_id,
             "as_of": as_of,
-            "fiscal_years": tuple(item.fiscal_year for item in forecast.observations),
+            "fiscal_years": (
+                tuple(item.fiscal_year for item in forecast.observations)
+                if forecast is not None
+                else tuple(fiscal_years or ())
+            ),
             "industry": getattr(financials, "industry", None),
             "business_archetype": getattr(financials, "business_archetype", None),
             **(metadata or {}),
         }
+        if availability_mode is not None:
+            resolver_kwargs["availability_mode"] = availability_mode
         if args is not None:
             resolver_kwargs.update(
                 {

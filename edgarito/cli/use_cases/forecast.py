@@ -7,7 +7,10 @@ import datetime
 
 from edgarito.cli.presentation.console import ForecastConsolePresenter
 from edgarito.cli.use_cases.context import call_with_context, dependency
-from edgarito.cli.use_cases.financial_retrieval import retrieve_financials
+from edgarito.cli.use_cases.financial_retrieval import (
+    merge_normalized_financials,
+    retrieve_financials,
+)
 from edgarito.config.valuation import (
     ForecastMethod,
     ValuationProfileLoader,
@@ -18,6 +21,10 @@ from edgarito.schemas.forecasting import (
     FcffForecastMethod,
     FcffForecastParameters,
     SimplifiedFcfForecastParameters,
+)
+from edgarito.services.financials.availability import ObservationAvailabilityMode
+from edgarito.services.forecasting._fcff.driver_based import (
+    DriverBasedFcffForecastService,
 )
 from edgarito.services.forecasting._fcff.service import FcffForecastService
 from edgarito.services.forecasting.free_cash_flow import (
@@ -108,6 +115,17 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
         getattr(args, "fcff_forecast_method", None)
         or FcffForecastMethod.NORMALIZED.value
     )
+    driver_as_of = (
+        datetime.date.today()
+        if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
+        else None
+    )
+    driver_availability_mode = ObservationAvailabilityMode.CURRENT_SNAPSHOT
+    driver_service_type = dependency(
+        context,
+        "DriverBasedFcffForecastService",
+        DriverBasedFcffForecastService,
+    )
     fcff_driver_arguments = (
         args.operating_margin,
         args.tax_rate,
@@ -161,17 +179,85 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
             configured,
             context=context,
         )
-        service = fcff_service_type()
-    if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED:
-        raise DriverBasedForecastIncompleteError()
-    retrieve = dependency(context, "_retrieve_financials", retrieve_financials)
-    financials = await call_with_context(
-        retrieve,
-        args,
-        Granularity.ANNUAL,
-        service.required_concepts(),
-        context=context,
+        service = (
+            driver_service_type()
+            if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
+            else fcff_service_type()
+        )
+    driver_service = (
+        service if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED else None
     )
+    merge_financials = dependency(
+        context,
+        "_merge_normalized_financials",
+        merge_normalized_financials,
+    )
+    retrieve = dependency(context, "_retrieve_financials", retrieve_financials)
+    try:
+        if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED:
+            annual_financials = await call_with_context(
+                retrieve,
+                args,
+                Granularity.ANNUAL,
+                service.required_concepts(),
+                context=context,
+            )
+            quarterly_financials = await call_with_context(
+                retrieve,
+                args,
+                Granularity.QUARTERLY,
+                service.required_concepts(),
+                context=context,
+            )
+            financials = call_with_context(
+                merge_financials,
+                annual_financials,
+                quarterly_financials,
+                as_of=driver_as_of,
+                availability_mode=driver_availability_mode,
+                context=context,
+            )
+        else:
+            financials = await call_with_context(
+                retrieve,
+                args,
+                Granularity.ANNUAL,
+                service.required_concepts(),
+                context=context,
+            )
+    except Exception as exc:
+        if fcff_forecast_method != FcffForecastMethod.DRIVER_BASED:
+            raise
+        from edgarito.schemas.forecasting import DriverBasedForecastReadiness
+
+        raise DriverBasedForecastIncompleteError(
+            readiness=DriverBasedForecastReadiness(
+                seed_errors=(f"Normalized financial context unavailable: {exc}",),
+                diagnostics=(
+                    "Driver-based activation requires a real FY/TTM/YTD context "
+                    "before operating evidence can be evaluated",
+                ),
+            )
+        ) from exc
+    driver_target_years: tuple[int, ...] = ()
+    if driver_service is not None:
+        try:
+            context_build = driver_service.build_context(
+                financials,
+                parameters,
+                as_of=driver_as_of,
+                availability_mode=driver_availability_mode,
+            )
+            selected_context = context_build.context
+            first_year = selected_context.current_fiscal_year or selected_context.base.fiscal_year + 1
+            driver_target_years = tuple(
+                first_year + index for index in range(parameters.forecast_years)
+            )
+        except Exception:
+            # The driver service will convert a missing/invalid seed into its
+            # structured readiness error. Do not ask the legacy consolidated
+            # FCFF service for a replacement context or target path here.
+            driver_target_years = ()
     if fcff_forecast_method == FcffForecastMethod.NORMALIZED:
         forecast = service.forecast(financials, parameters)
     else:
@@ -179,8 +265,16 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
             evidence = await _retrieve_hybrid_evidence(
                 args,
                 financials,
-                service,
+                None if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED else service,
                 parameters,
+                fiscal_years=driver_target_years,
+                as_of=driver_as_of,
+                availability_mode=driver_availability_mode,
+                baseline_service=(
+                    None
+                    if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED
+                    else service
+                ),
                 context=context,
             )
             orchestration_type = dependency(
@@ -188,36 +282,61 @@ async def run_forecast(args: argparse.Namespace, *, context=None) -> int:
                 "FcffForecastOrchestrationService",
                 FcffForecastOrchestrationService,
             )
-            result = orchestration_type(fcff_service=service).forecast(
+            result = orchestration_type(
+                fcff_service=service,
+                driver_based_service=driver_service,
+            ).forecast(
                 financials,
                 parameters,
                 method=fcff_forecast_method,
                 evidence=evidence,
+                as_of=driver_as_of,
+                availability_mode=driver_availability_mode,
             )
             forecast = result.forecast
         except (
             OperatingForecastQualityError,
             OperatingEvidenceUnavailableError,
         ) as exc:
-            if fcff_forecast_method != FcffForecastMethod.AUTO:
+            if fcff_forecast_method == FcffForecastMethod.DRIVER_BASED:
+                # Let the dedicated service produce its structured readiness
+                # error rather than exposing the old generic provider guard.
+                orchestration_type = dependency(
+                    context,
+                    "FcffForecastOrchestrationService",
+                    FcffForecastOrchestrationService,
+                )
+                result = orchestration_type(
+                    fcff_service=service,
+                    driver_based_service=driver_service,
+                ).forecast(
+                    financials,
+                    parameters,
+                    method=fcff_forecast_method,
+                    as_of=driver_as_of,
+                    availability_mode=driver_availability_mode,
+                )
+                forecast = result.forecast
+            elif fcff_forecast_method != FcffForecastMethod.AUTO:
                 raise
-            orchestration_type = dependency(
-                context,
-                "FcffForecastOrchestrationService",
-                FcffForecastOrchestrationService,
-            )
-            fallback_quality = (
-                exc.result
-                if isinstance(exc, OperatingForecastQualityError)
-                else {"accepted": False, "reason": str(exc)}
-            )
-            result = orchestration_type(fcff_service=service).forecast(
-                financials,
-                parameters,
-                method=FcffForecastMethod.AUTO,
-                operating_quality=fallback_quality,
-            )
-            forecast = result.forecast
+            else:
+                orchestration_type = dependency(
+                    context,
+                    "FcffForecastOrchestrationService",
+                    FcffForecastOrchestrationService,
+                )
+                fallback_quality = (
+                    exc.result
+                    if isinstance(exc, OperatingForecastQualityError)
+                    else {"accepted": False, "reason": str(exc)}
+                )
+                result = orchestration_type(fcff_service=service).forecast(
+                    financials,
+                    parameters,
+                    method=FcffForecastMethod.AUTO,
+                    operating_quality=fallback_quality,
+                )
+                forecast = result.forecast
     print(presenter_type().render(forecast))
     return 0
 
@@ -228,6 +347,10 @@ async def _retrieve_hybrid_evidence(
     service,
     parameters,
     *,
+    fiscal_years: tuple[int, ...] = (),
+    baseline_service=None,
+    as_of: datetime.date | None = None,
+    availability_mode: ObservationAvailabilityMode | None = None,
     context=None,
 ):
     """Retrieve explicit hybrid evidence without changing normalized defaults."""
@@ -248,7 +371,14 @@ async def _retrieve_hybrid_evidence(
     provider_factory = dependency(
         context, "_operating_evidence_provider", operating_evidence_provider
     )
-    baseline = service.forecast(financials, parameters)
+    # AUTO/HYBRID callers provide the existing normalized baseline. Explicit
+    # DRIVER_BASED callers deliberately pass neither a baseline nor a future
+    # normalized forecast; discovery receives only the seed-derived years.
+    baseline = (
+        (baseline_service or service).forecast(financials, parameters)
+        if baseline_service is not None or service is not None
+        else None
+    )
     market = market_for_args(args, context=context)
     async with call_with_context(
         provider_factory,
@@ -265,9 +395,11 @@ async def _retrieve_hybrid_evidence(
             retrieve_operating_evidence,
             financials,
             baseline,
-            datetime.date.today(),
+            as_of or datetime.date.today(),
             provider=provider,
             args=args,
+            fiscal_years=fiscal_years,
+            availability_mode=availability_mode,
             context=context,
         )
     if evidence is None:
@@ -345,12 +477,14 @@ _resolve_depreciable_asset_life_configuration = (
 _run_forecast = run_forecast
 _fcff_parameters = fcff_parameters
 _market_for_args = market_for_args
+_merge_normalized_financials = merge_normalized_financials
 
 
 __all__ = [
     "_fcff_parameters",
     "_load_selected_valuation_profile",
     "_market_for_args",
+    "_merge_normalized_financials",
     "_resolve_depreciable_asset_life_configuration",
     "_run_forecast",
     "fcff_parameters",

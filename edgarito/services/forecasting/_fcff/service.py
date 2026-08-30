@@ -43,6 +43,7 @@ from edgarito.services.forecasting._fcff.audit import (
 from edgarito.services.forecasting._fcff.context import (
     aggregate_quarters,
     annualize_ytd,
+    build_forecast_context,
     complete_annual_periods,
     complete_quarterly_periods,
     fiscal_year_end,
@@ -110,6 +111,27 @@ class FcffForecastService:
 
     def economic_identity_issues(self, forecast: FcffForecast) -> tuple[str, ...]:
         return economic_identity_issues(forecast)
+
+    def build_context(
+        self,
+        financials: NormalizedCompanyFinancials,
+        parameters: Optional[FcffForecastParameters] = None,
+        *,
+        as_of: datetime.date | None = None,
+        availability_mode: ObservationAvailabilityMode = (
+            ObservationAvailabilityMode.POINT_IN_TIME
+        ),
+    ):
+        """Expose FY/TTM/YTD seed selection without building future paths."""
+
+        return build_forecast_context(
+            financials,
+            parameters or FcffForecastParameters(),
+            as_of=as_of,
+            availability_mode=availability_mode,
+            availability_service=self._availability_service,
+            core_required_concepts=self._CORE_REQUIRED_CONCEPTS,
+        )
 
     def build_legacy_inconsistent_audits(
         self,
