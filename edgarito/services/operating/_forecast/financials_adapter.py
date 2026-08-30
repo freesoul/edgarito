@@ -7,6 +7,7 @@ ask an LLM, allocate company facts, or calculate a forecast.
 from __future__ import annotations
 
 import datetime
+from collections import defaultdict
 from typing import Any
 
 from edgarito.enums.edgar.period import FiscalPeriod
@@ -19,6 +20,10 @@ from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
 )
+from edgarito.services.metrics.calculator import (
+    operating_working_capital_formula,
+    operating_working_capital_value,
+)
 
 _CONCEPT_DRIVERS = {
     FinancialConcept.REVENUE: "revenue",
@@ -28,8 +33,11 @@ _CONCEPT_DRIVERS = {
     FinancialConcept.OPERATING_INCOME: "operating_income",
     FinancialConcept.PRETAX_INCOME: "pretax_income",
     FinancialConcept.INCOME_TAX_EXPENSE: "income_tax_expense",
+    FinancialConcept.DEPRECIATION_AND_AMORTIZATION: "depreciation_and_amortization",
+    FinancialConcept.CAPITAL_EXPENDITURES: "capital_expenditures",
 }
 _EXPENSES = {"r_and_d", "sg_and_a"}
+_POSITIVE_CASH_FLOW = {"depreciation_and_amortization", "capital_expenditures"}
 
 
 def normalized_company_financials_to_operating_observations(
@@ -45,16 +53,18 @@ def normalized_company_financials_to_operating_observations(
         financials = NormalizedCompanyFinancials.model_validate(financials)
     availability = availability_service or FinancialObservationAvailabilityService()
     result: list[OperatingDriverObservation] = []
+    by_period = defaultdict(dict)
     for item in financials.observations:
-        driver = _CONCEPT_DRIVERS.get(item.concept)
-        if driver is None:
-            continue
         if as_of is not None and not availability.is_available(
             item,
             as_of=as_of,
             mode=availability_mode,
             snapshot_retrieved_at=financials.retrieved_at,
         ):
+            continue
+        by_period[(item.granularity, item.fiscal_year, item.fiscal_period)][item.concept] = item
+        driver = _CONCEPT_DRIVERS.get(item.concept)
+        if driver is None:
             continue
         fiscal_period, period_key = _operating_period(item.fiscal_period)
         reference = EvidenceReference(
@@ -66,10 +76,10 @@ def normalized_company_financials_to_operating_observations(
                 f"Normalized {item.concept.value} from {item.source_concept}"
             ),
         )
-        # R&D and SG&A are canonical positive expense inputs. Tax expense is
-        # deliberately signed: a reported tax benefit is evidence and must be
-        # rejected by the strict effective-rate policy, not rewritten with abs.
-        value = abs(item.value) if driver in _EXPENSES else item.value
+        # R&D, SG&A, D&A, and CAPEX are positive operating inputs. Tax expense
+        # remains signed so effective-tax policy can reject a tax benefit rather
+        # than silently rewriting it.
+        value = abs(item.value) if driver in _EXPENSES | _POSITIVE_CASH_FLOW else item.value
         result.append(
             OperatingDriverObservation(
                 segment_id="company",
@@ -96,6 +106,45 @@ def normalized_company_financials_to_operating_observations(
                 provenance=reference,
                 evidence=reference,
                 source_provenance=(reference,),
+            )
+        )
+    for (_granularity, fiscal_year, _period), values in sorted(
+        by_period.items(), key=lambda item: (item[0][1], str(item[0][2]))
+    ):
+        owc = operating_working_capital_value(values)
+        if owc is None:
+            continue
+        anchor = next(iter(values.values()))
+        references = tuple(
+            EvidenceReference(
+                provider=item.provider,
+                accession=item.accession_number,
+                filing_date=item.filed,
+                document_name=item.form or item.source_concept,
+                supporting_text=f"Normalized operating working capital input {item.concept.value}",
+            )
+            for item in values.values()
+        )
+        fiscal_period, period_key = _operating_period(anchor.fiscal_period)
+        result.append(
+            OperatingDriverObservation(
+                segment_id="company",
+                driver_id="operating_working_capital",
+                fiscal_year=fiscal_year,
+                fiscal_period=fiscal_period,
+                period_key=period_key,
+                value=owc.value,
+                unit=owc.unit,
+                currency=owc.unit.upper() if len(owc.unit) == 3 else None,
+                scope="company",
+                scope_evidence="normalized operating working capital formula",
+                is_total=True,
+                origin="derived",
+                confidence="high" if all(item.filed is not None for item in values.values()) else "medium",
+                method=operating_working_capital_formula(values),
+                provenance=references[0] if references else None,
+                evidence=references[0] if references else None,
+                source_provenance=references,
             )
         )
     return tuple(

@@ -26,6 +26,7 @@ from pydantic import (
 )
 
 from edgarito.schemas.forecasting import ForecastAssumptionSource, ForecastProvenance
+from edgarito.schemas.guidance.management import MonetaryForecastConstraint
 from edgarito.schemas.operating_normalization import (
     _CONFIDENCE_LEVELS,
     _MAX_FISCAL_YEAR,
@@ -529,6 +530,19 @@ class OperatingDriverObservation(BaseModel):
             for value in (self.value, self.low, self.high)
         ):
             raise ValueError("R&D and SG&A observations cannot be negative")
+        if metric in {
+            "depreciation_and_amortization",
+            "depreciation",
+            "depreciation_to_revenue",
+            "capex",
+            "capital_expenditures",
+            "capital_expenditure",
+            "capex_to_revenue",
+        } and any(
+            value is not None and value < 0
+            for value in (self.value, self.low, self.high)
+        ):
+            raise ValueError("D&A and CAPEX observations cannot be negative")
         if self.low is not None and self.high is not None and self.low > self.high:
             raise ValueError("Operating observation low cannot exceed high")
         if self.value is not None:
@@ -786,6 +800,27 @@ class OperatingInvestmentProgram(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "OperatingInvestmentProgram":
+        if self._is_monetary_unit():
+            value = abs(self.value) if self.value is not None else None
+            low = self.low
+            high = self.high
+            if low is not None and high is not None and low < 0 < high:
+                raise ValueError(
+                    "Monetary investment program ranges with mixed signs are ambiguous"
+                )
+            if low is not None or high is not None:
+                normalized_bounds = [
+                    abs(item) for item in (low, high) if item is not None
+                ]
+                if low is not None and high is not None:
+                    low, high = min(normalized_bounds), max(normalized_bounds)
+                elif low is not None:
+                    low = normalized_bounds[0]
+                else:
+                    high = normalized_bounds[0]
+            object.__setattr__(self, "value", value)
+            object.__setattr__(self, "low", low)
+            object.__setattr__(self, "high", high)
         if self.value is None and self.low is None and self.high is None:
             # A program can be a qualitative first-party fact, such as an
             # announced facility, without a disclosed amount or capacity.
@@ -798,6 +833,15 @@ class OperatingInvestmentProgram(BaseModel):
             if self.high is not None and self.value > self.high:
                 raise ValueError("Investment program value cannot exceed high")
         return self
+
+    def _is_monetary_unit(self) -> bool:
+        normalized = self.unit.casefold().replace("$", "usd")
+        if any(token in normalized for token in ("unit", "capacity", "store", "user")):
+            return False
+        return self.currency is not None or any(
+            token in normalized
+            for token in ("usd", "eur", "gbp", "jpy", "cny", "cad", "aud", "chf", "currency")
+        )
 
     @property
     def amount(self) -> Decimal | None:
@@ -1659,6 +1703,11 @@ class OperatingEconomicsMetricDiagnostics(BaseModel):
         "tax_rate",
         "tax",
         "nopat",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "operating_working_capital",
+        "change_in_operating_working_capital",
+        "fcff",
     ]
     coverage: Decimal | None = Field(default=None, allow_inf_nan=True)
     supported_years: tuple[int, ...] = ()
@@ -1805,6 +1854,26 @@ class OperatingEconomicsDiagnostics(BaseModel):
         ):
             for metric in ("tax_rate", "tax", "nopat"):
                 data.pop(metric, None)
+        if all(
+            getattr(self, metric).coverage is None
+            and not getattr(self, metric).warnings
+            and not getattr(self, metric).identity_warnings
+            for metric in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+                "change_in_operating_working_capital",
+                "fcff",
+            )
+        ):
+            for metric in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+                "change_in_operating_working_capital",
+                "fcff",
+            ):
+                data.pop(metric, None)
         return data
 
     gross_margin: OperatingEconomicsMetricDiagnostics = Field(
@@ -1835,6 +1904,29 @@ class OperatingEconomicsDiagnostics(BaseModel):
     )
     nopat: OperatingEconomicsMetricDiagnostics = Field(
         default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="nopat")
+    )
+    depreciation_and_amortization: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="depreciation_and_amortization"
+        )
+    )
+    capital_expenditures: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="capital_expenditures"
+        )
+    )
+    operating_working_capital: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="operating_working_capital"
+        )
+    )
+    change_in_operating_working_capital: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="change_in_operating_working_capital"
+        )
+    )
+    fcff: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="fcff")
     )
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
     identity_warnings: tuple[str, ...] = ()
@@ -1950,6 +2042,49 @@ class OperatingEconomicsYear(BaseModel):
                 "nopat_audit",
             ):
                 data.pop(field, None)
+        if all(
+            value is None
+            for value in (
+                self.depreciation_and_amortization,
+                self.capital_expenditures,
+                self.operating_working_capital,
+                self.change_in_operating_working_capital,
+                self.fcff,
+            )
+        ):
+            for field in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+                "change_in_operating_working_capital",
+                "fcff",
+                "depreciation_and_amortization_source",
+                "depreciation_and_amortization_method",
+                "depreciation_and_amortization_confidence",
+                "depreciation_and_amortization_provenance",
+                "depreciation_and_amortization_audit",
+                "capital_expenditures_source",
+                "capital_expenditures_method",
+                "capital_expenditures_confidence",
+                "capital_expenditures_provenance",
+                "capital_expenditures_audit",
+                "operating_working_capital_source",
+                "operating_working_capital_method",
+                "operating_working_capital_confidence",
+                "operating_working_capital_provenance",
+                "operating_working_capital_audit",
+                "change_in_operating_working_capital_source",
+                "change_in_operating_working_capital_method",
+                "change_in_operating_working_capital_confidence",
+                "change_in_operating_working_capital_provenance",
+                "change_in_operating_working_capital_audit",
+                "fcff_source",
+                "fcff_method",
+                "fcff_confidence",
+                "fcff_provenance",
+                "fcff_audit",
+            ):
+                    data.pop(field, None)
         return data
 
     fiscal_year: int = Field(ge=_MIN_FISCAL_YEAR, le=_MAX_FISCAL_YEAR)
@@ -1965,6 +2100,11 @@ class OperatingEconomicsYear(BaseModel):
     tax_rate: Decimal | None = None
     tax: Decimal | None = None
     nopat: Decimal | None = None
+    depreciation_and_amortization: Decimal | None = None
+    capital_expenditures: Decimal | None = None
+    operating_working_capital: Decimal | None = None
+    change_in_operating_working_capital: Decimal | None = None
+    fcff: Decimal | None = None
     reported_ebit: Decimal | None = None
     explicit_ebit_target: Decimal | None = None
     ebit_reconstruction_error: Decimal | None = None
@@ -2020,6 +2160,31 @@ class OperatingEconomicsYear(BaseModel):
     nopat_confidence: Literal["high", "medium", "low"] = "low"
     nopat_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
     nopat_audit: tuple[str, ...] = ()
+    depreciation_and_amortization_source: str = "unavailable"
+    depreciation_and_amortization_method: str = "unavailable"
+    depreciation_and_amortization_confidence: Literal["high", "medium", "low"] = "low"
+    depreciation_and_amortization_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    depreciation_and_amortization_audit: tuple[str, ...] = ()
+    capital_expenditures_source: str = "unavailable"
+    capital_expenditures_method: str = "unavailable"
+    capital_expenditures_confidence: Literal["high", "medium", "low"] = "low"
+    capital_expenditures_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    capital_expenditures_audit: tuple[str, ...] = ()
+    operating_working_capital_source: str = "unavailable"
+    operating_working_capital_method: str = "unavailable"
+    operating_working_capital_confidence: Literal["high", "medium", "low"] = "low"
+    operating_working_capital_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    operating_working_capital_audit: tuple[str, ...] = ()
+    change_in_operating_working_capital_source: str = "unavailable"
+    change_in_operating_working_capital_method: str = "unavailable"
+    change_in_operating_working_capital_confidence: Literal["high", "medium", "low"] = "low"
+    change_in_operating_working_capital_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    change_in_operating_working_capital_audit: tuple[str, ...] = ()
+    fcff_source: str = "unavailable"
+    fcff_method: str = "unavailable"
+    fcff_confidence: Literal["high", "medium", "low"] = "low"
+    fcff_provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    fcff_audit: tuple[str, ...] = ()
 
     @field_validator("fiscal_period")
     @classmethod
@@ -2049,10 +2214,24 @@ class OperatingEconomicsYear(BaseModel):
         "tax_rate",
         "tax",
         "nopat",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "operating_working_capital",
+        "change_in_operating_working_capital",
+        "fcff",
     )
     @classmethod
     def validate_values(cls, value: Decimal | None) -> Decimal | None:
         return _finite_decimal(value, "Operating economics values")
+
+    @field_validator("depreciation_and_amortization", "capital_expenditures")
+    @classmethod
+    def validate_reinvestment_sign(
+        cls, value: Decimal | None
+    ) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("Operating economics D&A and CAPEX cannot be negative")
+        return value
 
     @field_validator("r_and_d", "sg_and_a")
     @classmethod
@@ -2091,6 +2270,11 @@ class OperatingEconomicsYear(BaseModel):
         "tax_rate_audit",
         "tax_audit",
         "nopat_audit",
+        "depreciation_and_amortization_audit",
+        "capital_expenditures_audit",
+        "operating_working_capital_audit",
+        "change_in_operating_working_capital_audit",
+        "fcff_audit",
     )
     @classmethod
     def normalize_metric_audit(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -2117,6 +2301,22 @@ class OperatingEconomicsYear(BaseModel):
             raise ValueError("Reported EBIT reconstruction error cannot be negative")
         return self
 
+    @property
+    def da(self) -> Decimal | None:
+        return self.depreciation_and_amortization
+
+    @property
+    def capex(self) -> Decimal | None:
+        return self.capital_expenditures
+
+    @property
+    def owc(self) -> Decimal | None:
+        return self.operating_working_capital
+
+    @property
+    def delta_nwc(self) -> Decimal | None:
+        return self.change_in_operating_working_capital
+
 
 class SegmentOperatingEconomicsDiagnostics(BaseModel):
     """Segment economics diagnostics without company-only tax metrics."""
@@ -2133,6 +2333,22 @@ class SegmentOperatingEconomicsDiagnostics(BaseModel):
             for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit")
         ):
             for metric in ("r_and_d", "sg_and_a", "other_operating_items", "ebit"):
+                data.pop(metric, None)
+        if all(
+            getattr(self, metric).coverage is None
+            and not getattr(self, metric).warnings
+            and not getattr(self, metric).identity_warnings
+            for metric in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+            )
+        ):
+            for metric in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+            ):
                 data.pop(metric, None)
         return data
 
@@ -2155,6 +2371,21 @@ class SegmentOperatingEconomicsDiagnostics(BaseModel):
     )
     ebit: OperatingEconomicsMetricDiagnostics = Field(
         default_factory=lambda: OperatingEconomicsMetricDiagnostics(metric="ebit")
+    )
+    depreciation_and_amortization: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="depreciation_and_amortization"
+        )
+    )
+    capital_expenditures: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="capital_expenditures"
+        )
+    )
+    operating_working_capital: OperatingEconomicsMetricDiagnostics = Field(
+        default_factory=lambda: OperatingEconomicsMetricDiagnostics(
+            metric="operating_working_capital"
+        )
     )
     completeness: Decimal | None = Field(default=None, allow_inf_nan=True)
     identity_warnings: tuple[str, ...] = ()
@@ -2229,6 +2460,36 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                 "ebit_audit_by_year",
             ):
                 data.pop(field, None)
+        if all(
+            value is None
+            for path in (
+                self.depreciation_and_amortization,
+                self.capital_expenditures,
+                self.operating_working_capital,
+            )
+            for value in path
+        ):
+            for field in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+                "depreciation_and_amortization_source_by_year",
+                "depreciation_and_amortization_method_by_year",
+                "depreciation_and_amortization_confidence_by_year",
+                "depreciation_and_amortization_provenance_by_year",
+                "depreciation_and_amortization_audit_by_year",
+                "capital_expenditures_source_by_year",
+                "capital_expenditures_method_by_year",
+                "capital_expenditures_confidence_by_year",
+                "capital_expenditures_provenance_by_year",
+                "capital_expenditures_audit_by_year",
+                "operating_working_capital_source_by_year",
+                "operating_working_capital_method_by_year",
+                "operating_working_capital_confidence_by_year",
+                "operating_working_capital_provenance_by_year",
+                "operating_working_capital_audit_by_year",
+            ):
+                data.pop(field, None)
         return data
 
     segment: OperatingSegment
@@ -2244,6 +2505,9 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     sg_and_a: tuple[Decimal | None, ...] = ()
     other_operating_items: tuple[Decimal | None, ...] = ()
     ebit: tuple[Decimal | None, ...] = ()
+    depreciation_and_amortization: tuple[Decimal | None, ...] = ()
+    capital_expenditures: tuple[Decimal | None, ...] = ()
+    operating_working_capital: tuple[Decimal | None, ...] = ()
     years: tuple[OperatingEconomicsYear, ...] = ()
     source_by_year: dict[int, str] = Field(default_factory=dict)
     confidence_by_year: dict[int, str] = Field(default_factory=dict)
@@ -2276,6 +2540,21 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     ebit_confidence_by_year: dict[int, str] = Field(default_factory=dict)
     ebit_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
     ebit_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    depreciation_and_amortization_source_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_method_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    depreciation_and_amortization_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    capital_expenditures_source_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_method_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    capital_expenditures_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    operating_working_capital_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_method_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    operating_working_capital_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     method_by_year: dict[int, str] = Field(default_factory=dict)
     audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     diagnostics: SegmentOperatingEconomicsDiagnostics = Field(
@@ -2312,6 +2591,26 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     def validate_economics_values(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
         return tuple(_finite_decimal(item, "Segment economics values") for item in value)
 
+    @field_validator(
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "operating_working_capital",
+    )
+    @classmethod
+    def validate_reinvestment_values(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        return tuple(_finite_decimal(item, "Segment reinvestment values") for item in value)
+
+    @field_validator("depreciation_and_amortization", "capital_expenditures")
+    @classmethod
+    def validate_nonnegative_reinvestment_values(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        if any(item is not None and item < 0 for item in value):
+            raise ValueError("Segment D&A and CAPEX cannot be negative")
+        return value
+
     @field_validator("r_and_d", "sg_and_a")
     @classmethod
     def validate_segment_expenses(
@@ -2342,6 +2641,15 @@ class SegmentOperatingEconomicsForecast(BaseModel):
         "ebit_source_by_year",
         "ebit_method_by_year",
         "ebit_confidence_by_year",
+        "depreciation_and_amortization_source_by_year",
+        "depreciation_and_amortization_method_by_year",
+        "depreciation_and_amortization_confidence_by_year",
+        "capital_expenditures_source_by_year",
+        "capital_expenditures_method_by_year",
+        "capital_expenditures_confidence_by_year",
+        "operating_working_capital_source_by_year",
+        "operating_working_capital_method_by_year",
+        "operating_working_capital_confidence_by_year",
         mode="before",
     )
     @classmethod
@@ -2372,6 +2680,12 @@ class SegmentOperatingEconomicsForecast(BaseModel):
             object.__setattr__(self, "other_operating_items", (None,) * length)
         if not self.ebit:
             object.__setattr__(self, "ebit", (None,) * length)
+        if not self.depreciation_and_amortization:
+            object.__setattr__(self, "depreciation_and_amortization", (None,) * length)
+        if not self.capital_expenditures:
+            object.__setattr__(self, "capital_expenditures", (None,) * length)
+        if not self.operating_working_capital:
+            object.__setattr__(self, "operating_working_capital", (None,) * length)
         if any(
             len(path) != length
             for path in (
@@ -2382,6 +2696,9 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                 self.sg_and_a,
                 self.other_operating_items,
                 self.ebit,
+                self.depreciation_and_amortization,
+                self.capital_expenditures,
+                self.operating_working_capital,
             )
         ):
             raise ValueError("Segment economics paths must match fiscal_years")
@@ -2453,6 +2770,36 @@ class SegmentOperatingEconomicsForecast(BaseModel):
             (self.ebit_confidence_by_year, "ebit_confidence_by_year"),
             (self.ebit_provenance_by_year, "ebit_provenance_by_year"),
             (self.ebit_audit_by_year, "ebit_audit_by_year"),
+            (
+                self.depreciation_and_amortization_source_by_year,
+                "depreciation_and_amortization_source_by_year",
+            ),
+            (
+                self.depreciation_and_amortization_method_by_year,
+                "depreciation_and_amortization_method_by_year",
+            ),
+            (
+                self.depreciation_and_amortization_confidence_by_year,
+                "depreciation_and_amortization_confidence_by_year",
+            ),
+            (
+                self.depreciation_and_amortization_provenance_by_year,
+                "depreciation_and_amortization_provenance_by_year",
+            ),
+            (
+                self.depreciation_and_amortization_audit_by_year,
+                "depreciation_and_amortization_audit_by_year",
+            ),
+            (self.capital_expenditures_source_by_year, "capital_expenditures_source_by_year"),
+            (self.capital_expenditures_method_by_year, "capital_expenditures_method_by_year"),
+            (self.capital_expenditures_confidence_by_year, "capital_expenditures_confidence_by_year"),
+            (self.capital_expenditures_provenance_by_year, "capital_expenditures_provenance_by_year"),
+            (self.capital_expenditures_audit_by_year, "capital_expenditures_audit_by_year"),
+            (self.operating_working_capital_source_by_year, "operating_working_capital_source_by_year"),
+            (self.operating_working_capital_method_by_year, "operating_working_capital_method_by_year"),
+            (self.operating_working_capital_confidence_by_year, "operating_working_capital_confidence_by_year"),
+            (self.operating_working_capital_provenance_by_year, "operating_working_capital_provenance_by_year"),
+            (self.operating_working_capital_audit_by_year, "operating_working_capital_audit_by_year"),
             (self.method_by_year, "method_by_year"),
             (self.audit_by_year, "audit_by_year"),
         ):
@@ -2505,6 +2852,24 @@ class SegmentOperatingEconomicsForecast(BaseModel):
                         ebit_confidence=self.ebit_confidence_by_year.get(year, "low"),
                         ebit_provenance=self.ebit_provenance_by_year.get(year),
                         ebit_audit=self.ebit_audit_by_year.get(year, ()),
+                        depreciation_and_amortization=self.depreciation_and_amortization[index],
+                        capital_expenditures=self.capital_expenditures[index],
+                        operating_working_capital=self.operating_working_capital[index],
+                        depreciation_and_amortization_source=self.depreciation_and_amortization_source_by_year.get(year, "unavailable"),
+                        depreciation_and_amortization_method=self.depreciation_and_amortization_method_by_year.get(year, "unavailable"),
+                        depreciation_and_amortization_confidence=self.depreciation_and_amortization_confidence_by_year.get(year, "low"),
+                        depreciation_and_amortization_provenance=self.depreciation_and_amortization_provenance_by_year.get(year),
+                        depreciation_and_amortization_audit=self.depreciation_and_amortization_audit_by_year.get(year, ()),
+                        capital_expenditures_source=self.capital_expenditures_source_by_year.get(year, "unavailable"),
+                        capital_expenditures_method=self.capital_expenditures_method_by_year.get(year, "unavailable"),
+                        capital_expenditures_confidence=self.capital_expenditures_confidence_by_year.get(year, "low"),
+                        capital_expenditures_provenance=self.capital_expenditures_provenance_by_year.get(year),
+                        capital_expenditures_audit=self.capital_expenditures_audit_by_year.get(year, ()),
+                        operating_working_capital_source=self.operating_working_capital_source_by_year.get(year, "unavailable"),
+                        operating_working_capital_method=self.operating_working_capital_method_by_year.get(year, "unavailable"),
+                        operating_working_capital_confidence=self.operating_working_capital_confidence_by_year.get(year, "low"),
+                        operating_working_capital_provenance=self.operating_working_capital_provenance_by_year.get(year),
+                        operating_working_capital_audit=self.operating_working_capital_audit_by_year.get(year, ()),
                     )
                     for index, (year, revenue, margin, profit) in enumerate(
                         zip(
@@ -2599,6 +2964,43 @@ class SegmentOperatingEconomicsForecast(BaseModel):
     def gross_profit_supported_years(self) -> tuple[int, ...]:
         return self.diagnostics.gross_profit.supported_years
 
+class OperatingReinvestmentSeed(BaseModel):
+    """The real prior OWC balance used for the first derived change."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fiscal_year: int = Field(
+        ge=_MIN_FISCAL_YEAR,
+        le=_MAX_FISCAL_YEAR,
+        validation_alias=AliasChoices("fiscal_year", "year"),
+    )
+    fiscal_period: str = Field(
+        default="FY", validation_alias=AliasChoices("fiscal_period", "period")
+    )
+    period_key: str | None = None
+    mode: str = Field(default="FY", validation_alias=AliasChoices("mode", "seed_mode"))
+    unit: str
+    value: Decimal
+    provenance: AssumptionProvenance | EvidenceReference | ForecastProvenance | str | None = None
+    source: str = "historical_seed"
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def normalize_period(cls, value: str) -> str:
+        return normalize_operating_fiscal_period(value)
+
+    @field_validator("period_key", "mode", "unit", "source")
+    @classmethod
+    def normalize_seed_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value, "Operating reinvestment seed text")
+
+    @field_validator("value")
+    @classmethod
+    def validate_seed_value(cls, value: Decimal) -> Decimal:
+        return _finite_decimal(value, "Operating reinvestment seed")
+
+
 class OperatingEconomicsForecastConfig(BaseModel):
     """Deterministic policy surface for gross economics, OPEX, and tax."""
 
@@ -2620,6 +3022,8 @@ class OperatingEconomicsForecastConfig(BaseModel):
             "normalization_method",
             "ratio_normalization_method",
             "opex_normalization_method",
+            "reinvestment_normalization_method",
+            "reinvestment_ratio_normalization_method",
         ),
     )
     gross_margin_min: Decimal = Decimal("-100")
@@ -2693,6 +3097,9 @@ class OperatingEconomicsForecastConfig(BaseModel):
             "negative_ebit_tax_policy",
         ),
     )
+    capex_constraints: dict[int, MonetaryForecastConstraint] = Field(default_factory=dict)
+    depreciable_asset_life_years: int | None = Field(default=None, ge=2, le=30)
+    investment_program_range_policy: Literal["none", "midpoint"] = "none"
 
     @field_validator("gross_margin_min", "gross_margin_max")
     @classmethod
@@ -2722,6 +3129,15 @@ class OperatingEconomicsForecastConfig(BaseModel):
         if normalized is not None and normalized < 0:
             raise ValueError("Tax-rate configuration cannot be negative")
         return normalized
+
+    @field_validator("capex_constraints")
+    @classmethod
+    def validate_capex_constraints(
+        cls, value: dict[int, MonetaryForecastConstraint]
+    ) -> dict[int, MonetaryForecastConstraint]:
+        if any(year < _MIN_FISCAL_YEAR or year > _MAX_FISCAL_YEAR for year in value):
+            raise ValueError("Operating CAPEX constraint fiscal years are invalid")
+        return {int(year): constraint for year, constraint in value.items()}
 
     @model_validator(mode="after")
     def validate_tax_configuration_bounds(self) -> "OperatingEconomicsForecastConfig":
@@ -3445,6 +3861,52 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             if not any(getattr(self, field) for field in historical_fields):
                 for field in historical_fields:
                     data.pop(field, None)
+        if all(
+            value is None
+            for path in (
+                self.depreciation_and_amortization,
+                self.capital_expenditures,
+                self.operating_working_capital,
+                self.change_in_operating_working_capital,
+                self.fcff,
+            )
+            for value in path
+        ):
+            for field in (
+                "depreciation_and_amortization",
+                "capital_expenditures",
+                "operating_working_capital",
+                "change_in_operating_working_capital",
+                "fcff",
+                "depreciation_and_amortization_source_by_year",
+                "depreciation_and_amortization_method_by_year",
+                "depreciation_and_amortization_confidence_by_year",
+                "depreciation_and_amortization_provenance_by_year",
+                "depreciation_and_amortization_audit_by_year",
+                "capital_expenditures_source_by_year",
+                "capital_expenditures_method_by_year",
+                "capital_expenditures_confidence_by_year",
+                "capital_expenditures_provenance_by_year",
+                "capital_expenditures_audit_by_year",
+                "operating_working_capital_source_by_year",
+                "operating_working_capital_method_by_year",
+                "operating_working_capital_confidence_by_year",
+                "operating_working_capital_provenance_by_year",
+                "operating_working_capital_audit_by_year",
+                "change_in_operating_working_capital_source_by_year",
+                "change_in_operating_working_capital_method_by_year",
+                "change_in_operating_working_capital_confidence_by_year",
+                "change_in_operating_working_capital_provenance_by_year",
+                "change_in_operating_working_capital_audit_by_year",
+                "fcff_source_by_year",
+                "fcff_method_by_year",
+                "fcff_confidence_by_year",
+                "fcff_provenance_by_year",
+                "fcff_audit_by_year",
+            ):
+                data.pop(field, None)
+        if self.reinvestment_seed is None:
+            data.pop("reinvestment_seed", None)
         return data
 
     @model_validator(mode="before")
@@ -3510,6 +3972,29 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     nopat: tuple[Decimal | None, ...] = Field(
         default=(), validation_alias=AliasChoices("nopat", "consolidated_nopat")
     )
+    depreciation_and_amortization: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices(
+            "depreciation_and_amortization", "consolidated_depreciation_and_amortization", "da"
+        )
+    )
+    capital_expenditures: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices(
+            "capital_expenditures", "consolidated_capital_expenditures", "capex"
+        )
+    )
+    operating_working_capital: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices(
+            "operating_working_capital", "consolidated_operating_working_capital", "owc"
+        )
+    )
+    change_in_operating_working_capital: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices(
+            "change_in_operating_working_capital", "consolidated_change_in_operating_working_capital", "delta_nwc"
+        )
+    )
+    fcff: tuple[Decimal | None, ...] = Field(
+        default=(), validation_alias=AliasChoices("fcff", "consolidated_fcff")
+    )
     reported_ebit_by_year: dict[int, Decimal] = Field(default_factory=dict)
     explicit_ebit_target_by_year: dict[int, Decimal] = Field(default_factory=dict)
     ebit_reconstruction_error_by_year: dict[int, Decimal] = Field(default_factory=dict)
@@ -3562,6 +4047,31 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     nopat_confidence_by_year: dict[int, str] = Field(default_factory=dict)
     nopat_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
     nopat_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    depreciation_and_amortization_source_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_method_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    depreciation_and_amortization_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    depreciation_and_amortization_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    capital_expenditures_source_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_method_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    capital_expenditures_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    capital_expenditures_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    operating_working_capital_source_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_method_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    operating_working_capital_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    operating_working_capital_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    change_in_operating_working_capital_source_by_year: dict[int, str] = Field(default_factory=dict)
+    change_in_operating_working_capital_method_by_year: dict[int, str] = Field(default_factory=dict)
+    change_in_operating_working_capital_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    change_in_operating_working_capital_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    change_in_operating_working_capital_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    fcff_source_by_year: dict[int, str] = Field(default_factory=dict)
+    fcff_method_by_year: dict[int, str] = Field(default_factory=dict)
+    fcff_confidence_by_year: dict[int, str] = Field(default_factory=dict)
+    fcff_provenance_by_year: dict[int, AssumptionProvenance | EvidenceReference | ForecastProvenance | str] = Field(default_factory=dict)
+    fcff_audit_by_year: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     historical_pretax_income_by_year: dict[int, Decimal] = Field(default_factory=dict)
     historical_income_tax_expense_by_year: dict[int, Decimal] = Field(default_factory=dict)
     historical_effective_tax_rate_by_year: dict[int, Decimal] = Field(default_factory=dict)
@@ -3577,6 +4087,7 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     )
     warnings: tuple[str, ...] = ()
     unit: str = "currency"
+    reinvestment_seed: OperatingReinvestmentSeed | None = None
 
     @field_validator("company_id")
     @classmethod
@@ -3609,10 +4120,24 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         "tax_rate",
         "tax",
         "nopat",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+        "operating_working_capital",
+        "change_in_operating_working_capital",
+        "fcff",
     )
     @classmethod
     def validate_company_economics(cls, value: tuple[Decimal | None, ...]) -> tuple[Decimal | None, ...]:
         return tuple(_finite_decimal(item, "Company economics values") for item in value)
+
+    @field_validator("depreciation_and_amortization", "capital_expenditures")
+    @classmethod
+    def validate_company_nonnegative_reinvestment(
+        cls, value: tuple[Decimal | None, ...]
+    ) -> tuple[Decimal | None, ...]:
+        if any(item is not None and item < 0 for item in value):
+            raise ValueError("Company D&A and CAPEX cannot be negative")
+        return value
 
     @field_validator("tax_rate")
     @classmethod
@@ -3662,6 +4187,21 @@ class CompanyOperatingEconomicsForecast(BaseModel):
         "nopat_source_by_year",
         "nopat_method_by_year",
         "nopat_confidence_by_year",
+        "depreciation_and_amortization_source_by_year",
+        "depreciation_and_amortization_method_by_year",
+        "depreciation_and_amortization_confidence_by_year",
+        "capital_expenditures_source_by_year",
+        "capital_expenditures_method_by_year",
+        "capital_expenditures_confidence_by_year",
+        "operating_working_capital_source_by_year",
+        "operating_working_capital_method_by_year",
+        "operating_working_capital_confidence_by_year",
+        "change_in_operating_working_capital_source_by_year",
+        "change_in_operating_working_capital_method_by_year",
+        "change_in_operating_working_capital_confidence_by_year",
+        "fcff_source_by_year",
+        "fcff_method_by_year",
+        "fcff_confidence_by_year",
         mode="before",
     )
     @classmethod
@@ -3765,6 +4305,16 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             object.__setattr__(self, "tax", (None,) * length)
         if not self.nopat:
             object.__setattr__(self, "nopat", (None,) * length)
+        if not self.depreciation_and_amortization:
+            object.__setattr__(self, "depreciation_and_amortization", (None,) * length)
+        if not self.capital_expenditures:
+            object.__setattr__(self, "capital_expenditures", (None,) * length)
+        if not self.operating_working_capital:
+            object.__setattr__(self, "operating_working_capital", (None,) * length)
+        if not self.change_in_operating_working_capital:
+            object.__setattr__(self, "change_in_operating_working_capital", (None,) * length)
+        if not self.fcff:
+            object.__setattr__(self, "fcff", (None,) * length)
         if any(
             len(path) != length
             for path in (
@@ -3778,6 +4328,11 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                 self.tax_rate,
                 self.tax,
                 self.nopat,
+                self.depreciation_and_amortization,
+                self.capital_expenditures,
+                self.operating_working_capital,
+                self.change_in_operating_working_capital,
+                self.fcff,
             )
         ):
             raise ValueError("Company economics paths must match fiscal_years")
@@ -3860,6 +4415,31 @@ class CompanyOperatingEconomicsForecast(BaseModel):
             (self.nopat_confidence_by_year, "nopat_confidence_by_year"),
             (self.nopat_provenance_by_year, "nopat_provenance_by_year"),
             (self.nopat_audit_by_year, "nopat_audit_by_year"),
+            (self.depreciation_and_amortization_source_by_year, "depreciation_and_amortization_source_by_year"),
+            (self.depreciation_and_amortization_method_by_year, "depreciation_and_amortization_method_by_year"),
+            (self.depreciation_and_amortization_confidence_by_year, "depreciation_and_amortization_confidence_by_year"),
+            (self.depreciation_and_amortization_provenance_by_year, "depreciation_and_amortization_provenance_by_year"),
+            (self.depreciation_and_amortization_audit_by_year, "depreciation_and_amortization_audit_by_year"),
+            (self.capital_expenditures_source_by_year, "capital_expenditures_source_by_year"),
+            (self.capital_expenditures_method_by_year, "capital_expenditures_method_by_year"),
+            (self.capital_expenditures_confidence_by_year, "capital_expenditures_confidence_by_year"),
+            (self.capital_expenditures_provenance_by_year, "capital_expenditures_provenance_by_year"),
+            (self.capital_expenditures_audit_by_year, "capital_expenditures_audit_by_year"),
+            (self.operating_working_capital_source_by_year, "operating_working_capital_source_by_year"),
+            (self.operating_working_capital_method_by_year, "operating_working_capital_method_by_year"),
+            (self.operating_working_capital_confidence_by_year, "operating_working_capital_confidence_by_year"),
+            (self.operating_working_capital_provenance_by_year, "operating_working_capital_provenance_by_year"),
+            (self.operating_working_capital_audit_by_year, "operating_working_capital_audit_by_year"),
+            (self.change_in_operating_working_capital_source_by_year, "change_in_operating_working_capital_source_by_year"),
+            (self.change_in_operating_working_capital_method_by_year, "change_in_operating_working_capital_method_by_year"),
+            (self.change_in_operating_working_capital_confidence_by_year, "change_in_operating_working_capital_confidence_by_year"),
+            (self.change_in_operating_working_capital_provenance_by_year, "change_in_operating_working_capital_provenance_by_year"),
+            (self.change_in_operating_working_capital_audit_by_year, "change_in_operating_working_capital_audit_by_year"),
+            (self.fcff_source_by_year, "fcff_source_by_year"),
+            (self.fcff_method_by_year, "fcff_method_by_year"),
+            (self.fcff_confidence_by_year, "fcff_confidence_by_year"),
+            (self.fcff_provenance_by_year, "fcff_provenance_by_year"),
+            (self.fcff_audit_by_year, "fcff_audit_by_year"),
             (self.reported_ebit_by_year, "reported_ebit_by_year"),
             (self.explicit_ebit_target_by_year, "explicit_ebit_target_by_year"),
             (
@@ -3917,6 +4497,11 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         tax_rate=self.tax_rate[index],
                         tax=self.tax[index],
                         nopat=self.nopat[index],
+                        depreciation_and_amortization=self.depreciation_and_amortization[index],
+                        capital_expenditures=self.capital_expenditures[index],
+                        operating_working_capital=self.operating_working_capital[index],
+                        change_in_operating_working_capital=self.change_in_operating_working_capital[index],
+                        fcff=self.fcff[index],
                         reported_ebit=self.reported_ebit_by_year.get(year),
                         explicit_ebit_target=self.explicit_ebit_target_by_year.get(year),
                         ebit_reconstruction_error=self.ebit_reconstruction_error_by_year.get(year),
@@ -3970,6 +4555,31 @@ class CompanyOperatingEconomicsForecast(BaseModel):
                         nopat_confidence=self.nopat_confidence_by_year.get(year, "low"),
                         nopat_provenance=self.nopat_provenance_by_year.get(year),
                         nopat_audit=self.nopat_audit_by_year.get(year, ()),
+                        depreciation_and_amortization_source=self.depreciation_and_amortization_source_by_year.get(year, "unavailable"),
+                        depreciation_and_amortization_method=self.depreciation_and_amortization_method_by_year.get(year, "unavailable"),
+                        depreciation_and_amortization_confidence=self.depreciation_and_amortization_confidence_by_year.get(year, "low"),
+                        depreciation_and_amortization_provenance=self.depreciation_and_amortization_provenance_by_year.get(year),
+                        depreciation_and_amortization_audit=self.depreciation_and_amortization_audit_by_year.get(year, ()),
+                        capital_expenditures_source=self.capital_expenditures_source_by_year.get(year, "unavailable"),
+                        capital_expenditures_method=self.capital_expenditures_method_by_year.get(year, "unavailable"),
+                        capital_expenditures_confidence=self.capital_expenditures_confidence_by_year.get(year, "low"),
+                        capital_expenditures_provenance=self.capital_expenditures_provenance_by_year.get(year),
+                        capital_expenditures_audit=self.capital_expenditures_audit_by_year.get(year, ()),
+                        operating_working_capital_source=self.operating_working_capital_source_by_year.get(year, "unavailable"),
+                        operating_working_capital_method=self.operating_working_capital_method_by_year.get(year, "unavailable"),
+                        operating_working_capital_confidence=self.operating_working_capital_confidence_by_year.get(year, "low"),
+                        operating_working_capital_provenance=self.operating_working_capital_provenance_by_year.get(year),
+                        operating_working_capital_audit=self.operating_working_capital_audit_by_year.get(year, ()),
+                        change_in_operating_working_capital_source=self.change_in_operating_working_capital_source_by_year.get(year, "unavailable"),
+                        change_in_operating_working_capital_method=self.change_in_operating_working_capital_method_by_year.get(year, "unavailable"),
+                        change_in_operating_working_capital_confidence=self.change_in_operating_working_capital_confidence_by_year.get(year, "low"),
+                        change_in_operating_working_capital_provenance=self.change_in_operating_working_capital_provenance_by_year.get(year),
+                        change_in_operating_working_capital_audit=self.change_in_operating_working_capital_audit_by_year.get(year, ()),
+                        fcff_source=self.fcff_source_by_year.get(year, "unavailable"),
+                        fcff_method=self.fcff_method_by_year.get(year, "unavailable"),
+                        fcff_confidence=self.fcff_confidence_by_year.get(year, "low"),
+                        fcff_provenance=self.fcff_provenance_by_year.get(year),
+                        fcff_audit=self.fcff_audit_by_year.get(year, ()),
                     )
                     for index, (year, revenue, profit, margin) in enumerate(
                         zip(
@@ -4051,6 +4661,72 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     @property
     def nopat_by_year(self) -> dict[int, Decimal | None]:
         return dict(zip(self.fiscal_years, self.nopat, strict=True))
+
+    @property
+    def depreciation_and_amortization_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.depreciation_and_amortization, strict=True))
+
+    @property
+    def capital_expenditures_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.capital_expenditures, strict=True))
+
+    @property
+    def operating_working_capital_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.operating_working_capital, strict=True))
+
+    @property
+    def change_in_operating_working_capital_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.change_in_operating_working_capital, strict=True))
+
+    @property
+    def fcff_by_year(self) -> dict[int, Decimal | None]:
+        return dict(zip(self.fiscal_years, self.fcff, strict=True))
+
+    @property
+    def delta_nwc(self) -> tuple[Decimal | None, ...]:
+        return self.change_in_operating_working_capital
+
+    @property
+    def depreciation_to_revenue_by_year(self) -> dict[int, Decimal | None]:
+        return {
+            year: value / revenue * Decimal(100)
+            if value is not None and revenue not in (None, Decimal(0))
+            else None
+            for year, value, revenue in zip(
+                self.fiscal_years,
+                self.depreciation_and_amortization,
+                self.consolidated_revenue,
+                strict=True,
+            )
+        }
+
+    @property
+    def capex_to_revenue_by_year(self) -> dict[int, Decimal | None]:
+        return {
+            year: value / revenue * Decimal(100)
+            if value is not None and revenue not in (None, Decimal(0))
+            else None
+            for year, value, revenue in zip(
+                self.fiscal_years,
+                self.capital_expenditures,
+                self.consolidated_revenue,
+                strict=True,
+            )
+        }
+
+    @property
+    def operating_working_capital_to_revenue_by_year(self) -> dict[int, Decimal | None]:
+        return {
+            year: value / revenue * Decimal(100)
+            if value is not None and revenue not in (None, Decimal(0))
+            else None
+            for year, value, revenue in zip(
+                self.fiscal_years,
+                self.operating_working_capital,
+                self.consolidated_revenue,
+                strict=True,
+            )
+        }
 
     @property
     def historical_tax_rate_by_year(self) -> dict[int, Decimal]:
@@ -4172,6 +4848,42 @@ class CompanyOperatingEconomicsForecast(BaseModel):
     def nopat_supported_years(self) -> tuple[int, ...]:
         return self.diagnostics.nopat.supported_years
 
+    @property
+    def depreciation_and_amortization_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.depreciation_and_amortization
+
+    @property
+    def capital_expenditures_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.capital_expenditures
+
+    @property
+    def operating_working_capital_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.operating_working_capital
+
+    @property
+    def change_in_operating_working_capital_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.change_in_operating_working_capital
+
+    @property
+    def fcff_diagnostics(self) -> OperatingEconomicsMetricDiagnostics:
+        return self.diagnostics.fcff
+
+    @property
+    def da_source_by_year(self) -> dict[int, str]:
+        return self.depreciation_and_amortization_source_by_year
+
+    @property
+    def capex_source_by_year(self) -> dict[int, str]:
+        return self.capital_expenditures_source_by_year
+
+    @property
+    def owc_source_by_year(self) -> dict[int, str]:
+        return self.operating_working_capital_source_by_year
+
+    @property
+    def delta_nwc_source_by_year(self) -> dict[int, str]:
+        return self.change_in_operating_working_capital_source_by_year
+
 
 # The names below make the additive contract discoverable for both the
 # "forecast" and "economics" terminology used by existing clients.
@@ -4284,6 +4996,7 @@ __all__ = [
     "OperatingEconomicsForecastResult",
     "OperatingEconomicsMetricDiagnostics",
     "OperatingEconomicsYear",
+    "OperatingReinvestmentSeed",
     "OperatingMetricDiagnostics",
     "GrossMarginDiagnostics",
     "GrossProfitDiagnostics",

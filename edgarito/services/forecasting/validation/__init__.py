@@ -1,5 +1,11 @@
 """Provider-neutral deterministic forecast and valuation sanity validation."""
 
+from .adapters import (
+    adapt_driver_economics,
+    adapt_operating_economics,
+    driver_economics_to_validation_context,
+    operating_economics_to_validation_context,
+)
 from .config import ForecastValidationConfig, ValidationConfig
 from .contracts import (
     HUNDRED,
@@ -54,4 +60,8 @@ __all__ = [
     "ValidationSeverity",
     "ZERO",
     "decimal_value",
+    "adapt_driver_economics",
+    "adapt_operating_economics",
+    "driver_economics_to_validation_context",
+    "operating_economics_to_validation_context",
 ]

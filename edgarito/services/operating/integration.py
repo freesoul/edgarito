@@ -81,6 +81,10 @@ class OperatingForecastIntegrationService:
         overrides: Any = (),
         forecast_overrides: Any | None = None,
         economics_config: Any | None = None,
+        investment_programs: Any = (),
+        capex_constraints: Any | None = None,
+        seed: Any | None = None,
+        reinvestment_seed: Any | None = None,
         as_of=None,
     ) -> _contracts.OperatingForecastIntegrationResult:
         if parameters is not None and fcff_parameters is not None:
@@ -154,6 +158,14 @@ class OperatingForecastIntegrationService:
             overrides=overrides,
             forecast_overrides=forecast_overrides,
             economics_config=economics_config,
+            investment_programs=investment_programs,
+            capex_constraints=(
+                capex_constraints
+                if capex_constraints is not None
+                else getattr(parameters, "capex_constraints", None)
+            ),
+            seed=seed,
+            reinvestment_seed=reinvestment_seed,
         )
         company_history = normalize_company_historical_revenue(
             historical_revenue,
@@ -239,6 +251,9 @@ class OperatingForecastPipelineService:
         overrides: Any = (),
         forecast_overrides: Any | None = None,
         economics_config: Any | None = None,
+        investment_programs: Any | None = None,
+        capex_constraints: Any | None = None,
+        reinvestment_seed: Any | None = None,
     ) -> _contracts.OperatingForecastPipelineResult:
         """Compose the operating selection before adaptive FCFF arithmetic."""
 
@@ -327,6 +342,22 @@ class OperatingForecastPipelineService:
             overrides=overrides,
             forecast_overrides=forecast_overrides,
             economics_config=economics_config,
+            investment_programs=(
+                _as_items(investment_programs)
+                if investment_programs is not None
+                else values.get("investment_programs") or values.get("programs", ())
+            ),
+            capex_constraints=(
+                capex_constraints
+                if capex_constraints is not None
+                else values.get("capex_constraints") or values.get("constraints")
+            ),
+            reinvestment_seed=(
+                reinvestment_seed
+                if reinvestment_seed is not None
+                else values.get("reinvestment_seed")
+            ),
+            seed=seed,
             as_of=as_of,
         )
         quality = self.quality_gate(values, integration.reconciled_forecast)
@@ -601,6 +632,11 @@ def _evidence_values(value: Any) -> dict[str, Any]:
             "definitions",
             "observations",
             "management_constraints",
+            "investment_programs",
+            "programs",
+            "capex_constraints",
+            "constraints",
+            "reinvestment_seed",
             "historical_revenue",
             "warnings",
             "audit_records",

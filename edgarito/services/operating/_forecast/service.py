@@ -103,6 +103,10 @@ class OperatingForecastService:
         forecast_overrides: Any | None = None,
         economics_config: Any | None = None,
         operating_economics_config: Any | None = None,
+        investment_programs: Any = (),
+        capex_constraints: Any | None = None,
+        seed: Any | None = None,
+        reinvestment_seed: Any | None = None,
     ) -> CompanyOperatingForecast:
         """Normalize evidence, forecast each segment, and consolidate roots."""
 
@@ -326,7 +330,7 @@ class OperatingForecastService:
             records,
             plan if plan is not None else forecast_plan,
             overrides if forecast_overrides is None else forecast_overrides,
-        )
+        ) or bool(investment_programs or capex_constraints or seed or reinvestment_seed)
         if economics_requested and not normalized_segments and _has_explicit_economics_target(
             plan if plan is not None else forecast_plan,
             overrides if forecast_overrides is None else forecast_overrides,
@@ -352,6 +356,10 @@ class OperatingForecastService:
                     else operating_economics_config
                 ),
                 ambiguous_segment_ids=ambiguous_segment_ids,
+                investment_programs=investment_programs,
+                capex_constraints=capex_constraints,
+                seed=seed,
+                reinvestment_seed=reinvestment_seed,
             )
             economics_by_id = {
                 item.segment.segment_id: item for item in economics.segment_economics
@@ -605,6 +613,17 @@ def _has_economics_inputs(observations, plan, overrides) -> bool:
         "forward_tax_rate",
         "tax_rate_guidance",
         "nopat",
+        "depreciation_and_amortization",
+        "depreciation_to_revenue",
+        "da",
+        "depreciation",
+        "capex",
+        "capital_expenditures",
+        "capital_expenditure",
+        "capex_to_revenue",
+        "operating_working_capital",
+        "operating_working_capital_to_revenue",
+        "owc",
         "pretax_income",
         "pretax",
         "pre_tax_income",
@@ -695,6 +714,12 @@ def _has_explicit_economics_target(plan, overrides) -> bool:
             "tax",
             "tax_rate",
             "nopat",
+            "depreciation_and_amortization",
+            "depreciation_to_revenue",
+            "capex",
+            "capex_to_revenue",
+            "operating_working_capital",
+            "operating_working_capital_to_revenue",
         } and strategy in {"explicit", "ratio", "residual"} and scope == "segment":
             return True
     return False

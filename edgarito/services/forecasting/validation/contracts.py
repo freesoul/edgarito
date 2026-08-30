@@ -349,6 +349,12 @@ class ForecastYearRow(BaseModel):
             "capex", "capital_expenditures", "capital_expenditure"
         ),
     )
+    operating_working_capital: Decimal | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "operating_working_capital", "owc", "working_capital"
+        ),
+    )
     delta_nwc: Decimal | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -372,6 +378,7 @@ class ForecastYearRow(BaseModel):
         "tax_rate",
         "depreciation_and_amortization",
         "capex",
+        "operating_working_capital",
         "delta_nwc",
         "reinvestment_rate",
     )

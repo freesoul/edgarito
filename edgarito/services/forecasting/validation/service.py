@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .adapters import driver_economics_to_validation_context
 from .config import ForecastValidationConfig
 from .contracts import (
-    ForecastValidationContext,
     ForecastValidationResult,
 )
 from .registry import RuleRegistry
@@ -29,7 +29,7 @@ class ForecastValidationService:
         self.registry = registry or RuleRegistry.default()
 
     def validate(self, artifact: Any) -> ForecastValidationResult:
-        context = ForecastValidationContext.from_artifact(artifact)
+        context = driver_economics_to_validation_context(artifact)
         findings = tuple(
             finding
             for rule in self.registry.rules

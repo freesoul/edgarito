@@ -12,6 +12,12 @@ from edgarito.services.operating._forecast.financials_adapter import (
     normalized_company_financials_to_operating_observations,
     normalized_financials_to_operating_evidence,
 )
+from edgarito.services.operating._forecast.reinvestment import (
+    DriverBasedCanonicalFcffAdapter,
+    OperatingReinvestmentEngine,
+    OperatingReinvestmentForecastService,
+    ReinvestmentForecastService,
+)
 from edgarito.services.operating._forecast.service import (
     OperatingForecastService,
     normalize_company_historical_revenue,
@@ -71,6 +77,10 @@ __all__ = [
     "normalized_financials_to_operating_evidence",
     "OperatingTaxNopatEngine",
     "OperatingTaxForecastService",
+    "OperatingReinvestmentEngine",
+    "DriverBasedCanonicalFcffAdapter",
+    "OperatingReinvestmentForecastService",
+    "ReinvestmentForecastService",
     "RevenueForecastReconciler",
     "backlog_conversion",
     "capacity_utilization_price",

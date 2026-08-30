@@ -222,6 +222,11 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
         "operating_income_loss": "ebit",
         "effective_tax_rate": "tax_rate",
         "tax_rate_percentage": "tax_rate",
+        "da": "depreciation_and_amortization",
+        "depreciation": "depreciation_and_amortization",
+        "capital_expenditures": "capex",
+        "capital_expenditure": "capex",
+        "owc": "operating_working_capital",
     }.get(normalized_metric, normalized_metric)
     if normalized_metric not in {
         "gross_margin",
@@ -230,6 +235,12 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
         "sg_and_a",
         "other_operating_items",
         "ebit",
+        "depreciation_and_amortization",
+        "depreciation_to_revenue",
+        "capex",
+        "capex_to_revenue",
+        "operating_working_capital",
+        "operating_working_capital_to_revenue",
     }:
         if normalized_metric == "tax":
             if path is not None or strategy in {
@@ -268,6 +279,21 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
                     "Explicit NOPAT overrides are unsupported; NOPAT is calculated "
                     "from EBIT and TAX_RATE"
                 )
+        elif normalized_metric in {
+            "delta_nwc",
+            "change_in_operating_working_capital",
+            "change_in_working_capital",
+            "fcff",
+        }:
+            if path is not None or strategy in {
+                ForecastStrategy.EXPLICIT,
+                ForecastStrategy.RATIO,
+                ForecastStrategy.RESIDUAL,
+            }:
+                raise ValueError(
+                    f"Explicit {normalized_metric} overrides are unsupported; "
+                    "the value is a derived company accounting identity"
+                )
         return
     if strategy == ForecastStrategy.EXPLICIT and path is None:
         raise ValueError(f"Explicit {normalized_metric} records require explicit_path")
@@ -301,6 +327,42 @@ def _validate_economics_explicit_record(metric, strategy, path, basis=None) -> N
                     f"{strategy.value} {normalized_metric} paths require basis={expected.value}"
                 )
         if path is not None and any(item < 0 for item in path):
+            raise ValueError(f"{normalized_metric} paths cannot be negative")
+    elif normalized_metric in {
+        "depreciation_and_amortization",
+        "depreciation_to_revenue",
+        "capex",
+        "capex_to_revenue",
+        "operating_working_capital",
+        "operating_working_capital_to_revenue",
+    }:
+        if strategy not in {
+            ForecastStrategy.EXPLICIT,
+            ForecastStrategy.RATIO,
+            ForecastStrategy.RESIDUAL,
+        }:
+            if path is not None:
+                raise ValueError(
+                    f"{strategy.value} {normalized_metric} paths are not supported"
+                )
+            return
+        if path is None:
+            raise ValueError(f"{strategy.value} {normalized_metric} records require explicit_path")
+        expected = (
+            ForecastValueBasis.ABSOLUTE
+            if strategy in {ForecastStrategy.EXPLICIT, ForecastStrategy.RESIDUAL}
+            else ForecastValueBasis.PERCENT_OF_REVENUE
+        )
+        if basis != expected:
+            raise ValueError(
+                f"{strategy.value} {normalized_metric} paths require basis={expected.value}"
+            )
+        if normalized_metric in {
+            "depreciation_and_amortization",
+            "depreciation_to_revenue",
+            "capex",
+            "capex_to_revenue",
+        } and any(item < 0 for item in path):
             raise ValueError(f"{normalized_metric} paths cannot be negative")
     elif normalized_metric in {"other_operating_items", "ebit"}:
         if strategy == ForecastStrategy.RATIO:
@@ -541,6 +603,15 @@ class ForecastOverride(BaseModel):
             raise ValueError("Company forecast overrides require scope_id='company'")
         if self.scope == ForecastScope.SEGMENT and self.scope_id == "company":
             raise ValueError("Segment forecast overrides require a segment scope_id")
+        if _metric_value(self.metric).strip().casefold().replace("-", "_") in {
+            "delta_nwc",
+            "change_in_operating_working_capital",
+            "change_in_working_capital",
+            "fcff",
+        }:
+            raise ValueError(
+                "Overrides for derived delta NWC and FCFF outputs are unsupported"
+            )
         _validate_economics_scope(self.scope, self.metric)
         _validate_economics_explicit_record(
             self.metric, self.strategy, self.explicit_path, self.basis

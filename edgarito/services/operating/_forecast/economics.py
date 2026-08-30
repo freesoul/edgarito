@@ -46,6 +46,9 @@ from edgarito.services.operating._forecast.normalization import (
     _management_guidance_to_observation,
 )
 from edgarito.services.operating._forecast.opex_ebit import OperatingOpexEbitEngine
+from edgarito.services.operating._forecast.reinvestment import (
+    OperatingReinvestmentEngine,
+)
 from edgarito.services.operating._forecast.tax_nopat import OperatingTaxNopatEngine
 
 _MARGIN = "gross_margin"
@@ -140,7 +143,12 @@ class OperatingEconomicsForecastService:
     identity differences are audit warnings only.
     """
 
-    def __init__(self, config: OperatingEconomicsForecastConfig | Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        config: OperatingEconomicsForecastConfig | Mapping[str, Any] | None = None,
+        *,
+        reinvestment_engine: OperatingReinvestmentEngine | None = None,
+    ) -> None:
         self.config = (
             config
             if isinstance(config, OperatingEconomicsForecastConfig)
@@ -148,6 +156,7 @@ class OperatingEconomicsForecastService:
         )
         self.opex_ebit_engine = OperatingOpexEbitEngine()
         self.tax_nopat_engine = OperatingTaxNopatEngine()
+        self.reinvestment_engine = reinvestment_engine or OperatingReinvestmentEngine()
 
     def forecast(
         self,
@@ -173,6 +182,11 @@ class OperatingEconomicsForecastService:
         period_key: str | None = None,
         config: OperatingEconomicsForecastConfig | Mapping[str, Any] | None = None,
         ambiguous_segment_ids: Iterable[str] = (),
+        capex_constraints: Mapping[int, Any] | None = None,
+        investment_programs: Iterable[Any] = (),
+        seed: Any | None = None,
+        reinvestment_seed: Any | None = None,
+        evidence: Any | None = None,
     ) -> CompanyOperatingEconomicsForecast:
         """Build immutable segment and company gross-economics contracts."""
 
@@ -226,13 +240,22 @@ class OperatingEconomicsForecastService:
         years = self._years(fiscal_years, revenue_forecasts, company_revenue)
         if company_revenue is not None and company_revenue.fiscal_years != years:
             raise ValueError("Revenue and operating-economics years must match")
+        evidence_observations = self._evidence_value(evidence, "observations")
         normalized_observations = tuple(
             self._coerce_observation(item)
-            for item in self._observation_items(observations)
+            for item in (
+                *self._observation_items(observations),
+                *self._observation_items(evidence_observations),
+            )
         )
         normalized_management = tuple(
             observation
-            for item in self._observation_items(management_constraints)
+            for item in (
+                *self._observation_items(management_constraints),
+                *self._observation_items(
+                    self._evidence_value(evidence, "management_constraints")
+                ),
+            )
             for observation in (self._coerce_observation(item, management=True),)
             if observation is not None
         )
@@ -360,7 +383,7 @@ class OperatingEconomicsForecastService:
             period_key=period_key,
             ambiguous_segment_ids=ambiguous_ids,
         )
-        return self.tax_nopat_engine.apply(
+        company = self.tax_nopat_engine.apply(
             company,
             all_observations,
             segments=normalized_segments,
@@ -369,6 +392,34 @@ class OperatingEconomicsForecastService:
             config=policy,
             fiscal_period=fiscal_period,
             period_key=period_key,
+        )
+        return self.reinvestment_engine.apply(
+            company,
+            all_observations,
+            segments=normalized_segments,
+            plan=normalized_plan,
+            overrides=overrides if forecast_overrides is None else forecast_overrides,
+            config=policy,
+            fiscal_period=fiscal_period,
+            period_key=period_key,
+            investment_programs=(
+                investment_programs
+                if investment_programs
+                else self._evidence_value(evidence, "investment_programs")
+                or self._evidence_value(evidence, "programs")
+            ),
+            capex_constraints=(
+                capex_constraints
+                if capex_constraints is not None
+                else self._evidence_value(evidence, "capex_constraints")
+                or self._evidence_value(evidence, "constraints")
+            ),
+            seed=seed,
+            reinvestment_seed=(
+                reinvestment_seed
+                if reinvestment_seed is not None
+                else self._evidence_value(evidence, "reinvestment_seed")
+            ),
         )
 
     build = forecast
@@ -396,6 +447,14 @@ class OperatingEconomicsForecastService:
     @staticmethod
     def _config(value: OperatingEconomicsForecastConfig | Mapping[str, Any]) -> OperatingEconomicsForecastConfig:
         return value if isinstance(value, OperatingEconomicsForecastConfig) else OperatingEconomicsForecastConfig.model_validate(value)
+
+    @staticmethod
+    def _evidence_value(value: Any, name: str):
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            return value.get(name)
+        return getattr(value, name, None)
 
     @staticmethod
     def _years(
