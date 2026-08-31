@@ -45,7 +45,12 @@ _PERCENT = Decimal(100)
 _RATE_UNITS = frozenset(
     {"%", "percent", "percentage", "percentage_points", "percentage_point", "pp", "bps", "bp", "ratio", "rate", "decimal", "fraction"}
 )
-_DIRECT_FORWARD_ORIGINS = frozenset({"first_party_observation", "extracted_evidence"})
+_DIRECT_FORWARD_ORIGINS = frozenset({
+    "first_party_observation",
+    "extracted_evidence",
+    "reasoned_assumption",
+    "model_assumption",
+})
 _HISTORICAL_SOURCE_RANK = {
     "reported": 4,
     "first_party_observation": 3,
@@ -53,6 +58,18 @@ _HISTORICAL_SOURCE_RANK = {
     "management_guidance": 2,
     "derived": 1,
     "forward_evidence": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
+}
+_ORIGIN_RANK = {
+    "management_guidance": 2,
+    "reported": 1,
+    "first_party_observation": 1,
+    "extracted_evidence": 1,
+    "forward_evidence": 1,
+    "derived": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
 }
 _CURRENCY_TERMS = frozenset(
     {"usd", "eur", "gbp", "jpy", "cny", "cad", "aud", "chf", "currency", "dollar", "dollars", "$", "€", "£"}
@@ -534,8 +551,12 @@ class OperatingTaxNopatEngine:
             origin = observation.origin
             if origin == "management_guidance":
                 source = "management_guidance"
-            elif origin in _DIRECT_FORWARD_ORIGINS:
+            elif origin in {"first_party_observation", "extracted_evidence"}:
                 source = "first_party_observation"
+            elif origin == "reasoned_assumption":
+                source = "reasoned_assumption"
+            elif origin == "model_assumption":
+                source = "model_assumption"
             elif origin == "forward_evidence":
                 source = "forward_evidence"
             elif cls._is_forward(observation, first_forecast_year):
@@ -548,7 +569,8 @@ class OperatingTaxNopatEngine:
         _, observation, value, source = max(
             choices,
             key=lambda item: (
-                {"management_guidance": 3, "first_party_observation": 2, "forward_evidence": 1}[item[3]],
+                _ORIGIN_RANK.get(item[1].origin, 0),
+                {"management_guidance": 5, "first_party_observation": 4, "reasoned_assumption": 3, "forward_evidence": 2, "model_assumption": 1}[item[3]],
                 1 if item[1].is_total else 0,
                 _CONFIDENCE_RANK[item[1].confidence],
                 item[1].evidence is not None,
@@ -558,6 +580,8 @@ class OperatingTaxNopatEngine:
         method = {
             "management_guidance": "management_guidance_tax_rate",
             "first_party_observation": "first_party_forward_tax_rate",
+            "reasoned_assumption": "reasoned_forward_tax_rate",
+            "model_assumption": "model_forward_tax_rate",
             "forward_evidence": "deterministic_forward_tax_rate_evidence",
         }[source]
         return _Candidate(

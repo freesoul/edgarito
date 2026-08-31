@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import copy
 from dataclasses import is_dataclass, replace
 from decimal import Decimal
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 import edgarito.services.operating.contracts as _contracts
 from edgarito.schemas.forecasting import (
@@ -27,9 +27,6 @@ from edgarito.services.financials.availability import (
     ObservationAvailabilityMode,
 )
 from edgarito.services.forecasting._fcff.service import FcffForecastService
-from edgarito.services.forecasting.multistage import (
-    AdaptiveMultistageFcffForecastService,
-)
 from edgarito.services.guidance.resolver import ManagementGuidanceResolver
 from edgarito.services.operating._forecast.financials_adapter import (
     normalized_company_financials_to_operating_observations,
@@ -42,6 +39,11 @@ from edgarito.services.operating.reconciliation import (
     RevenueForecastReconciler,
     materialize_revenue_anchors,
 )
+
+if TYPE_CHECKING:
+    from edgarito.services.forecasting.multistage import (
+        AdaptiveMultistageFcffForecastService,
+    )
 
 
 class OperatingForecastIntegrationService:
@@ -211,9 +213,13 @@ class OperatingForecastPipelineService:
             integration_service or OperatingForecastIntegrationService()
         )
         self.fcff_service = fcff_service or FcffForecastService()
-        self.adaptive_service = (
-            adaptive_service or AdaptiveMultistageFcffForecastService(self.fcff_service)
-        )
+        if adaptive_service is None:
+            from edgarito.services.forecasting.multistage import (
+                AdaptiveMultistageFcffForecastService,
+            )
+
+            adaptive_service = AdaptiveMultistageFcffForecastService(self.fcff_service)
+        self.adaptive_service = adaptive_service
 
     def forecast(
         self,

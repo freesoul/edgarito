@@ -17,6 +17,24 @@ __all__ = [
     "ForecastPlanService",
     "IncompleteFcffForecastMethodError",
     "SimplifiedFcfForecastService",
+    "ForecastReasoner",
+    "ForecastReasoningInput",
+    "ForecastReasoningResponse",
+    "ForecastReasoningValidator",
+    "ForecastReasoningCompiler",
+    "ReasonedDriverBasedForecastService",
+    "ForecastReasonedDriverBasedForecastService",
+    "ForecastReasoningInputValidationError",
+    "ForecastReasoningInputError",
+    "InvalidForecastReasoningInputError",
+    "ForecastReasoningResult",
+    "ReasonedDriverBasedForecastResult",
+    "ReasonedForecastAssumption",
+    "ForecastReasoningValueBasis",
+    "ForecastReasoningCache",
+    "EvidenceCatalog",
+    "EvidenceRecord",
+    "EvidenceCatalogExclusion",
 ]
 
 
@@ -84,6 +102,78 @@ _LAZY_EXPORTS = {
     "IncompleteFcffForecastMethodError": (
         "edgarito.services.forecasting.orchestration",
         "IncompleteFcffForecastMethodError",
+    ),
+    "ForecastReasoner": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoner",
+    ),
+    "ForecastReasoningInput": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningInput",
+    ),
+    "ForecastReasoningResponse": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningResponse",
+    ),
+    "ForecastReasoningValidator": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningValidator",
+    ),
+    "ForecastReasoningCompiler": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningCompiler",
+    ),
+    "ReasonedDriverBasedForecastService": (
+        "edgarito.services.forecasting.reasoning",
+        "ReasonedDriverBasedForecastService",
+    ),
+    "ForecastReasonedDriverBasedForecastService": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasonedDriverBasedForecastService",
+    ),
+    "ForecastReasoningInputValidationError": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningInputValidationError",
+    ),
+    "ForecastReasoningInputError": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningInputError",
+    ),
+    "InvalidForecastReasoningInputError": (
+        "edgarito.services.forecasting.reasoning",
+        "InvalidForecastReasoningInputError",
+    ),
+    "ForecastReasoningResult": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningResult",
+    ),
+    "ReasonedDriverBasedForecastResult": (
+        "edgarito.services.forecasting.reasoning",
+        "ReasonedDriverBasedForecastResult",
+    ),
+    "ReasonedForecastAssumption": (
+        "edgarito.services.forecasting.reasoning",
+        "ReasonedForecastAssumption",
+    ),
+    "ForecastReasoningValueBasis": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningValueBasis",
+    ),
+    "ForecastReasoningCache": (
+        "edgarito.services.forecasting.reasoning",
+        "ForecastReasoningCache",
+    ),
+    "EvidenceCatalog": (
+        "edgarito.services.forecasting.reasoning",
+        "EvidenceCatalog",
+    ),
+    "EvidenceRecord": (
+        "edgarito.services.forecasting.reasoning",
+        "EvidenceRecord",
+    ),
+    "EvidenceCatalogExclusion": (
+        "edgarito.services.forecasting.reasoning",
+        "EvidenceCatalogExclusion",
     ),
 }
 

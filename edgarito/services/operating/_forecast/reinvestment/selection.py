@@ -26,6 +26,17 @@ from .contracts import (
     _Path,
 )
 
+_ORIGIN_RANK = {
+    "management_guidance": 1,
+    "reported": 1,
+    "first_party_observation": 1,
+    "extracted_evidence": 1,
+    "forward_evidence": 1,
+    "derived": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
+}
+
 
 class _ReinvestmentSelectionMixin:
     """Metric precedence, direct evidence, and historical ratio selection."""
@@ -488,6 +499,7 @@ class _ReinvestmentSelectionMixin:
         selected = max(
             choices,
             key=lambda choice: (
+                _ORIGIN_RANK.get(choice[1].origin, 1),
                 1 if choice[1].is_total else 0,
                 1 if choice[1].origin == "management_guidance" else 0,
                 _CONFIDENCE_RANK.get(choice[1].confidence, 0),
@@ -501,6 +513,10 @@ class _ReinvestmentSelectionMixin:
             else "first_party_observation"
             if item.origin
             in {"first_party_observation", "extracted_evidence", "forward_evidence"}
+            else "reasoned_assumption"
+            if item.origin == "reasoned_assumption"
+            else "model_assumption"
+            if item.origin == "model_assumption"
             else "reported"
         )
         method = item.method or f"direct_{metric}_observation"

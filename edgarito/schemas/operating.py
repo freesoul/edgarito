@@ -406,6 +406,8 @@ class OperatingDriverObservation(BaseModel):
         "derived",
         "extracted_evidence",
         "forward_evidence",
+        "reasoned_assumption",
+        "model_assumption",
     ]
     confidence: Literal["high", "medium", "low"]
     provenance: AssumptionProvenance | EvidenceReference | None = None

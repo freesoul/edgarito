@@ -56,8 +56,24 @@ _PROFIT = "gross_profit"
 _REVENUE = "revenue"
 _COST = "cost_of_revenue"
 _DIRECT_ORIGINS = frozenset(
-    {"reported", "first_party_observation", "extracted_evidence"}
+    {
+        "reported",
+        "first_party_observation",
+        "extracted_evidence",
+        "reasoned_assumption",
+        "model_assumption",
+    }
 )
+_ORIGIN_RANK = {
+    "management_guidance": 2,
+    "reported": 1,
+    "first_party_observation": 1,
+    "extracted_evidence": 1,
+    "forward_evidence": 1,
+    "derived": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
+}
 _MARGIN_ALIASES = frozenset(
     {
         "gross_margin",
@@ -586,13 +602,13 @@ class OperatingEconomicsForecastService:
                     raise ValueError("Explicit gross profit cannot be negative")
             if record.basis is not None:
                 expected_basis = (
-                    ForecastValueBasis.PERCENT_OF_REVENUE
+                    {ForecastValueBasis.PERCENT_OF_REVENUE, ForecastValueBasis.PERCENTAGE_POINTS}
                     if metric == _MARGIN
-                    else ForecastValueBasis.ABSOLUTE
+                    else {ForecastValueBasis.ABSOLUTE}
                 )
-                if record.basis != expected_basis:
+                if record.basis not in expected_basis:
                     raise ValueError(
-                        f"Explicit {metric} paths require basis={expected_basis.value}"
+                        f"Explicit {metric} paths require a compatible value basis"
                     )
             if record.scope.value == "segment":
                 canonical_id = canonical_operating_segment_id(record.scope_id) or record.scope_id
@@ -1306,6 +1322,7 @@ class OperatingEconomicsForecastService:
         _, observation, value = max(
             candidates,
             key=lambda item: (
+                _ORIGIN_RANK.get(item[1].origin, 0),
                 1 if item[1].is_total else 0,
                 _CONFIDENCE_RANK[item[1].confidence],
                 item[1].evidence is not None,

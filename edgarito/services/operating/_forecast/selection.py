@@ -20,6 +20,16 @@ from edgarito.services.operating._forecast.contracts import (
 
 _SEGMENT_REVENUE_DRIVERS = frozenset(OPERATING_VOCABULARY.revenue_driver_priority)
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+_ORIGIN_RANK = {
+    "management_guidance": 2,
+    "reported": 1,
+    "first_party_observation": 1,
+    "extracted_evidence": 1,
+    "forward_evidence": 1,
+    "derived": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
+}
 
 
 def _select_observations(
@@ -54,7 +64,7 @@ def _select_observations(
         winner = max(
             enumerate(candidates),
             key=lambda pair: (
-                2 if pair[1].origin == "management_guidance" else 1,
+                _ORIGIN_RANK.get(pair[1].origin, 0),
                 _CONFIDENCE_RANK[pair[1].confidence],
                 -pair[0],
             ),

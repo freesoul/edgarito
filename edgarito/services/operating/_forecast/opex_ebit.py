@@ -43,7 +43,23 @@ _GP = "gross_profit"
 _GM = "gross_margin"
 _REVENUE = "revenue"
 _OPERATING_INCOME = "operating_income"
-_DIRECT_ORIGINS = frozenset({"reported", "first_party_observation", "extracted_evidence"})
+_DIRECT_ORIGINS = frozenset({
+    "reported",
+    "first_party_observation",
+    "extracted_evidence",
+    "reasoned_assumption",
+    "model_assumption",
+})
+_ORIGIN_RANK = {
+    "management_guidance": 2,
+    "reported": 1,
+    "first_party_observation": 1,
+    "extracted_evidence": 1,
+    "forward_evidence": 1,
+    "derived": 1,
+    "reasoned_assumption": 0,
+    "model_assumption": -1,
+}
 _EVENT_TERMS = frozenset({"restructuring", "impairment", "write_down", "writeoff", "reorganization"})
 _CURRENCY_TERMS = ("usd", "eur", "gbp", "jpy", "cny", "cad", "aud", "chf", "currency", "dollar", "$", "€", "£")
 _EXPENSE_METRICS = frozenset({_RD, _SGA})
@@ -421,7 +437,9 @@ class OperatingOpexEbitEngine:
                     raise ValueError(f"{record.strategy.value} {metric} paths require basis={expected.value}")
                 if any(item < 0 for item in values):
                     raise ValueError(f"{metric} paths cannot be negative")
-            elif record.strategy in {ForecastStrategy.EXPLICIT, ForecastStrategy.RESIDUAL} and basis != ForecastValueBasis.ABSOLUTE:
+            elif metric == _GM and record.strategy == ForecastStrategy.EXPLICIT and basis not in {ForecastValueBasis.PERCENT_OF_REVENUE, ForecastValueBasis.PERCENTAGE_POINTS}:
+                raise ValueError(f"{record.strategy.value} {metric} paths require a percentage basis")
+            elif metric != _GM and record.strategy in {ForecastStrategy.EXPLICIT, ForecastStrategy.RESIDUAL} and basis != ForecastValueBasis.ABSOLUTE:
                 raise ValueError(f"{record.strategy.value} {metric} paths require basis=absolute")
             elif metric in {_OTHER, _EBIT} and record.strategy == ForecastStrategy.RATIO:
                 raise ValueError(f"Ratio {metric} paths are not supported")
@@ -943,7 +961,7 @@ class OperatingOpexEbitEngine:
             choices.append((position, observation, value))
         if not choices:
             return None
-        _, observation, value = max(choices, key=lambda item: (item[1].is_total, item[1].confidence == "high", item[1].evidence is not None, -item[0]))
+        _, observation, value = max(choices, key=lambda item: (_ORIGIN_RANK.get(item[1].origin, 0), item[1].is_total, item[1].confidence == "high", item[1].evidence is not None, -item[0]))
         return _Candidate(metric, value, "management_guidance" if observation.origin == "management_guidance" else observation.origin, observation.confidence, "management_guidance_observation" if management else "reported_operating_economics", observation.provenance or observation.evidence, self._references((observation,)), (observation,))
 
     def _reported_candidate(self, metric, year, records, policy, *, fiscal_period, period_key):

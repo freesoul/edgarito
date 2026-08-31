@@ -184,8 +184,29 @@ class ForecastProvenance(BaseModel):
     origin: Optional[str] = None
     methodology: Optional[str] = None
     reference: Optional[str] = None
+    # Reasoned forecasts use the same provider-neutral provenance object as
+    # manual overrides. These optional fields keep the proposal and its
+    # evidence citations auditable without adding provider coupling.
+    assumption_id: Optional[str] = None
+    evidence_ids: tuple[str, ...] = ()
+    model: Optional[str] = None
+    prompt_hash: Optional[str] = None
+    prompt_version: Optional[str] = None
+    schema_version: Optional[str] = None
+    validator_version: Optional[str] = None
 
-    @field_validator("source", "origin", "methodology", "reference")
+    @field_validator(
+        "source",
+        "origin",
+        "methodology",
+        "reference",
+        "assumption_id",
+        "model",
+        "prompt_hash",
+        "prompt_version",
+        "schema_version",
+        "validator_version",
+    )
     @classmethod
     def normalize_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -193,6 +214,14 @@ class ForecastProvenance(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("Forecast provenance text cannot be blank")
+        return normalized
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def normalize_evidence_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(str(item).strip() for item in value if str(item).strip())
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Forecast provenance evidence IDs must be unique")
         return normalized
 
     @model_validator(mode="after")

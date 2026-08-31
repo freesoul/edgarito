@@ -39,6 +39,8 @@ _DIRECT_ORIGINS = frozenset(
         "extracted_evidence",
         "derived",
         "forward_evidence",
+        "reasoned_assumption",
+        "model_assumption",
     }
 )
 _METRICS = frozenset({_DA, _CAPEX, _OWC})
