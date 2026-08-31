@@ -1,0 +1,43 @@
+{
+  "fixture_id": "tsla",
+  "ticker": "TSLA",
+  "company": "Tesla, Inc.",
+  "as_of": "2024-02-15",
+  "fiscal_calendar": "calendar_year_end_december_31",
+  "historical_cutoff": "2023-12-31",
+  "exact_fiscal_years": [2024],
+  "expected_archetypes": ["multi_segment"],
+  "completeness": "partial",
+  "financial_rows": [
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "revenue", "value": "96773", "unit": "USD millions", "source_concept": "Revenues", "source_id": "tsla-2023-10k", "filed": "2024-01-29", "provenance": "Tesla 2023 10-K; exact reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "operating_income", "value": "8891", "unit": "USD millions", "source_concept": "IncomeFromOperations", "source_id": "tsla-2023-10k", "filed": "2024-01-29", "provenance": "Tesla 2023 10-K; exact reported fact"}
+  ],
+  "reasoning_input": {
+    "company_id": "TSLA",
+    "company_name": "Tesla, Inc.",
+    "ticker": "TSLA",
+    "unit": "USD millions",
+    "as_of": "2024-02-15",
+    "forecast_years": [2024],
+    "segments": [{"segment_id": "automotive", "name": "Automotive", "currency": "USD"}, {"segment_id": "energy", "name": "Energy Generation and Storage", "currency": "USD"}],
+    "historical_facts": [{"fiscal_year": 2023, "metric": "revenue", "value": 96773, "unit": "USD millions", "source": "Tesla 2023 10-K", "source_id": "tsla-2023-10k", "source_date": "2024-01-29"}]
+  },
+  "evidence_metadata": [
+    {"evidence_id": "segment:automotive", "category": "operating", "source": "Tesla 2023 10-K", "source_date": "2024-01-29", "as_of": "2024-02-15", "provenance": "manually curated; linked segment record"},
+    {"evidence_id": "segment:energy", "category": "operating", "source": "Tesla 2023 10-K", "source_date": "2024-01-29", "as_of": "2024-02-15", "provenance": "manually curated; linked segment record"},
+    {"evidence_id": "historical:company:company:revenue:2023:FY", "category": "historical", "source": "Tesla 2023 10-K", "source_date": "2024-01-29", "as_of": "2024-02-15", "provenance": "manually curated; linked historical record"}
+  ],
+  "availability_records": [
+    {"identity": "segment:automotive", "category": "operating", "available_on": "2024-01-29", "source": "Tesla 2023 10-K", "source_id": "tsla-2023-10k", "provenance": "linked segment availability"},
+    {"identity": "segment:energy", "category": "operating", "available_on": "2024-01-29", "source": "Tesla 2023 10-K", "source_id": "tsla-2023-10k", "provenance": "linked segment availability"},
+    {"identity": "historical:company:company:revenue:2023:FY", "category": "historical_summary", "available_on": "2024-01-29", "source": "Tesla 2023 10-K", "source_id": "tsla-2023-10k", "provenance": "linked historical availability"}
+  ],
+  "actual_outcomes": {
+    "company": "Tesla, Inc.",
+    "ticker": "TSLA",
+    "observations": [
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "revenue", "value": "97690", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "Tesla 2024 10-K", "source_id": "tsla-2024-10k", "source_concept": "Revenues", "source_date": "2025-01-30", "filing_date": "2025-01-30", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; tax, OWC and FCFF unavailable"},
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "ebit", "value": "7076", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "Tesla 2024 10-K", "source_id": "tsla-2024-10k", "source_concept": "IncomeFromOperations", "source_date": "2025-01-30", "filing_date": "2025-01-30", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; tax, OWC and FCFF unavailable"}
+    ]
+  }
+}

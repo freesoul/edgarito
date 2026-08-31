@@ -1,0 +1,38 @@
+{
+  "fixture_id": "ko",
+  "ticker": "KO",
+  "company": "The Coca-Cola Company",
+  "as_of": "2024-03-01",
+  "fiscal_calendar": "calendar_year_end_december_31",
+  "historical_cutoff": "2023-12-31",
+  "exact_fiscal_years": [2024],
+  "expected_archetypes": ["stable"],
+  "completeness": "partial",
+  "financial_rows": [
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "revenue", "value": "45754", "unit": "USD millions", "source_concept": "Revenue", "source_id": "ko-2023-10k", "filed": "2024-02-15", "provenance": "KO 2023 10-K; exact reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "operating_income", "value": "11311", "unit": "USD millions", "source_concept": "OperatingIncomeLoss", "source_id": "ko-2023-10k", "filed": "2024-02-15", "provenance": "KO 2023 10-K; exact reported fact"}
+  ],
+  "reasoning_input": {
+    "company_id": "KO",
+    "company_name": "The Coca-Cola Company",
+    "ticker": "KO",
+    "unit": "USD millions",
+    "as_of": "2024-03-01",
+    "forecast_years": [2024],
+    "historical_facts": [{"fiscal_year": 2023, "metric": "revenue", "value": 45754, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "ko-2023-10k", "source_date": "2024-02-15"}]
+  },
+  "evidence_metadata": [
+    {"evidence_id": "historical:company:company:revenue:2023:FY", "category": "historical", "source": "KO 2023 10-K", "source_date": "2024-02-15", "as_of": "2024-03-01", "provenance": "manually curated; source filing"}
+  ],
+  "availability_records": [
+    {"identity": "historical:company:company:revenue:2023:FY", "category": "historical_summary", "available_on": "2024-02-15", "source": "KO 2023 10-K", "source_id": "ko-2023-10k", "provenance": "manually curated linked availability"}
+  ],
+  "actual_outcomes": {
+    "company": "The Coca-Cola Company",
+    "ticker": "KO",
+    "observations": [
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "revenue", "value": "47061", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "ko-2024-10k", "source_concept": "Revenue", "source_date": "2025-02-14", "filing_date": "2025-02-14", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"},
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "ebit", "value": "9992", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "ko-2024-10k", "source_concept": "OperatingIncomeLoss", "source_date": "2025-02-14", "filing_date": "2025-02-14", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"}
+    ]
+  }
+}

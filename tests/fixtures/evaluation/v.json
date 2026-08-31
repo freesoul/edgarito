@@ -1,0 +1,46 @@
+{
+  "fixture_id": "v",
+  "ticker": "V",
+  "company": "Visa Inc.",
+  "as_of": "2023-12-01",
+  "fiscal_calendar": "fiscal_year_end_september_30",
+  "historical_cutoff": "2023-09-30",
+  "exact_fiscal_years": [2024],
+  "expected_archetypes": ["transactions_take_rate"],
+  "completeness": "partial",
+  "financial_rows": [
+    {"fiscal_year": 2023, "period_end": "2023-09-30", "concept": "revenue", "value": "32653", "unit": "USD millions", "source_concept": "Revenue", "source_id": "v-2023-10k", "filed": "2023-11-15", "provenance": "Visa 2023 10-K; exact reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-09-30", "concept": "operating_income", "value": "20810", "unit": "USD millions", "source_concept": "OperatingIncomeLoss", "source_id": "v-2023-10k", "filed": "2023-11-15", "provenance": "Visa 2023 10-K; exact reported fact"}
+  ],
+  "reasoning_input": {
+    "company_id": "V",
+    "company_name": "Visa Inc.",
+    "ticker": "V",
+    "unit": "USD millions",
+    "as_of": "2023-12-01",
+    "forecast_years": [2024],
+    "segments": [{"segment_id": "payments", "name": "Payments", "scope": "segment", "currency": "USD"}],
+    "definitions": [{"driver_id": "payments-revenue", "archetype": "transactions_take_rate", "segment_id": "payments", "output_metric": "revenue", "input_metrics": ["transactions", "take_rate"], "units": {"transactions": "count", "take_rate": "percent"}, "formula_id": "transactions_take_rate", "required_inputs": ["transactions", "take_rate"], "source": "Visa annual filing metadata", "confidence": "high"}],
+    "observations": [],
+    "historical_facts": [{"fiscal_year": 2023, "metric": "revenue", "value": 32653, "unit": "USD millions", "source": "Visa 2023 10-K", "source_id": "v-2023-10k", "source_date": "2023-11-15"}]
+  },
+  "evidence_metadata": [
+    {"evidence_id": "segment:payments", "category": "operating", "source": "Visa 2023 10-K", "source_date": "2023-11-15", "as_of": "2023-12-01", "provenance": "manually curated; linked segment record"},
+    {"evidence_id": "definition:payments:payments-revenue", "category": "operating", "source": "Visa 2023 10-K", "source_date": "2023-11-15", "as_of": "2023-12-01", "provenance": "manually curated; linked driver definition"},
+    {"evidence_id": "historical:company:company:revenue:2023:FY", "category": "historical", "source": "Visa 2023 10-K", "source_date": "2023-11-15", "as_of": "2023-12-01", "provenance": "manually curated; linked historical record"}
+  ],
+  "availability_records": [
+    {"identity": "segment:payments", "category": "operating", "available_on": "2023-11-15", "source": "Visa 2023 10-K", "source_id": "v-2023-10k", "provenance": "linked segment availability"},
+    {"identity": "definition:payments:payments-revenue", "category": "operating", "available_on": "2023-11-15", "source": "Visa 2023 10-K", "source_id": "v-2023-10k", "provenance": "linked definition availability"},
+    {"identity": "historical:company:company:revenue:2023:FY", "category": "historical_summary", "available_on": "2023-11-15", "source": "Visa 2023 10-K", "source_id": "v-2023-10k", "provenance": "linked historical availability"}
+  ],
+  "actual_outcomes": {
+    "company": "Visa Inc.",
+    "ticker": "V",
+    "observations": [
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-09-30", "metric": "revenue", "value": "35926", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "Visa 2024 10-K", "source_id": "v-2024-10k", "source_concept": "Revenue", "source_date": "2024-11-20", "filing_date": "2024-11-20", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; OWC and FCFF unavailable"},
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-09-30", "metric": "ebit", "value": "23595", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "Visa 2024 10-K", "source_id": "v-2024-10k", "source_concept": "OperatingIncomeLoss", "source_date": "2024-11-20", "filing_date": "2024-11-20", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; OWC and FCFF unavailable"}
+    ],
+    "assumption_outcomes": []
+  }
+}
