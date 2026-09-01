@@ -1,0 +1,3923 @@
+{
+  "actual_audit": {
+    "as_of": "2024-03-01",
+    "dates": [
+      [
+        "actual-financial-0:revenue:2024",
+        "2024-12-31"
+      ],
+      [
+        "actual-financial-1:ebit:2024",
+        "2024-12-31"
+      ],
+      [
+        "actual-financial-source-0",
+        "2025-02-20"
+      ],
+      [
+        "actual-financial-source-1",
+        "2025-02-20"
+      ]
+    ],
+    "issues": [],
+    "pre_cutoff_dates": [],
+    "subsequent_dates": [
+      [
+        "actual-financial-0:revenue:2024",
+        "2024-12-31"
+      ],
+      [
+        "actual-financial-1:ebit:2024",
+        "2024-12-31"
+      ],
+      [
+        "actual-financial-source-0",
+        "2025-02-20"
+      ],
+      [
+        "actual-financial-source-1",
+        "2025-02-20"
+      ]
+    ]
+  },
+  "actual_fy2024": [
+    {
+      "currency": "USD",
+      "filing_date": "2025-02-20",
+      "fiscal_period": "FY",
+      "fiscal_year": 2024,
+      "metric": "revenue",
+      "period_end": "2024-12-31",
+      "period_start": null,
+      "provenance": "reported FY2024 subset; not complete FCFF",
+      "reconstruction_provenance": "reported FY2024 subset; no reconstruction",
+      "scale": "1",
+      "sign_normalization": null,
+      "source": "KO 2024 10-K",
+      "source_concept": "Revenues",
+      "source_date": "2025-02-20",
+      "source_id": "0000021344-25-000011",
+      "unit": "USD millions",
+      "value": "47061",
+      "value_kind": "reported"
+    },
+    {
+      "currency": "USD",
+      "filing_date": "2025-02-20",
+      "fiscal_period": "FY",
+      "fiscal_year": 2024,
+      "metric": "ebit",
+      "period_end": "2024-12-31",
+      "period_start": null,
+      "provenance": "reported FY2024 subset; not complete FCFF",
+      "reconstruction_provenance": "reported FY2024 subset; no reconstruction",
+      "scale": "1",
+      "sign_normalization": null,
+      "source": "KO 2024 10-K",
+      "source_concept": "OperatingIncomeLoss",
+      "source_date": "2025-02-20",
+      "source_id": "0000021344-25-000011",
+      "unit": "USD millions",
+      "value": "9992",
+      "value_kind": "reported"
+    }
+  ],
+  "as_of": "2024-03-01",
+  "assumption_tables": {
+    "1": [
+      {
+        "assumption_id": "ASSUMP-REV-2024",
+        "base": [
+          "47000"
+        ],
+        "basis": "absolute",
+        "confidence": "low",
+        "driver_id": null,
+        "evidence_ids": [
+          "HIST-5c0179abc314f886",
+          "HIST-107ed74d18424836"
+        ],
+        "fiscal_years": [
+          2024
+        ],
+        "high": [
+          "49000"
+        ],
+        "kind": "model_assumption",
+        "low": [
+          "45000"
+        ],
+        "method": "Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+        "metric": "revenue",
+        "rationale": "The latest reported revenue observations were USD 43,004 million in FY2022 and USD 45,754 million in FY2023. No FY2024 management guidance, research evidence, or accepted operating-driver observation was supplied; therefore this is a model assumption rather than an evidence-based forecast.",
+        "scope": "company",
+        "scope_id": "company",
+        "target": "revenue",
+        "target_type": "forecast_metric",
+        "unit": "USD millions"
+      },
+      {
+        "assumption_id": "ASSUMP-DANDA-2024",
+        "base": [
+          "1150"
+        ],
+        "basis": "absolute",
+        "confidence": "low",
+        "driver_id": null,
+        "evidence_ids": [
+          "HIST-805fbeaf9aae5949",
+          "HIST-d01021c0a9217d8a"
+        ],
+        "fiscal_years": [
+          2024
+        ],
+        "high": [
+          "1300"
+        ],
+        "kind": "model_assumption",
+        "low": [
+          "1050"
+        ],
+        "method": "Conservative scenario range anchored to the latest two reported D&A observations.",
+        "metric": "depreciation_and_amortization",
+        "rationale": "Reported D&A was USD 1,260 million in FY2022 and USD 1,128 million in FY2023. In the absence of management guidance or a supplied operating driver, the FY2024 range is explicitly a model assumption.",
+        "scope": "company",
+        "scope_id": "company",
+        "target": "depreciation_and_amortization",
+        "target_type": "forecast_metric",
+        "unit": "USD millions"
+      },
+      {
+        "assumption_id": "ASSUMP-CAPEX-2024",
+        "base": [
+          "1850"
+        ],
+        "basis": "absolute",
+        "confidence": "low",
+        "driver_id": null,
+        "evidence_ids": [
+          "HIST-3634a9cafd00212d",
+          "HIST-ed4dc59dc46c364f"
+        ],
+        "fiscal_years": [
+          2024
+        ],
+        "high": [
+          "2050"
+        ],
+        "kind": "model_assumption",
+        "low": [
+          "1650"
+        ],
+        "method": "Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+        "metric": "capital_expenditures",
+        "rationale": "Reported capital expenditures were USD 1,484 million in FY2022 and USD 1,852 million in FY2023. No investment program, management constraint, or guidance was supplied, so the FY2024 range is a model assumption.",
+        "scope": "company",
+        "scope_id": "company",
+        "target": "capital_expenditures",
+        "target_type": "forecast_metric",
+        "unit": "USD millions"
+      }
+    ],
+    "2": [],
+    "3": [
+      {
+        "assumption_id": "ASSUMP-REV-2024-001",
+        "base": [
+          "47125"
+        ],
+        "basis": "absolute",
+        "confidence": "low",
+        "driver_id": null,
+        "evidence_ids": [
+          "HIST-107ed74d18424836",
+          "HIST-5c0179abc314f886"
+        ],
+        "fiscal_years": [
+          2024
+        ],
+        "high": [
+          "47750"
+        ],
+        "kind": "model_assumption",
+        "low": [
+          "46500"
+        ],
+        "method": "Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance.",
+        "metric": "revenue",
+        "rationale": "FY2023 revenue was higher than FY2022 revenue, but the supplied input contains no 2024 management guidance, research evidence, or operating-driver observations. The range therefore uses a conservative continuation of the latest observed revenue level rather than an evidence-based point estimate.",
+        "scope": "company",
+        "scope_id": "company",
+        "target": "revenue",
+        "target_type": "forecast_metric",
+        "unit": "USD millions"
+      }
+    ]
+  },
+  "assumptions": [
+    {
+      "assumption_id": "ASSUMP-REV-2024",
+      "base": [
+        "47000"
+      ],
+      "basis": "absolute",
+      "confidence": "low",
+      "driver_id": null,
+      "evidence_ids": [
+        "HIST-5c0179abc314f886",
+        "HIST-107ed74d18424836"
+      ],
+      "fiscal_years": [
+        2024
+      ],
+      "high": [
+        "49000"
+      ],
+      "kind": "model_assumption",
+      "low": [
+        "45000"
+      ],
+      "method": "Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+      "metric": "revenue",
+      "rationale": "The latest reported revenue observations were USD 43,004 million in FY2022 and USD 45,754 million in FY2023. No FY2024 management guidance, research evidence, or accepted operating-driver observation was supplied; therefore this is a model assumption rather than an evidence-based forecast.",
+      "scope": "company",
+      "scope_id": "company",
+      "target": "revenue",
+      "target_type": "forecast_metric",
+      "unit": "USD millions"
+    },
+    {
+      "assumption_id": "ASSUMP-DANDA-2024",
+      "base": [
+        "1150"
+      ],
+      "basis": "absolute",
+      "confidence": "low",
+      "driver_id": null,
+      "evidence_ids": [
+        "HIST-805fbeaf9aae5949",
+        "HIST-d01021c0a9217d8a"
+      ],
+      "fiscal_years": [
+        2024
+      ],
+      "high": [
+        "1300"
+      ],
+      "kind": "model_assumption",
+      "low": [
+        "1050"
+      ],
+      "method": "Conservative scenario range anchored to the latest two reported D&A observations.",
+      "metric": "depreciation_and_amortization",
+      "rationale": "Reported D&A was USD 1,260 million in FY2022 and USD 1,128 million in FY2023. In the absence of management guidance or a supplied operating driver, the FY2024 range is explicitly a model assumption.",
+      "scope": "company",
+      "scope_id": "company",
+      "target": "depreciation_and_amortization",
+      "target_type": "forecast_metric",
+      "unit": "USD millions"
+    },
+    {
+      "assumption_id": "ASSUMP-CAPEX-2024",
+      "base": [
+        "1850"
+      ],
+      "basis": "absolute",
+      "confidence": "low",
+      "driver_id": null,
+      "evidence_ids": [
+        "HIST-3634a9cafd00212d",
+        "HIST-ed4dc59dc46c364f"
+      ],
+      "fiscal_years": [
+        2024
+      ],
+      "high": [
+        "2050"
+      ],
+      "kind": "model_assumption",
+      "low": [
+        "1650"
+      ],
+      "method": "Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+      "metric": "capital_expenditures",
+      "rationale": "Reported capital expenditures were USD 1,484 million in FY2022 and USD 1,852 million in FY2023. No investment program, management constraint, or guidance was supplied, so the FY2024 range is a model assumption.",
+      "scope": "company",
+      "scope_id": "company",
+      "target": "capital_expenditures",
+      "target_type": "forecast_metric",
+      "unit": "USD millions"
+    }
+  ],
+  "completion": "incomplete",
+  "complexity": {
+    "run_1": {
+      "driver_assumptions": 0,
+      "evidence_based": 0,
+      "financial_assumptions": 0,
+      "manual": 0,
+      "model_assumptions": 0,
+      "proposed_assumptions": 3,
+      "proposed_model_assumptions": 3,
+      "rejected_validation_issues": 4,
+      "segments": 0,
+      "unresolved": 4
+    },
+    "run_2": {
+      "status": "not_available_after_structured_response_failure"
+    },
+    "run_3": {
+      "driver_assumptions": 0,
+      "evidence_based": 0,
+      "financial_assumptions": 0,
+      "manual": 0,
+      "model_assumptions": 0,
+      "proposed_assumptions": 1,
+      "proposed_model_assumptions": 1,
+      "rejected_validation_issues": 1,
+      "segments": 0,
+      "unresolved": 3
+    }
+  },
+  "current_commit_sha": "811f3f03ccdda418b7e682e0c22918528c9a8b2d",
+  "cutoff": {
+    "as_of": "2024-03-01",
+    "historical_cutoff": "2023-12-31",
+    "rationale": "The exact point-in-time cutoff is 2024-03-01. The KO FY2023 10-K and its FY2023 financial facts in this fixture are filed 2024-02-20, not 2024-02-15, so they are available by the cutoff. FY2024 observations were filed 2025-02-20 and remain outcome-only data outside the reasoning information set."
+  },
+  "driver_executor": {
+    "compiler": {
+      "accepted_assumption_ids": [],
+      "generated_observations": [],
+      "generated_overrides": [],
+      "plan": {
+        "audit": [
+          "requested_method=driver_based",
+          "resolved_method=driver_based",
+          "decision_count=11"
+        ],
+        "confidence": "low",
+        "decisions": [
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "capex",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "delta_nwc",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "depreciation_and_amortization",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "gross_margin",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "gross_profit",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "operating_margin",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "consolidated"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "operating_working_capital",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "r_and_d",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "revenue",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "sg_and_a",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          },
+          {
+            "basis": null,
+            "confidence": "low",
+            "explicit_path": null,
+            "metric": "tax",
+            "provenance": null,
+            "rationale": "Driver-based FCFF planning decision",
+            "scope": "company",
+            "scope_id": "company",
+            "strategy": "driver"
+          }
+        ],
+        "overrides": [],
+        "rationale": "Explicit FCFF forecast method 'driver_based' was requested; method resolution did not reinterpret it",
+        "requested": "driver_based",
+        "resolved": "driver_based",
+        "warnings": [
+          "driver_based executes independent operating economics; the legacy consolidated FcffForecastService future fallback is not used. Deterministic per-metric normalized assumptions remain auditable"
+        ]
+      },
+      "rejected_assumption_ids": [
+        "ASSUMP-REV-2024",
+        "ASSUMP-DANDA-2024",
+        "ASSUMP-CAPEX-2024"
+      ],
+      "retained_ranges": {},
+      "warnings": [
+        "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence.",
+        "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions.",
+        "No unsupported accounting outputs or valuation assumptions were proposed."
+      ]
+    },
+    "economics": {
+      "audit_by_year": {},
+      "capital_expenditures": [
+        "0E-27"
+      ],
+      "capital_expenditures_audit_by_year": {
+        "2024": [
+          "selected_source=normalized_historical",
+          "historical_capital_expenditures_years=2022,2023",
+          "historical_capital_expenditures_ratios=3.450841782159799088456887731,4.047733531494514140840145124"
+        ]
+      },
+      "capital_expenditures_confidence_by_year": {
+        "2024": "high"
+      },
+      "capital_expenditures_method_by_year": {
+        "2024": "median_recent_historical_capital_expenditures_to_revenue"
+      },
+      "capital_expenditures_provenance_by_year": {
+        "2024": {
+          "accession": "0000021344-23-000011",
+          "document_name": "PaymentsToAcquirePropertyPlantAndEquipment",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized capital_expenditures from PaymentsToAcquirePropertyPlantAndEquipment"
+        }
+      },
+      "capital_expenditures_source_by_year": {
+        "2024": "normalized_historical"
+      },
+      "change_in_operating_working_capital": [
+        "10502.00000000000000000000000"
+      ],
+      "change_in_operating_working_capital_audit_by_year": {
+        "2024": [
+          "selected_source=derived",
+          "delta_owc_identity=-0E-26--10502=10502.00000000000000000000000"
+        ]
+      },
+      "change_in_operating_working_capital_confidence_by_year": {
+        "2024": "high"
+      },
+      "change_in_operating_working_capital_method_by_year": {
+        "2024": "operating_working_capital_minus_prior_balance"
+      },
+      "change_in_operating_working_capital_provenance_by_year": {
+        "2024": {
+          "accession": "0000021344-23-000011",
+          "document_name": "Revenues",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized operating working capital input revenue"
+        }
+      },
+      "change_in_operating_working_capital_source_by_year": {
+        "2024": "derived"
+      },
+      "company_id": "KO",
+      "confidence_by_year": {
+        "2024": "low"
+      },
+      "consolidated_gross_margin": [
+        null
+      ],
+      "consolidated_gross_profit": [
+        null
+      ],
+      "consolidated_revenue": [
+        "0"
+      ],
+      "depreciation_and_amortization": [
+        "0E-27"
+      ],
+      "depreciation_and_amortization_audit_by_year": {
+        "2024": [
+          "selected_source=normalized_historical",
+          "historical_depreciation_and_amortization_years=2022,2023",
+          "historical_depreciation_and_amortization_ratios=2.929960003720584131708678262,2.465358220046334746688814093"
+        ]
+      },
+      "depreciation_and_amortization_confidence_by_year": {
+        "2024": "high"
+      },
+      "depreciation_and_amortization_method_by_year": {
+        "2024": "median_recent_historical_depreciation_and_amortization_to_revenue"
+      },
+      "depreciation_and_amortization_provenance_by_year": {
+        "2024": {
+          "accession": "0000021344-23-000011",
+          "document_name": "DepreciationDepletionAndAmortization",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized depreciation_and_amortization from DepreciationDepletionAndAmortization"
+        }
+      },
+      "depreciation_and_amortization_source_by_year": {
+        "2024": "normalized_historical"
+      },
+      "diagnostics": {
+        "capital_expenditures": {
+          "completeness": "1",
+          "confidence": "high",
+          "coverage": "1",
+          "historical_years": [
+            2022,
+            2023
+          ],
+          "identity_warnings": [],
+          "metric": "capital_expenditures",
+          "normalized_ratio": "3.749287656827156614648516428",
+          "provenance": [
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "PaymentsToAcquirePropertyPlantAndEquipment",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized capital_expenditures from PaymentsToAcquirePropertyPlantAndEquipment"
+            },
+            {
+              "accession": "0000021344-24-000009",
+              "document_name": "PaymentsToAcquirePropertyPlantAndEquipment",
+              "filing_date": "2024-02-20",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized capital_expenditures from PaymentsToAcquirePropertyPlantAndEquipment"
+            }
+          ],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [
+            2024
+          ],
+          "warnings": [
+            "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+          ]
+        },
+        "change_in_operating_working_capital": {
+          "completeness": "1",
+          "confidence": "high",
+          "coverage": "1",
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "change_in_operating_working_capital",
+          "normalized_ratio": null,
+          "provenance": [
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "Revenues",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized operating working capital input revenue"
+            }
+          ],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [
+            2024
+          ],
+          "warnings": [
+            "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+          ]
+        },
+        "completeness": "0",
+        "depreciation_and_amortization": {
+          "completeness": "1",
+          "confidence": "high",
+          "coverage": "1",
+          "historical_years": [
+            2022,
+            2023
+          ],
+          "identity_warnings": [],
+          "metric": "depreciation_and_amortization",
+          "normalized_ratio": "2.697659111883459439198746178",
+          "provenance": [
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "DepreciationDepletionAndAmortization",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized depreciation_and_amortization from DepreciationDepletionAndAmortization"
+            },
+            {
+              "accession": "0000021344-24-000009",
+              "document_name": "DepreciationDepletionAndAmortization",
+              "filing_date": "2024-02-20",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized depreciation_and_amortization from DepreciationDepletionAndAmortization"
+            }
+          ],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [
+            2024
+          ],
+          "warnings": [
+            "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+          ]
+        },
+        "ebit": {
+          "completeness": "0",
+          "confidence": "low",
+          "coverage": "0",
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "ebit",
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: EBIT unavailable because GP, R&D, SG&A, and signed other operating items are all required"
+          ]
+        },
+        "fcff": {
+          "completeness": "0",
+          "confidence": "low",
+          "coverage": "0",
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "fcff",
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+          ]
+        },
+        "gross_margin": {
+          "completeness": null,
+          "confidence": "low",
+          "coverage": null,
+          "identity_warnings": [],
+          "metric": "gross_margin",
+          "reconstruction_error": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit"
+          ]
+        },
+        "gross_profit": {
+          "completeness": null,
+          "confidence": "low",
+          "coverage": null,
+          "identity_warnings": [],
+          "metric": "gross_profit",
+          "reconstruction_error": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit"
+          ]
+        },
+        "identity_warnings": [],
+        "nopat": {
+          "completeness": "0",
+          "confidence": "low",
+          "coverage": "0",
+          "dispersion": null,
+          "historical_rates": [],
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "nopat",
+          "normalized_rate": null,
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: tax and NOPAT unavailable because EBIT is unavailable"
+          ]
+        },
+        "operating_working_capital": {
+          "completeness": "1",
+          "confidence": "high",
+          "coverage": "1",
+          "historical_years": [
+            2022,
+            2023
+          ],
+          "identity_warnings": [],
+          "metric": "operating_working_capital",
+          "normalized_ratio": "-21.66634200123425584924408426",
+          "provenance": [
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "Revenues",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized operating working capital input revenue"
+            },
+            {
+              "accession": "0000021344-24-000009",
+              "document_name": "Revenues",
+              "filing_date": "2024-02-20",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized operating working capital input revenue"
+            }
+          ],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [
+            2024
+          ],
+          "warnings": [
+            "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+          ]
+        },
+        "other_operating_items": {
+          "completeness": "0",
+          "confidence": "low",
+          "coverage": "0",
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "other_operating_items",
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: other operating items unavailable; no qualifying evidence supports zero"
+          ]
+        },
+        "r_and_d": {
+          "completeness": null,
+          "confidence": "low",
+          "coverage": null,
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "r_and_d",
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": []
+        },
+        "sg_and_a": {
+          "completeness": null,
+          "confidence": "low",
+          "coverage": null,
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "sg_and_a",
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": []
+        },
+        "tax": {
+          "completeness": "0",
+          "confidence": "low",
+          "coverage": "0",
+          "dispersion": null,
+          "historical_rates": [],
+          "historical_years": [],
+          "identity_warnings": [],
+          "metric": "tax",
+          "normalized_rate": null,
+          "normalized_ratio": null,
+          "provenance": [],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [],
+          "warnings": [
+            "FY2024: tax and NOPAT unavailable because EBIT is unavailable"
+          ]
+        },
+        "tax_rate": {
+          "completeness": "1",
+          "confidence": "high",
+          "coverage": "1",
+          "dispersion": "0.04058140842273416886061938825",
+          "historical_rates": [
+            "18.09857949683381824405271265",
+            "17.36411365040148239654107474"
+          ],
+          "historical_years": [
+            2022,
+            2023
+          ],
+          "identity_warnings": [],
+          "metric": "tax_rate",
+          "normalized_rate": "17.73134657361765032029689370",
+          "normalized_ratio": "17.73134657361765032029689370",
+          "provenance": [
+            {
+              "accession": "0000021344-24-000009",
+              "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+              "filing_date": "2024-02-20",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+            },
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+            },
+            {
+              "accession": "0000021344-23-000011",
+              "document_name": "IncomeTaxExpenseBenefit",
+              "filing_date": "2023-02-21",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+            },
+            {
+              "accession": "0000021344-24-000009",
+              "document_name": "IncomeTaxExpenseBenefit",
+              "filing_date": "2024-02-20",
+              "provider": "fixture",
+              "source_text_hash": null,
+              "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+            }
+          ],
+          "reconstruction_error": null,
+          "residual_magnitude": null,
+          "supported_years": [
+            2024
+          ],
+          "warnings": [
+            "FY2024: tax and NOPAT unavailable because EBIT is unavailable"
+          ]
+        },
+        "warnings": [
+          "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit"
+        ]
+      },
+      "fcff": [
+        null
+      ],
+      "fcff_audit_by_year": {
+        "2024": [
+          "selected_source=unavailable"
+        ]
+      },
+      "fcff_confidence_by_year": {
+        "2024": "low"
+      },
+      "fcff_method_by_year": {
+        "2024": "unavailable"
+      },
+      "fcff_provenance_by_year": {},
+      "fcff_source_by_year": {
+        "2024": "unavailable"
+      },
+      "fiscal_years": [
+        2024
+      ],
+      "gross_margin_provenance_by_year": {},
+      "gross_margin_provenance_chain_by_year": {},
+      "gross_margin_source_provenance_by_year": {},
+      "gross_profit_provenance_by_year": {},
+      "gross_profit_provenance_chain_by_year": {},
+      "gross_profit_source_provenance_by_year": {},
+      "historical_effective_tax_rate_audit_by_year": {
+        "2022": [
+          "effective_tax_rate_inputs=pretax_income,income_tax_expense",
+          "pretax_income_provenance=provider='fixture' accession='0000021344-23-000011' filing_date=datetime.date(2023, 2, 21) document_name='IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest' source_text_hash=None supporting_text='Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest'",
+          "income_tax_expense_provenance=provider='fixture' accession='0000021344-23-000011' filing_date=datetime.date(2023, 2, 21) document_name='IncomeTaxExpenseBenefit' source_text_hash=None supporting_text='Normalized income_tax_expense from IncomeTaxExpenseBenefit'"
+        ],
+        "2023": [
+          "effective_tax_rate_inputs=pretax_income,income_tax_expense",
+          "pretax_income_provenance=provider='fixture' accession='0000021344-24-000009' filing_date=datetime.date(2024, 2, 20) document_name='IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest' source_text_hash=None supporting_text='Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest'",
+          "income_tax_expense_provenance=provider='fixture' accession='0000021344-24-000009' filing_date=datetime.date(2024, 2, 20) document_name='IncomeTaxExpenseBenefit' source_text_hash=None supporting_text='Normalized income_tax_expense from IncomeTaxExpenseBenefit'"
+        ]
+      },
+      "historical_effective_tax_rate_by_year": {
+        "2022": "18.09857949683381824405271265",
+        "2023": "17.36411365040148239654107474"
+      },
+      "historical_effective_tax_rate_provenance_by_year": {
+        "2022": {
+          "accession": "0000021344-23-000011",
+          "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+        },
+        "2023": {
+          "accession": "0000021344-24-000009",
+          "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+          "filing_date": "2024-02-20",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+        }
+      },
+      "historical_effective_tax_rate_provenance_chain_by_year": {
+        "2022": [
+          {
+            "accession": "0000021344-23-000011",
+            "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+          },
+          {
+            "accession": "0000021344-23-000011",
+            "document_name": "IncomeTaxExpenseBenefit",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+          }
+        ],
+        "2023": [
+          {
+            "accession": "0000021344-24-000009",
+            "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "filing_date": "2024-02-20",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+          },
+          {
+            "accession": "0000021344-24-000009",
+            "document_name": "IncomeTaxExpenseBenefit",
+            "filing_date": "2024-02-20",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+          }
+        ]
+      },
+      "historical_income_tax_expense_by_year": {
+        "2022": "2115000000",
+        "2023": "2249000000"
+      },
+      "historical_income_tax_expense_provenance_by_year": {
+        "2022": {
+          "accession": "0000021344-23-000011",
+          "document_name": "IncomeTaxExpenseBenefit",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+        },
+        "2023": {
+          "accession": "0000021344-24-000009",
+          "document_name": "IncomeTaxExpenseBenefit",
+          "filing_date": "2024-02-20",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized income_tax_expense from IncomeTaxExpenseBenefit"
+        }
+      },
+      "historical_pretax_income_by_year": {
+        "2022": "11686000000",
+        "2023": "12952000000"
+      },
+      "historical_pretax_income_provenance_by_year": {
+        "2022": {
+          "accession": "0000021344-23-000011",
+          "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+        },
+        "2023": {
+          "accession": "0000021344-24-000009",
+          "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+          "filing_date": "2024-02-20",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+        }
+      },
+      "method_by_year": {
+        "2024": "unavailable_incomplete_segment_gross_profit"
+      },
+      "nopat": [
+        null
+      ],
+      "nopat_audit_by_year": {},
+      "nopat_confidence_by_year": {},
+      "nopat_method_by_year": {},
+      "nopat_provenance_by_year": {},
+      "nopat_source_by_year": {},
+      "operating_working_capital": [
+        "-0E-26"
+      ],
+      "operating_working_capital_audit_by_year": {
+        "2024": [
+          "selected_source=normalized_historical",
+          "historical_operating_working_capital_years=2022,2023",
+          "historical_operating_working_capital_ratios=-20.37949958143428518277369547,-22.95318442103422651571447305"
+        ]
+      },
+      "operating_working_capital_confidence_by_year": {
+        "2024": "high"
+      },
+      "operating_working_capital_method_by_year": {
+        "2024": "median_recent_historical_operating_working_capital_to_revenue"
+      },
+      "operating_working_capital_provenance_by_year": {
+        "2024": {
+          "accession": "0000021344-23-000011",
+          "document_name": "Revenues",
+          "filing_date": "2023-02-21",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized operating working capital input revenue"
+        }
+      },
+      "operating_working_capital_source_by_year": {
+        "2024": "normalized_historical"
+      },
+      "provenance_by_year": {},
+      "provenance_chain_by_year": {},
+      "reinvestment_seed": {
+        "confidence": "high",
+        "fiscal_period": "FY",
+        "fiscal_year": 2023,
+        "mode": "FY",
+        "period_key": null,
+        "provenance": null,
+        "source": "canonical_seed_forecast",
+        "unit": "USD millions",
+        "value": "-10502"
+      },
+      "segment_economics": [
+        {
+          "audit_by_year": {},
+          "confidence_by_year": {
+            "2024": "low"
+          },
+          "diagnostics": {
+            "completeness": null,
+            "gross_margin": {
+              "completeness": null,
+              "confidence": "low",
+              "coverage": null,
+              "identity_warnings": [],
+              "metric": "gross_margin",
+              "reconstruction_error": null,
+              "supported_years": [],
+              "warnings": []
+            },
+            "gross_profit": {
+              "completeness": null,
+              "confidence": "low",
+              "coverage": null,
+              "identity_warnings": [],
+              "metric": "gross_profit",
+              "reconstruction_error": null,
+              "supported_years": [],
+              "warnings": []
+            },
+            "identity_warnings": [],
+            "warnings": []
+          },
+          "fiscal_years": [
+            2024
+          ],
+          "gross_margin": [
+            null
+          ],
+          "gross_margin_provenance_by_year": {},
+          "gross_margin_provenance_chain_by_year": {},
+          "gross_margin_source_provenance_by_year": {},
+          "gross_profit": [
+            null
+          ],
+          "gross_profit_provenance_by_year": {},
+          "gross_profit_provenance_chain_by_year": {},
+          "gross_profit_source_provenance_by_year": {},
+          "method_by_year": {
+            "2024": "unavailable"
+          },
+          "provenance_by_year": {},
+          "provenance_chain_by_year": {},
+          "revenue": [
+            "0"
+          ],
+          "segment": {
+            "confidence": "medium",
+            "currency": null,
+            "dimensions": {},
+            "evidence": null,
+            "name": "Company",
+            "parent_id": null,
+            "scope": "consolidated",
+            "segment_id": "company",
+            "source": "normalized_historical"
+          },
+          "source_by_year": {
+            "2024": "unavailable"
+          },
+          "source_provenance_by_year": {},
+          "unit": "currency",
+          "warnings": [],
+          "years": [
+            {
+              "audit": [],
+              "confidence": "low",
+              "expected_gross_profit": null,
+              "fiscal_period": "FY",
+              "fiscal_year": 2024,
+              "gross_margin": null,
+              "gross_margin_provenance": null,
+              "gross_margin_provenance_chain": [],
+              "gross_margin_source_provenance": [],
+              "gross_profit": null,
+              "gross_profit_provenance": null,
+              "gross_profit_provenance_chain": [],
+              "gross_profit_source_provenance": [],
+              "identity_error": null,
+              "method": "unavailable",
+              "period_key": null,
+              "provenance": null,
+              "provenance_chain": [],
+              "revenue": "0",
+              "source": "unavailable",
+              "source_provenance": []
+            }
+          ]
+        }
+      ],
+      "source_by_year": {
+        "2024": "unavailable"
+      },
+      "source_provenance_by_year": {},
+      "tax": [
+        null
+      ],
+      "tax_audit_by_year": {},
+      "tax_confidence_by_year": {},
+      "tax_method_by_year": {},
+      "tax_provenance_by_year": {},
+      "tax_rate": [
+        "17.73134657361765032029689370"
+      ],
+      "tax_rate_audit_by_year": {
+        "2024": [
+          "selected_source=normalized_historical",
+          "historical_effective_tax_rate_years=2022,2023",
+          "historical_effective_tax_rates=18.09857949683381824405271265,17.36411365040148239654107474",
+          "historical_effective_tax_rate_dispersion=0.04058140842273416886061938825"
+        ]
+      },
+      "tax_rate_confidence_by_year": {
+        "2024": "high"
+      },
+      "tax_rate_method_by_year": {
+        "2024": "median_recent_historical_effective_tax_rate"
+      },
+      "tax_rate_provenance_by_year": {
+        "2024": {
+          "accession": "0000021344-24-000009",
+          "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+          "filing_date": "2024-02-20",
+          "provider": "fixture",
+          "source_text_hash": null,
+          "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+        }
+      },
+      "tax_rate_source_by_year": {
+        "2024": "normalized_historical"
+      },
+      "tax_source_by_year": {},
+      "unit": "currency",
+      "warnings": [
+        "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit",
+        "FY2024: other operating items unavailable; no qualifying evidence supports zero",
+        "FY2024: EBIT unavailable because GP, R&D, SG&A, and signed other operating items are all required",
+        "FY2024: tax and NOPAT unavailable because EBIT is unavailable",
+        "FY2024: FCFF unavailable because NOPAT, D&A, CAPEX, and \u0394OWC are all required"
+      ],
+      "years": [
+        {
+          "audit": [],
+          "capital_expenditures": "0E-27",
+          "capital_expenditures_audit": [
+            "selected_source=normalized_historical",
+            "historical_capital_expenditures_years=2022,2023",
+            "historical_capital_expenditures_ratios=3.450841782159799088456887731,4.047733531494514140840145124"
+          ],
+          "capital_expenditures_confidence": "high",
+          "capital_expenditures_method": "median_recent_historical_capital_expenditures_to_revenue",
+          "capital_expenditures_provenance": {
+            "accession": "0000021344-23-000011",
+            "document_name": "PaymentsToAcquirePropertyPlantAndEquipment",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized capital_expenditures from PaymentsToAcquirePropertyPlantAndEquipment"
+          },
+          "capital_expenditures_source": "normalized_historical",
+          "change_in_operating_working_capital": "10502.00000000000000000000000",
+          "change_in_operating_working_capital_audit": [
+            "selected_source=derived",
+            "delta_owc_identity=-0E-26--10502=10502.00000000000000000000000"
+          ],
+          "change_in_operating_working_capital_confidence": "high",
+          "change_in_operating_working_capital_method": "operating_working_capital_minus_prior_balance",
+          "change_in_operating_working_capital_provenance": {
+            "accession": "0000021344-23-000011",
+            "document_name": "Revenues",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized operating working capital input revenue"
+          },
+          "change_in_operating_working_capital_source": "derived",
+          "confidence": "low",
+          "depreciation_and_amortization": "0E-27",
+          "depreciation_and_amortization_audit": [
+            "selected_source=normalized_historical",
+            "historical_depreciation_and_amortization_years=2022,2023",
+            "historical_depreciation_and_amortization_ratios=2.929960003720584131708678262,2.465358220046334746688814093"
+          ],
+          "depreciation_and_amortization_confidence": "high",
+          "depreciation_and_amortization_method": "median_recent_historical_depreciation_and_amortization_to_revenue",
+          "depreciation_and_amortization_provenance": {
+            "accession": "0000021344-23-000011",
+            "document_name": "DepreciationDepletionAndAmortization",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized depreciation_and_amortization from DepreciationDepletionAndAmortization"
+          },
+          "depreciation_and_amortization_source": "normalized_historical",
+          "expected_gross_profit": null,
+          "fcff": null,
+          "fcff_audit": [
+            "selected_source=unavailable"
+          ],
+          "fcff_confidence": "low",
+          "fcff_method": "unavailable",
+          "fcff_provenance": null,
+          "fcff_source": "unavailable",
+          "fiscal_period": "FY",
+          "fiscal_year": 2024,
+          "gross_margin": null,
+          "gross_margin_provenance": null,
+          "gross_margin_provenance_chain": [],
+          "gross_margin_source_provenance": [],
+          "gross_profit": null,
+          "gross_profit_provenance": null,
+          "gross_profit_provenance_chain": [],
+          "gross_profit_source_provenance": [],
+          "identity_error": null,
+          "method": "unavailable_incomplete_segment_gross_profit",
+          "nopat": null,
+          "nopat_audit": [],
+          "nopat_confidence": "low",
+          "nopat_method": "unavailable",
+          "nopat_provenance": null,
+          "nopat_source": "unavailable",
+          "operating_working_capital": "-0E-26",
+          "operating_working_capital_audit": [
+            "selected_source=normalized_historical",
+            "historical_operating_working_capital_years=2022,2023",
+            "historical_operating_working_capital_ratios=-20.37949958143428518277369547,-22.95318442103422651571447305"
+          ],
+          "operating_working_capital_confidence": "high",
+          "operating_working_capital_method": "median_recent_historical_operating_working_capital_to_revenue",
+          "operating_working_capital_provenance": {
+            "accession": "0000021344-23-000011",
+            "document_name": "Revenues",
+            "filing_date": "2023-02-21",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized operating working capital input revenue"
+          },
+          "operating_working_capital_source": "normalized_historical",
+          "period_key": null,
+          "provenance": null,
+          "provenance_chain": [],
+          "revenue": "0",
+          "source": "unavailable",
+          "source_provenance": [],
+          "tax": null,
+          "tax_audit": [],
+          "tax_confidence": "low",
+          "tax_method": "unavailable",
+          "tax_provenance": null,
+          "tax_rate": "17.73134657361765032029689370",
+          "tax_rate_audit": [
+            "selected_source=normalized_historical",
+            "historical_effective_tax_rate_years=2022,2023",
+            "historical_effective_tax_rates=18.09857949683381824405271265,17.36411365040148239654107474",
+            "historical_effective_tax_rate_dispersion=0.04058140842273416886061938825"
+          ],
+          "tax_rate_confidence": "high",
+          "tax_rate_method": "median_recent_historical_effective_tax_rate",
+          "tax_rate_provenance": {
+            "accession": "0000021344-24-000009",
+            "document_name": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "filing_date": "2024-02-20",
+            "provider": "fixture",
+            "source_text_hash": null,
+            "supporting_text": "Normalized pretax_income from IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+          },
+          "tax_rate_source": "normalized_historical",
+          "tax_source": "unavailable"
+        }
+      ]
+    },
+    "error": "FCFF method=driver_based is incomplete; no fallback forecast was used: FY2024 gross_profit; FY2024 ebit; FY2024 nopat; FY2024 fcff; FY2024 revenue; FY2024 tax_rate; FY2024 depreciation_and_amortization; FY2024 capital_expenditures; FY2024 operating_working_capital; FY2024 change_in_operating_working_capital; Canonical fiscal years () do not match target years (2024,); Canonical forecast_year sequence must start at 1 and be contiguous",
+    "error_type": "DriverBasedForecastIncompleteError",
+    "readiness": {
+      "canonical_errors": [],
+      "diagnostics": [
+        "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit",
+        "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+        "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+        "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+        "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue"
+      ],
+      "identity_errors": [],
+      "missing_metric_years": [
+        "FY2024 gross_profit",
+        "FY2024 ebit",
+        "FY2024 nopat",
+        "FY2024 fcff",
+        "FY2024 revenue",
+        "FY2024 tax_rate",
+        "FY2024 depreciation_and_amortization",
+        "FY2024 capital_expenditures",
+        "FY2024 operating_working_capital",
+        "FY2024 change_in_operating_working_capital"
+      ],
+      "missing_metrics_by_year": {
+        "2024": [
+          "gross_profit",
+          "ebit",
+          "nopat",
+          "fcff",
+          "revenue",
+          "tax_rate",
+          "depreciation_and_amortization",
+          "capital_expenditures",
+          "operating_working_capital",
+          "change_in_operating_working_capital"
+        ]
+      },
+      "ready": false,
+      "seed_errors": [],
+      "sequence_errors": [
+        "Canonical fiscal years () do not match target years (2024,)",
+        "Canonical forecast_year sequence must start at 1 and be contiguous"
+      ],
+      "target_years": [
+        2024
+      ],
+      "unit_errors": [],
+      "warnings": [
+        "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+        "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+        "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+        "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue",
+        "Driver-based operating economics are low confidence"
+      ]
+    },
+    "stage": "compile run-1 then execute DriverBasedFcffForecastService",
+    "status": "blocked"
+  },
+  "error_comparison": {
+    "delta_reasoned_minus_normalized": null,
+    "normalized_errors": {
+      "ebit": "2199.56404294981102099069922",
+      "revenue": "1618.85573435029299600037204"
+    },
+    "reason": "Run-1 assumptions were rejected for UNSUPPORTED_METHOD because model output placed long prose in method; no reasoned forecast or error comparison was produced.",
+    "reasoned_errors": null,
+    "status": "normalized_available_reasoned_unavailable"
+  },
+  "experiment_id": "ko-point-in-time-driver-based-v1",
+  "fixture_case_id": "588e3e5add5385c33685b8c98d9ee5de8bdef9da4fe46e8b60af72181a2f742d",
+  "fixture_id": "ko",
+  "fixture_information_scope": {
+    "driver_definitions": {
+      "available": false,
+      "count": 0
+    },
+    "driver_observations": {
+      "available": false,
+      "count": 0
+    },
+    "historical_facts": {
+      "available": true,
+      "count": 28
+    },
+    "investment_programs": {
+      "available": false,
+      "count": 0
+    },
+    "management_constraints": {
+      "available": false,
+      "count": 0
+    },
+    "management_guidance": {
+      "available": false,
+      "count": 0
+    },
+    "research_evidence": {
+      "available": false,
+      "count": 0
+    },
+    "segments": {
+      "available": false,
+      "count": 0
+    },
+    "statement": "The existing KO fixture has no segments, driver definitions/observations, guidance, or research evidence; only normalized historical facts are supplied."
+  },
+  "hashes": {
+    "case_id": "588e3e5add5385c33685b8c98d9ee5de8bdef9da4fe46e8b60af72181a2f742d",
+    "evidence_bundle_hash": "dfec6b818df9d54a4686043077825388ef818d165d65c70fe27de6ea0671b330",
+    "information_set_hash": "6583b675362a13ad0e4338f6273b1171da2fac5b6339c16ae581a3c2fc261b3f"
+  },
+  "horizon": {
+    "fiscal_years": [
+      2024
+    ],
+    "length": 1
+  },
+  "missing_requirements": [
+    "Gross profit/gross margin evidence and R&D, SG&A, and other operating item facts are missing; they are required to support an auditable FY2024 operating expense forecast."
+  ],
+  "hybrid": {
+    "attempted": false,
+    "output": null,
+    "reason": "No hybrid baseline collaborator was supplied, and the existing KO fixture has no segments, registry-backed driver definitions/observations, management guidance, or research evidence from which to activate a hybrid route.",
+    "route": "hybrid",
+    "status": "unavailable"
+  },
+  "identities": {
+    "context_hash": "a67a15e82d9cc06b956f442692b6c7d67eb83d4b53e46c70e345fa3428f31bdb",
+    "context_version": "forecast_reasoner_v1_context_1",
+    "evidence_bundle_hash": "dfec6b818df9d54a4686043077825388ef818d165d65c70fe27de6ea0671b330",
+    "manual_inputs_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "model": "gpt-5.6-luna",
+    "prompt_hash": "cdabedc4b0d9ce005d606c46e545bce17b1820aaef2a0e8161ceeace3394114d",
+    "prompt_version": "forecast_reasoner_v1_prompt_1",
+    "reasoning_effort": "medium",
+    "research_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "schema_hash": "3e70a02636c29680ed291ec298866f6e3c0ccd87facc6dc2b56f251041a5a76b",
+    "schema_version": "forecast_reasoner_v1_response_1",
+    "validator_hash": "3bdc0a425fc4a2b9d6f5e6981cfa8738c560706cea45fb437185bf9499fac3c7",
+    "validator_version": "forecast_reasoner_v1_validator_1"
+  },
+  "information_set_audit": {
+    "as_of": "2024-03-01",
+    "availability_mode": "point_in_time",
+    "case_id": "588e3e5add5385c33685b8c98d9ee5de8bdef9da4fe46e8b60af72181a2f742d",
+    "excluded": [],
+    "included": [
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:accounts_payable:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:accounts_payable:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:accounts_receivable:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:accounts_receivable:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:accrued_liabilities:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:accrued_liabilities:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:capital_expenditures:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:capital_expenditures:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:cash_and_equivalents:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:cash_and_equivalents:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:current_assets:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:current_assets:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:current_liabilities:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:current_liabilities:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:depreciation_and_amortization:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:depreciation_and_amortization:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:income_tax_expense:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:income_tax_expense:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:inventory:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:inventory:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:operating_income:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:operating_income:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:prepaid_and_other_current_assets:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:prepaid_and_other_current_assets:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:pretax_income:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:pretax_income:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2023-02-21",
+        "dates": [
+          "2023-02-21"
+        ],
+        "evidence_id": "historical:company:company:revenue:2022:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "historical_summary",
+        "date": "2024-02-20",
+        "dates": [
+          "2024-02-20"
+        ],
+        "evidence_id": "historical:company:company:revenue:2023:FY",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:accounts_payable:2022:FY:2022-12-31:AccountsPayableTradeCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:accounts_payable:2023:FY:2023-12-31:AccountsPayableTradeCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:accounts_receivable:2022:FY:2022-12-31:AccountsReceivableNetCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:accounts_receivable:2023:FY:2023-12-31:AccountsReceivableNetCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:accrued_liabilities:2022:FY:2022-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:accrued_liabilities:2023:FY:2023-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:capital_expenditures:2022:FY:2022-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:capital_expenditures:2023:FY:2023-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:cash_and_equivalents:2022:FY:2022-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:cash_and_equivalents:2023:FY:2023-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:current_assets:2022:FY:2022-12-31:AssetsCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:current_assets:2023:FY:2023-12-31:AssetsCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:current_liabilities:2022:FY:2022-12-31:LiabilitiesCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:current_liabilities:2023:FY:2023-12-31:LiabilitiesCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:depreciation_and_amortization:2022:FY:2022-12-31:DepreciationDepletionAndAmortization:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:depreciation_and_amortization:2023:FY:2023-12-31:DepreciationDepletionAndAmortization:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:income_tax_expense:2022:FY:2022-12-31:IncomeTaxExpenseBenefit:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:income_tax_expense:2023:FY:2023-12-31:IncomeTaxExpenseBenefit:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:inventory:2022:FY:2022-12-31:InventoryNet:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:inventory:2023:FY:2023-12-31:InventoryNet:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:operating_income:2022:FY:2022-12-31:OperatingIncomeLoss:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:operating_income:2023:FY:2023-12-31:OperatingIncomeLoss:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:prepaid_and_other_current_assets:2022:FY:2022-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:prepaid_and_other_current_assets:2023:FY:2023-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:pretax_income:2022:FY:2022-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:pretax_income:2023:FY:2023-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2023-02-21",
+        "dates": [
+          "2022-12-31",
+          "2023-02-21"
+        ],
+        "evidence_id": "normalized:revenue:2022:FY:2022-12-31:Revenues:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_fact",
+        "date": "2024-02-20",
+        "dates": [
+          "2023-12-31",
+          "2024-02-20"
+        ],
+        "evidence_id": "normalized:revenue:2023:FY:2023-12-31:Revenues:fixture",
+        "reason": null,
+        "status": "included"
+      },
+      {
+        "category": "normalized_snapshot",
+        "date": "2024-03-01",
+        "dates": [
+          "2024-03-01"
+        ],
+        "evidence_id": "financials-retrieved-at",
+        "reason": null,
+        "status": "included"
+      }
+    ],
+    "information_dates": [
+      [
+        "financials-retrieved-at",
+        "2024-03-01"
+      ],
+      [
+        "historical:company:company:accounts_payable:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:accounts_payable:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:accounts_receivable:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:accounts_receivable:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:accrued_liabilities:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:accrued_liabilities:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:capital_expenditures:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:capital_expenditures:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:cash_and_equivalents:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:cash_and_equivalents:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:current_assets:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:current_assets:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:current_liabilities:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:current_liabilities:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:depreciation_and_amortization:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:depreciation_and_amortization:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:income_tax_expense:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:income_tax_expense:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:inventory:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:inventory:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:operating_income:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:operating_income:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:prepaid_and_other_current_assets:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:prepaid_and_other_current_assets:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:pretax_income:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:pretax_income:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "historical:company:company:revenue:2022:FY",
+        "2023-02-21"
+      ],
+      [
+        "historical:company:company:revenue:2023:FY",
+        "2024-02-20"
+      ],
+      [
+        "normalized:accounts_payable:2022:FY:2022-12-31:AccountsPayableTradeCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:accounts_payable:2022:FY:2022-12-31:AccountsPayableTradeCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:accounts_payable:2023:FY:2023-12-31:AccountsPayableTradeCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:accounts_payable:2023:FY:2023-12-31:AccountsPayableTradeCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:accounts_receivable:2022:FY:2022-12-31:AccountsReceivableNetCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:accounts_receivable:2022:FY:2022-12-31:AccountsReceivableNetCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:accounts_receivable:2023:FY:2023-12-31:AccountsReceivableNetCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:accounts_receivable:2023:FY:2023-12-31:AccountsReceivableNetCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:accrued_liabilities:2022:FY:2022-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:accrued_liabilities:2022:FY:2022-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:accrued_liabilities:2023:FY:2023-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:accrued_liabilities:2023:FY:2023-12-31:OtherAccruedLiabilitiesCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:capital_expenditures:2022:FY:2022-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:capital_expenditures:2022:FY:2022-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:capital_expenditures:2023:FY:2023-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:capital_expenditures:2023:FY:2023-12-31:PaymentsToAcquirePropertyPlantAndEquipment:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:cash_and_equivalents:2022:FY:2022-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:cash_and_equivalents:2022:FY:2022-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:cash_and_equivalents:2023:FY:2023-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:cash_and_equivalents:2023:FY:2023-12-31:CashAndCashEquivalentsAtCarryingValue:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:current_assets:2022:FY:2022-12-31:AssetsCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:current_assets:2022:FY:2022-12-31:AssetsCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:current_assets:2023:FY:2023-12-31:AssetsCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:current_assets:2023:FY:2023-12-31:AssetsCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:current_liabilities:2022:FY:2022-12-31:LiabilitiesCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:current_liabilities:2022:FY:2022-12-31:LiabilitiesCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:current_liabilities:2023:FY:2023-12-31:LiabilitiesCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:current_liabilities:2023:FY:2023-12-31:LiabilitiesCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:depreciation_and_amortization:2022:FY:2022-12-31:DepreciationDepletionAndAmortization:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:depreciation_and_amortization:2022:FY:2022-12-31:DepreciationDepletionAndAmortization:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:depreciation_and_amortization:2023:FY:2023-12-31:DepreciationDepletionAndAmortization:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:depreciation_and_amortization:2023:FY:2023-12-31:DepreciationDepletionAndAmortization:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:income_tax_expense:2022:FY:2022-12-31:IncomeTaxExpenseBenefit:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:income_tax_expense:2022:FY:2022-12-31:IncomeTaxExpenseBenefit:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:income_tax_expense:2023:FY:2023-12-31:IncomeTaxExpenseBenefit:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:income_tax_expense:2023:FY:2023-12-31:IncomeTaxExpenseBenefit:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:inventory:2022:FY:2022-12-31:InventoryNet:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:inventory:2022:FY:2022-12-31:InventoryNet:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:inventory:2023:FY:2023-12-31:InventoryNet:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:inventory:2023:FY:2023-12-31:InventoryNet:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:operating_income:2022:FY:2022-12-31:OperatingIncomeLoss:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:operating_income:2022:FY:2022-12-31:OperatingIncomeLoss:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:operating_income:2023:FY:2023-12-31:OperatingIncomeLoss:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:operating_income:2023:FY:2023-12-31:OperatingIncomeLoss:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:prepaid_and_other_current_assets:2022:FY:2022-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:prepaid_and_other_current_assets:2022:FY:2022-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:prepaid_and_other_current_assets:2023:FY:2023-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:prepaid_and_other_current_assets:2023:FY:2023-12-31:PrepaidExpenseAndOtherAssetsCurrent:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:pretax_income:2022:FY:2022-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:pretax_income:2022:FY:2022-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:pretax_income:2023:FY:2023-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:pretax_income:2023:FY:2023-12-31:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest:fixture",
+        "2024-02-20"
+      ],
+      [
+        "normalized:revenue:2022:FY:2022-12-31:Revenues:fixture",
+        "2022-12-31"
+      ],
+      [
+        "normalized:revenue:2022:FY:2022-12-31:Revenues:fixture",
+        "2023-02-21"
+      ],
+      [
+        "normalized:revenue:2023:FY:2023-12-31:Revenues:fixture",
+        "2023-12-31"
+      ],
+      [
+        "normalized:revenue:2023:FY:2023-12-31:Revenues:fixture",
+        "2024-02-20"
+      ]
+    ],
+    "issues": [],
+    "undated": [],
+    "valid": true
+  },
+  "next_action": "Keep this experiment blocked. Correct the reasoner method/citation contract, supply point-in-time registry-backed operating evidence or accepted forward guidance/research, then rerun three cache-bypassed proposals and compile only after deterministic validation accepts assumptions and driver readiness is true.",
+  "normalized_baseline": {
+    "assumption_sources": {
+      "capex_to_revenue": "trailing_average",
+      "depreciation_to_revenue": "trailing_average",
+      "operating_margin": "trailing_average",
+      "operating_working_capital_to_revenue": "trailing_average",
+      "revenue_growth": "trailing_average",
+      "tax_rate": "trailing_average"
+    },
+    "availability_mode": "point_in_time",
+    "forecast_values": {
+      "2024": {
+        "capex": "1825.147822409262333806908103",
+        "delta_nwc": "-45.14402911177992532028719",
+        "depreciation_and_amortization": "1313.216563869423416135248683",
+        "ebit": "12191.56404294981102099069922",
+        "fcff": "9563.048340321769229698435897",
+        "fiscal_year": 2024,
+        "forecast_year": 1,
+        "nopat": "10029.83556974982822204980813",
+        "operating_margin": "25.04437176124783776217004724",
+        "operating_working_capital": "-10547.14402911177992532028719",
+        "period_end": "2024-12-31",
+        "revenue": "48679.85573435029299600037204",
+        "tax_rate": "17.73134657361765032029689370",
+        "unit": "USD millions"
+      }
+    },
+    "method": "driver_based_fcff",
+    "route": "normalized",
+    "seed": {
+      "fiscal_year": 2023,
+      "methodology": "Latest complete FY2023; no newer complete quarterly operating context was available",
+      "period_end": "2023-12-31",
+      "type": "FY"
+    },
+    "service": "FcffForecastService",
+    "status": "available"
+  },
+  "outputs": null,
+  "predeclared_policy": {
+    "excluded_failed_runs": [
+      2
+    ],
+    "primary_run": 1,
+    "rule": "Preserve run-1 as primary; do not substitute a later run or fabricate a reasoned forecast/error.",
+    "stability_runs": [
+      1,
+      3
+    ]
+  },
+  "primary_outputs": {
+    "error_comparison": null,
+    "reason": "Run-1 assumptions were rejected for UNSUPPORTED_METHOD because model output placed long prose in method; no reasoned forecast or error comparison was produced.",
+    "reasoned_forecast": null,
+    "status": "not_produced",
+    "valuation": null
+  },
+  "provenance": "Frozen diagnostic baseline from genuine cache-bypassed ForecastReasoner proposals. Run-1 assumptions were rejected for UNSUPPORTED_METHOD because model output placed long prose in method; no reasoned forecast or error comparison was produced. No reasoned values were fabricated.",
+  "reasoned_output": null,
+  "rejected": [
+    {
+      "assumption_id": "ASSUMP-REV-2024",
+      "code": "UNSUPPORTED_METHOD",
+      "decision_id": null,
+      "reason": "Unsupported modeling method: Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+      "run": 1
+    },
+    {
+      "assumption_id": "ASSUMP-DANDA-2024",
+      "code": "UNSUPPORTED_METHOD",
+      "decision_id": null,
+      "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported D&A observations.",
+      "run": 1
+    },
+    {
+      "assumption_id": "ASSUMP-CAPEX-2024",
+      "code": "UNSUPPORTED_METHOD",
+      "decision_id": null,
+      "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+      "run": 1
+    },
+    {
+      "assumption_id": "ASSUMP-REV-2024-001",
+      "code": "UNSUPPORTED_METHOD",
+      "decision_id": null,
+      "reason": "Unsupported modeling method: Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance.",
+      "run": 3
+    }
+  ],
+  "requested_method": "driver_based",
+  "route_attempts": [
+    {
+      "attempted": true,
+      "cache_bypassed": true,
+      "cache_key": "59e5b5534734c979ee8eff939025da8857e057c2e30349244eaa59b30745fe5c",
+      "force_refresh": true,
+      "output": {
+        "assumption_table": [
+          {
+            "assumption_id": "ASSUMP-REV-2024",
+            "base": [
+              "47000"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_ids": [
+              "HIST-5c0179abc314f886",
+              "HIST-107ed74d18424836"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "49000"
+            ],
+            "kind": "model_assumption",
+            "low": [
+              "45000"
+            ],
+            "method": "Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+            "metric": "revenue",
+            "rationale": "The latest reported revenue observations were USD 43,004 million in FY2022 and USD 45,754 million in FY2023. No FY2024 management guidance, research evidence, or accepted operating-driver observation was supplied; therefore this is a model assumption rather than an evidence-based forecast.",
+            "scope": "company",
+            "scope_id": "company",
+            "target": "revenue",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          },
+          {
+            "assumption_id": "ASSUMP-DANDA-2024",
+            "base": [
+              "1150"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_ids": [
+              "HIST-805fbeaf9aae5949",
+              "HIST-d01021c0a9217d8a"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "1300"
+            ],
+            "kind": "model_assumption",
+            "low": [
+              "1050"
+            ],
+            "method": "Conservative scenario range anchored to the latest two reported D&A observations.",
+            "metric": "depreciation_and_amortization",
+            "rationale": "Reported D&A was USD 1,260 million in FY2022 and USD 1,128 million in FY2023. In the absence of management guidance or a supplied operating driver, the FY2024 range is explicitly a model assumption.",
+            "scope": "company",
+            "scope_id": "company",
+            "target": "depreciation_and_amortization",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          },
+          {
+            "assumption_id": "ASSUMP-CAPEX-2024",
+            "base": [
+              "1850"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_ids": [
+              "HIST-3634a9cafd00212d",
+              "HIST-ed4dc59dc46c364f"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "2050"
+            ],
+            "kind": "model_assumption",
+            "low": [
+              "1650"
+            ],
+            "method": "Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+            "metric": "capital_expenditures",
+            "rationale": "Reported capital expenditures were USD 1,484 million in FY2022 and USD 1,852 million in FY2023. No investment program, management constraint, or guidance was supplied, so the FY2024 range is a model assumption.",
+            "scope": "company",
+            "scope_id": "company",
+            "target": "capital_expenditures",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          }
+        ],
+        "forecast_output": null,
+        "modeling_decisions": [],
+        "overall_confidence": "low",
+        "unresolved_items": [
+          {
+            "category": "missing_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-2024-GUIDANCE",
+            "metric": null,
+            "reason": "No management guidance, accepted constraints, or manual forward observations were supplied for FY2024.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_driver_definition",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-DRIVER-REGISTRY",
+            "metric": null,
+            "reason": "No registry-backed operating-driver definitions or required inputs were supplied, preventing auditable operating-driver proposals.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-OWC-2024",
+            "metric": "OWC",
+            "reason": "Historical component balances are supplied, but no accepted OWC definition or forward operating-driver input is provided; an OWC forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-TAX-RATE-2024",
+            "metric": "tax_rate",
+            "reason": "Historical tax expense and pretax income are supplied, but no accepted tax-rate assumption, guidance, or forward driver is provided; a tax-rate forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence.",
+          "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions.",
+          "No unsupported accounting outputs or valuation assumptions were proposed."
+        ]
+      },
+      "route": "ForecastReasoner proposal",
+      "run": 1,
+      "status": "available"
+    },
+    {
+      "attempted": true,
+      "cache_bypassed": true,
+      "cache_hit": null,
+      "cache_key": null,
+      "error": "OpenAI returned an invalid structured response: 1 validation error for ForecastReasoningResponse\nmodeling_decisions.0\n  Value error, Modeling decisions require exactly one metric or driver_id [type=value_error, input_value={'decision_id': 'DECISION...ng-driver definitions.'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error",
+      "error_type": "OpenAIExtractionError",
+      "force_refresh": true,
+      "output": null,
+      "route": "ForecastReasoner proposal",
+      "run": 2,
+      "status": "structured_response_failure"
+    },
+    {
+      "attempted": true,
+      "cache_bypassed": true,
+      "cache_key": "59e5b5534734c979ee8eff939025da8857e057c2e30349244eaa59b30745fe5c",
+      "force_refresh": true,
+      "output": {
+        "assumption_table": [
+          {
+            "assumption_id": "ASSUMP-REV-2024-001",
+            "base": [
+              "47125"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_ids": [
+              "HIST-107ed74d18424836",
+              "HIST-5c0179abc314f886"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "47750"
+            ],
+            "kind": "model_assumption",
+            "low": [
+              "46500"
+            ],
+            "method": "Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance.",
+            "metric": "revenue",
+            "rationale": "FY2023 revenue was higher than FY2022 revenue, but the supplied input contains no 2024 management guidance, research evidence, or operating-driver observations. The range therefore uses a conservative continuation of the latest observed revenue level rather than an evidence-based point estimate.",
+            "scope": "company",
+            "scope_id": "company",
+            "target": "revenue",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          }
+        ],
+        "forecast_output": null,
+        "modeling_decisions": [],
+        "overall_confidence": "low",
+        "unresolved_items": [
+          {
+            "category": "missing_management_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-GUIDANCE-2024-001",
+            "metric": "revenue",
+            "reason": "No management guidance or accepted first-party forward observation was supplied for FY2024 revenue or other forecast metrics.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_operating_driver_registry",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-DRIVERS-2024-001",
+            "metric": null,
+            "reason": "The supplied definitions and segment inputs are empty, so no registry-backed operating-driver assumption can be proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "insufficient_supported_metric_evidence",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-METRICS-2024-001",
+            "metric": null,
+            "reason": "Historical observations are available for selected financial statement items, but no forward evidence supports FY2024 gross margin, R&D, SG&A, other operating items, tax rate, D&A, CAPEX, or OWC assumptions.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "The only proposed path is a clearly labeled model assumption because no forward guidance or research evidence was supplied.",
+          "No operating-driver proposal is made because the supplied registry-backed definitions are empty.",
+          "Historical observations are not sufficient by themselves to establish FY2024 management guidance."
+        ]
+      },
+      "route": "ForecastReasoner proposal",
+      "run": 3,
+      "status": "available"
+    },
+    {
+      "attempted": true,
+      "error": "FCFF method=driver_based is incomplete; no fallback forecast was used: FY2024 gross_profit; FY2024 ebit; FY2024 nopat; FY2024 fcff; FY2024 revenue; FY2024 tax_rate; FY2024 depreciation_and_amortization; FY2024 capital_expenditures; FY2024 operating_working_capital; FY2024 change_in_operating_working_capital; Canonical fiscal years () do not match target years (2024,); Canonical forecast_year sequence must start at 1 and be contiguous",
+      "error_type": "DriverBasedForecastIncompleteError",
+      "output": null,
+      "readiness": {
+        "canonical_errors": [],
+        "diagnostics": [
+          "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit",
+          "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+          "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+          "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+          "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue"
+        ],
+        "identity_errors": [],
+        "missing_metric_years": [
+          "FY2024 gross_profit",
+          "FY2024 ebit",
+          "FY2024 nopat",
+          "FY2024 fcff",
+          "FY2024 revenue",
+          "FY2024 tax_rate",
+          "FY2024 depreciation_and_amortization",
+          "FY2024 capital_expenditures",
+          "FY2024 operating_working_capital",
+          "FY2024 change_in_operating_working_capital"
+        ],
+        "missing_metrics_by_year": {
+          "2024": [
+            "gross_profit",
+            "ebit",
+            "nopat",
+            "fcff",
+            "revenue",
+            "tax_rate",
+            "depreciation_and_amortization",
+            "capital_expenditures",
+            "operating_working_capital",
+            "change_in_operating_working_capital"
+          ]
+        },
+        "ready": false,
+        "seed_errors": [],
+        "sequence_errors": [
+          "Canonical fiscal years () do not match target years (2024,)",
+          "Canonical forecast_year sequence must start at 1 and be contiguous"
+        ],
+        "target_years": [
+          2024
+        ],
+        "unit_errors": [],
+        "warnings": [
+          "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+          "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+          "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+          "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue",
+          "Driver-based operating economics are low confidence"
+        ]
+      },
+      "route": "ForecastReasoner -> DriverBasedFcffForecastService",
+      "run": 1,
+      "status": "blocked"
+    },
+    {
+      "attempted": true,
+      "output": {
+        "forecast_values": {
+          "2024": {
+            "ebit": "12191.56404294981102099069922",
+            "revenue": "48679.85573435029299600037204"
+          }
+        }
+      },
+      "route": "FcffForecastService normalized baseline",
+      "status": "available"
+    },
+    {
+      "attempted": false,
+      "output": null,
+      "reason": "No hybrid baseline collaborator was supplied, and the existing KO fixture has no segments, registry-backed driver definitions/observations, management guidance, or research evidence from which to activate a hybrid route.",
+      "route": "hybrid baseline",
+      "status": "unavailable"
+    }
+  ],
+  "runs": [
+    {
+      "assumption_table": [
+        {
+          "assumption_id": "ASSUMP-REV-2024",
+          "base": [
+            "47000"
+          ],
+          "basis": "absolute",
+          "confidence": "low",
+          "driver_id": null,
+          "evidence_ids": [
+            "HIST-5c0179abc314f886",
+            "HIST-107ed74d18424836"
+          ],
+          "fiscal_years": [
+            2024
+          ],
+          "high": [
+            "49000"
+          ],
+          "kind": "model_assumption",
+          "low": [
+            "45000"
+          ],
+          "method": "Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+          "metric": "revenue",
+          "rationale": "The latest reported revenue observations were USD 43,004 million in FY2022 and USD 45,754 million in FY2023. No FY2024 management guidance, research evidence, or accepted operating-driver observation was supplied; therefore this is a model assumption rather than an evidence-based forecast.",
+          "scope": "company",
+          "scope_id": "company",
+          "target": "revenue",
+          "target_type": "forecast_metric",
+          "unit": "USD millions"
+        },
+        {
+          "assumption_id": "ASSUMP-DANDA-2024",
+          "base": [
+            "1150"
+          ],
+          "basis": "absolute",
+          "confidence": "low",
+          "driver_id": null,
+          "evidence_ids": [
+            "HIST-805fbeaf9aae5949",
+            "HIST-d01021c0a9217d8a"
+          ],
+          "fiscal_years": [
+            2024
+          ],
+          "high": [
+            "1300"
+          ],
+          "kind": "model_assumption",
+          "low": [
+            "1050"
+          ],
+          "method": "Conservative scenario range anchored to the latest two reported D&A observations.",
+          "metric": "depreciation_and_amortization",
+          "rationale": "Reported D&A was USD 1,260 million in FY2022 and USD 1,128 million in FY2023. In the absence of management guidance or a supplied operating driver, the FY2024 range is explicitly a model assumption.",
+          "scope": "company",
+          "scope_id": "company",
+          "target": "depreciation_and_amortization",
+          "target_type": "forecast_metric",
+          "unit": "USD millions"
+        },
+        {
+          "assumption_id": "ASSUMP-CAPEX-2024",
+          "base": [
+            "1850"
+          ],
+          "basis": "absolute",
+          "confidence": "low",
+          "driver_id": null,
+          "evidence_ids": [
+            "HIST-3634a9cafd00212d",
+            "HIST-ed4dc59dc46c364f"
+          ],
+          "fiscal_years": [
+            2024
+          ],
+          "high": [
+            "2050"
+          ],
+          "kind": "model_assumption",
+          "low": [
+            "1650"
+          ],
+          "method": "Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+          "metric": "capital_expenditures",
+          "rationale": "Reported capital expenditures were USD 1,484 million in FY2022 and USD 1,852 million in FY2023. No investment program, management constraint, or guidance was supplied, so the FY2024 range is a model assumption.",
+          "scope": "company",
+          "scope_id": "company",
+          "target": "capital_expenditures",
+          "target_type": "forecast_metric",
+          "unit": "USD millions"
+        }
+      ],
+      "cache_bypassed": true,
+      "cache_hit": false,
+      "cache_key": "59e5b5534734c979ee8eff939025da8857e057c2e30349244eaa59b30745fe5c",
+      "error": null,
+      "error_type": null,
+      "force_refresh": true,
+      "response": {
+        "assumptions": [
+          {
+            "assumption_id": "ASSUMP-REV-2024",
+            "base": [
+              "47000"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_based": false,
+            "evidence_ids": [
+              "HIST-5c0179abc314f886",
+              "HIST-107ed74d18424836"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "49000"
+            ],
+            "low": [
+              "45000"
+            ],
+            "method": "Conservative near-term scenario range anchored to the latest two reported company revenue observations.",
+            "metric": "revenue",
+            "model_assumption": true,
+            "rationale": "The latest reported revenue observations were USD 43,004 million in FY2022 and USD 45,754 million in FY2023. No FY2024 management guidance, research evidence, or accepted operating-driver observation was supplied; therefore this is a model assumption rather than an evidence-based forecast.",
+            "scope": "company",
+            "scope_id": "company",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          },
+          {
+            "assumption_id": "ASSUMP-DANDA-2024",
+            "base": [
+              "1150"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_based": false,
+            "evidence_ids": [
+              "HIST-805fbeaf9aae5949",
+              "HIST-d01021c0a9217d8a"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "1300"
+            ],
+            "low": [
+              "1050"
+            ],
+            "method": "Conservative scenario range anchored to the latest two reported D&A observations.",
+            "metric": "depreciation_and_amortization",
+            "model_assumption": true,
+            "rationale": "Reported D&A was USD 1,260 million in FY2022 and USD 1,128 million in FY2023. In the absence of management guidance or a supplied operating driver, the FY2024 range is explicitly a model assumption.",
+            "scope": "company",
+            "scope_id": "company",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          },
+          {
+            "assumption_id": "ASSUMP-CAPEX-2024",
+            "base": [
+              "1850"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_based": false,
+            "evidence_ids": [
+              "HIST-3634a9cafd00212d",
+              "HIST-ed4dc59dc46c364f"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "2050"
+            ],
+            "low": [
+              "1650"
+            ],
+            "method": "Conservative scenario range anchored to the latest two reported capital-expenditure observations.",
+            "metric": "capital_expenditures",
+            "model_assumption": true,
+            "rationale": "Reported capital expenditures were USD 1,484 million in FY2022 and USD 1,852 million in FY2023. No investment program, management constraint, or guidance was supplied, so the FY2024 range is a model assumption.",
+            "scope": "company",
+            "scope_id": "company",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          }
+        ],
+        "modeling_decisions": [],
+        "overall_confidence": "low",
+        "unresolved_items": [
+          {
+            "category": "missing_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-2024-GUIDANCE",
+            "metric": null,
+            "reason": "No management guidance, accepted constraints, or manual forward observations were supplied for FY2024.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_driver_definition",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-DRIVER-REGISTRY",
+            "metric": null,
+            "reason": "No registry-backed operating-driver definitions or required inputs were supplied, preventing auditable operating-driver proposals.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-OWC-2024",
+            "metric": "OWC",
+            "reason": "Historical component balances are supplied, but no accepted OWC definition or forward operating-driver input is provided; an OWC forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-TAX-RATE-2024",
+            "metric": "tax_rate",
+            "reason": "Historical tax expense and pretax income are supplied, but no accepted tax-rate assumption, guidance, or forward driver is provided; a tax-rate forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence.",
+          "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions.",
+          "No unsupported accounting outputs or valuation assumptions were proposed."
+        ]
+      },
+      "run": 1,
+      "status": "proposal_available",
+      "validation": {
+        "accepted_assumptions": [],
+        "accepted_decisions": [],
+        "input_issues": [],
+        "overall_confidence": "low",
+        "rejected_assumptions": [
+          {
+            "assumption_id": "ASSUMP-REV-2024",
+            "code": "UNSUPPORTED_METHOD",
+            "decision_id": null,
+            "reason": "Unsupported modeling method: Conservative near-term scenario range anchored to the latest two reported company revenue observations."
+          },
+          {
+            "assumption_id": "ASSUMP-DANDA-2024",
+            "code": "UNSUPPORTED_METHOD",
+            "decision_id": null,
+            "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported D&A observations."
+          },
+          {
+            "assumption_id": "ASSUMP-CAPEX-2024",
+            "code": "UNSUPPORTED_METHOD",
+            "decision_id": null,
+            "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported capital-expenditure observations."
+          }
+        ],
+        "rejected_decisions": [],
+        "unresolved_items": [
+          {
+            "category": "missing_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-2024-GUIDANCE",
+            "metric": null,
+            "reason": "No management guidance, accepted constraints, or manual forward observations were supplied for FY2024.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_driver_definition",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-DRIVER-REGISTRY",
+            "metric": null,
+            "reason": "No registry-backed operating-driver definitions or required inputs were supplied, preventing auditable operating-driver proposals.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-OWC-2024",
+            "metric": "OWC",
+            "reason": "Historical component balances are supplied, but no accepted OWC definition or forward operating-driver input is provided; an OWC forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "unsupported_metric",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRES-TAX-RATE-2024",
+            "metric": "tax_rate",
+            "reason": "Historical tax expense and pretax income are supplied, but no accepted tax-rate assumption, guidance, or forward driver is provided; a tax-rate forecast is therefore not proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence.",
+          "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions.",
+          "No unsupported accounting outputs or valuation assumptions were proposed."
+        ]
+      }
+    },
+    {
+      "assumption_table": [],
+      "cache_bypassed": true,
+      "cache_hit": null,
+      "cache_key": null,
+      "error": "OpenAI returned an invalid structured response: 1 validation error for ForecastReasoningResponse\nmodeling_decisions.0\n  Value error, Modeling decisions require exactly one metric or driver_id [type=value_error, input_value={'decision_id': 'DECISION...ng-driver definitions.'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error",
+      "error_type": "OpenAIExtractionError",
+      "force_refresh": true,
+      "response": null,
+      "run": 2,
+      "status": "structured_response_failure",
+      "validation": null
+    },
+    {
+      "assumption_table": [
+        {
+          "assumption_id": "ASSUMP-REV-2024-001",
+          "base": [
+            "47125"
+          ],
+          "basis": "absolute",
+          "confidence": "low",
+          "driver_id": null,
+          "evidence_ids": [
+            "HIST-107ed74d18424836",
+            "HIST-5c0179abc314f886"
+          ],
+          "fiscal_years": [
+            2024
+          ],
+          "high": [
+            "47750"
+          ],
+          "kind": "model_assumption",
+          "low": [
+            "46500"
+          ],
+          "method": "Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance.",
+          "metric": "revenue",
+          "rationale": "FY2023 revenue was higher than FY2022 revenue, but the supplied input contains no 2024 management guidance, research evidence, or operating-driver observations. The range therefore uses a conservative continuation of the latest observed revenue level rather than an evidence-based point estimate.",
+          "scope": "company",
+          "scope_id": "company",
+          "target": "revenue",
+          "target_type": "forecast_metric",
+          "unit": "USD millions"
+        }
+      ],
+      "cache_bypassed": true,
+      "cache_hit": false,
+      "cache_key": "59e5b5534734c979ee8eff939025da8857e057c2e30349244eaa59b30745fe5c",
+      "error": null,
+      "error_type": null,
+      "force_refresh": true,
+      "response": {
+        "assumptions": [
+          {
+            "assumption_id": "ASSUMP-REV-2024-001",
+            "base": [
+              "47125"
+            ],
+            "basis": "absolute",
+            "confidence": "low",
+            "driver_id": null,
+            "evidence_based": false,
+            "evidence_ids": [
+              "HIST-107ed74d18424836",
+              "HIST-5c0179abc314f886"
+            ],
+            "fiscal_years": [
+              2024
+            ],
+            "high": [
+              "47750"
+            ],
+            "low": [
+              "46500"
+            ],
+            "method": "Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance.",
+            "metric": "revenue",
+            "model_assumption": true,
+            "rationale": "FY2023 revenue was higher than FY2022 revenue, but the supplied input contains no 2024 management guidance, research evidence, or operating-driver observations. The range therefore uses a conservative continuation of the latest observed revenue level rather than an evidence-based point estimate.",
+            "scope": "company",
+            "scope_id": "company",
+            "target_type": "forecast_metric",
+            "unit": "USD millions"
+          }
+        ],
+        "modeling_decisions": [],
+        "overall_confidence": "low",
+        "unresolved_items": [
+          {
+            "category": "missing_management_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-GUIDANCE-2024-001",
+            "metric": "revenue",
+            "reason": "No management guidance or accepted first-party forward observation was supplied for FY2024 revenue or other forecast metrics.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_operating_driver_registry",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-DRIVERS-2024-001",
+            "metric": null,
+            "reason": "The supplied definitions and segment inputs are empty, so no registry-backed operating-driver assumption can be proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "insufficient_supported_metric_evidence",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-METRICS-2024-001",
+            "metric": null,
+            "reason": "Historical observations are available for selected financial statement items, but no forward evidence supports FY2024 gross margin, R&D, SG&A, other operating items, tax rate, D&A, CAPEX, or OWC assumptions.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "The only proposed path is a clearly labeled model assumption because no forward guidance or research evidence was supplied.",
+          "No operating-driver proposal is made because the supplied registry-backed definitions are empty.",
+          "Historical observations are not sufficient by themselves to establish FY2024 management guidance."
+        ]
+      },
+      "run": 3,
+      "status": "proposal_available",
+      "validation": {
+        "accepted_assumptions": [],
+        "accepted_decisions": [],
+        "input_issues": [],
+        "overall_confidence": "low",
+        "rejected_assumptions": [
+          {
+            "assumption_id": "ASSUMP-REV-2024-001",
+            "code": "UNSUPPORTED_METHOD",
+            "decision_id": null,
+            "reason": "Unsupported modeling method: Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance."
+          }
+        ],
+        "rejected_decisions": [],
+        "unresolved_items": [
+          {
+            "category": "missing_management_guidance",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-GUIDANCE-2024-001",
+            "metric": "revenue",
+            "reason": "No management guidance or accepted first-party forward observation was supplied for FY2024 revenue or other forecast metrics.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "missing_operating_driver_registry",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-DRIVERS-2024-001",
+            "metric": null,
+            "reason": "The supplied definitions and segment inputs are empty, so no registry-backed operating-driver assumption can be proposed.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          },
+          {
+            "category": "insufficient_supported_metric_evidence",
+            "driver_id": null,
+            "fiscal_years": [
+              2024
+            ],
+            "item_id": "UNRESOLVED-METRICS-2024-001",
+            "metric": null,
+            "reason": "Historical observations are available for selected financial statement items, but no forward evidence supports FY2024 gross margin, R&D, SG&A, other operating items, tax rate, D&A, CAPEX, or OWC assumptions.",
+            "scope": "company",
+            "scope_id": "company",
+            "status": "unresolved"
+          }
+        ],
+        "warnings": [
+          "The only proposed path is a clearly labeled model assumption because no forward guidance or research evidence was supplied.",
+          "No operating-driver proposal is made because the supplied registry-backed definitions are empty.",
+          "Historical observations are not sufficient by themselves to establish FY2024 management guidance."
+        ]
+      }
+    }
+  ],
+  "stability": {
+    "excluded_failed_runs": [
+      2
+    ],
+    "successful_runs": [
+      1,
+      3
+    ],
+    "targets": {
+      "forecast_metric:company:company:capital_expenditures": {
+        "base_statistics": {
+          "dispersion": null,
+          "maximum": "1850",
+          "mean": "1850",
+          "minimum": "1850",
+          "sample_size": 1,
+          "variance": "0"
+        },
+        "note": "Dispersion is omitted when only one successful run proposed this target.",
+        "values": {
+          "run_1": {
+            "base": "1850",
+            "high": "2050",
+            "low": "1650"
+          }
+        }
+      },
+      "forecast_metric:company:company:depreciation_and_amortization": {
+        "base_statistics": {
+          "dispersion": null,
+          "maximum": "1150",
+          "mean": "1150",
+          "minimum": "1150",
+          "sample_size": 1,
+          "variance": "0"
+        },
+        "note": "Dispersion is omitted when only one successful run proposed this target.",
+        "values": {
+          "run_1": {
+            "base": "1150",
+            "high": "1300",
+            "low": "1050"
+          }
+        }
+      },
+      "forecast_metric:company:company:revenue": {
+        "base_statistics": {
+          "dispersion": "125",
+          "maximum": "47125",
+          "mean": "47062.5",
+          "minimum": "47000",
+          "sample_size": 2,
+          "variance": "3906.25"
+        },
+        "note": "Population dispersion over successful runs only.",
+        "values": {
+          "run_1": {
+            "base": "47000",
+            "high": "49000",
+            "low": "45000"
+          },
+          "run_3": {
+            "base": "47125",
+            "high": "47750",
+            "low": "46500"
+          }
+        }
+      }
+    }
+  },
+  "status": "blocked",
+  "successful": false,
+  "ticker": "KO",
+  "unresolved": [
+    {
+      "category": "missing_guidance",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRES-2024-GUIDANCE",
+      "metric": null,
+      "reason": "No management guidance, accepted constraints, or manual forward observations were supplied for FY2024.",
+      "run": 1,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "missing_driver_definition",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRES-DRIVER-REGISTRY",
+      "metric": null,
+      "reason": "No registry-backed operating-driver definitions or required inputs were supplied, preventing auditable operating-driver proposals.",
+      "run": 1,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "unsupported_metric",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRES-OWC-2024",
+      "metric": "OWC",
+      "reason": "Historical component balances are supplied, but no accepted OWC definition or forward operating-driver input is provided; an OWC forecast is therefore not proposed.",
+      "run": 1,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "unsupported_metric",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRES-TAX-RATE-2024",
+      "metric": "tax_rate",
+      "reason": "Historical tax expense and pretax income are supplied, but no accepted tax-rate assumption, guidance, or forward driver is provided; a tax-rate forecast is therefore not proposed.",
+      "run": 1,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "missing_management_guidance",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRESOLVED-GUIDANCE-2024-001",
+      "metric": "revenue",
+      "reason": "No management guidance or accepted first-party forward observation was supplied for FY2024 revenue or other forecast metrics.",
+      "run": 3,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "missing_operating_driver_registry",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRESOLVED-DRIVERS-2024-001",
+      "metric": null,
+      "reason": "The supplied definitions and segment inputs are empty, so no registry-backed operating-driver assumption can be proposed.",
+      "run": 3,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    },
+    {
+      "category": "insufficient_supported_metric_evidence",
+      "driver_id": null,
+      "fiscal_years": [
+        2024
+      ],
+      "item_id": "UNRESOLVED-METRICS-2024-001",
+      "metric": null,
+      "reason": "Historical observations are available for selected financial statement items, but no forward evidence supports FY2024 gross margin, R&D, SG&A, other operating items, tax rate, D&A, CAPEX, or OWC assumptions.",
+      "run": 3,
+      "scope": "company",
+      "scope_id": "company",
+      "status": "unresolved"
+    }
+  ],
+  "validation_readiness": {
+    "driver_readiness": {
+      "canonical_errors": [],
+      "diagnostics": [
+        "FY2024: consolidated gross profit unavailable; every selected segment must have valid gross profit",
+        "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+        "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+        "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+        "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue"
+      ],
+      "identity_errors": [],
+      "missing_metric_years": [
+        "FY2024 gross_profit",
+        "FY2024 ebit",
+        "FY2024 nopat",
+        "FY2024 fcff",
+        "FY2024 revenue",
+        "FY2024 tax_rate",
+        "FY2024 depreciation_and_amortization",
+        "FY2024 capital_expenditures",
+        "FY2024 operating_working_capital",
+        "FY2024 change_in_operating_working_capital"
+      ],
+      "missing_metrics_by_year": {
+        "2024": [
+          "gross_profit",
+          "ebit",
+          "nopat",
+          "fcff",
+          "revenue",
+          "tax_rate",
+          "depreciation_and_amortization",
+          "capital_expenditures",
+          "operating_working_capital",
+          "change_in_operating_working_capital"
+        ]
+      },
+      "ready": false,
+      "seed_errors": [],
+      "sequence_errors": [
+        "Canonical fiscal years () do not match target years (2024,)",
+        "Canonical forecast_year sequence must start at 1 and be contiguous"
+      ],
+      "target_years": [
+        2024
+      ],
+      "unit_errors": [],
+      "warnings": [
+        "FY2024 tax uses normalized historical assumption: median_recent_historical_effective_tax_rate",
+        "FY2024 reinvestment uses normalized historical assumption: median_recent_historical_depreciation_and_amortization_to_revenue",
+        "FY2024 CAPEX uses normalized historical assumption: median_recent_historical_capital_expenditures_to_revenue",
+        "FY2024 OWC uses normalized historical assumption: median_recent_historical_operating_working_capital_to_revenue",
+        "Driver-based operating economics are low confidence"
+      ]
+    },
+    "run_1": {
+      "accepted_assumptions": [],
+      "accepted_decisions": [],
+      "input_issues": [],
+      "overall_confidence": "low",
+      "rejected_assumptions": [
+        {
+          "assumption_id": "ASSUMP-REV-2024",
+          "code": "UNSUPPORTED_METHOD",
+          "decision_id": null,
+          "reason": "Unsupported modeling method: Conservative near-term scenario range anchored to the latest two reported company revenue observations."
+        },
+        {
+          "assumption_id": "ASSUMP-DANDA-2024",
+          "code": "UNSUPPORTED_METHOD",
+          "decision_id": null,
+          "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported D&A observations."
+        },
+        {
+          "assumption_id": "ASSUMP-CAPEX-2024",
+          "code": "UNSUPPORTED_METHOD",
+          "decision_id": null,
+          "reason": "Unsupported modeling method: Conservative scenario range anchored to the latest two reported capital-expenditure observations."
+        }
+      ],
+      "rejected_decisions": [],
+      "unresolved_items": [
+        {
+          "category": "missing_guidance",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRES-2024-GUIDANCE",
+          "metric": null,
+          "reason": "No management guidance, accepted constraints, or manual forward observations were supplied for FY2024.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        },
+        {
+          "category": "missing_driver_definition",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRES-DRIVER-REGISTRY",
+          "metric": null,
+          "reason": "No registry-backed operating-driver definitions or required inputs were supplied, preventing auditable operating-driver proposals.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        },
+        {
+          "category": "unsupported_metric",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRES-OWC-2024",
+          "metric": "OWC",
+          "reason": "Historical component balances are supplied, but no accepted OWC definition or forward operating-driver input is provided; an OWC forecast is therefore not proposed.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        },
+        {
+          "category": "unsupported_metric",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRES-TAX-RATE-2024",
+          "metric": "tax_rate",
+          "reason": "Historical tax expense and pretax income are supplied, but no accepted tax-rate assumption, guidance, or forward driver is provided; a tax-rate forecast is therefore not proposed.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        }
+      ],
+      "warnings": [
+        "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence.",
+        "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions.",
+        "No unsupported accounting outputs or valuation assumptions were proposed."
+      ]
+    },
+    "run_3": {
+      "accepted_assumptions": [],
+      "accepted_decisions": [],
+      "input_issues": [],
+      "overall_confidence": "low",
+      "rejected_assumptions": [
+        {
+          "assumption_id": "ASSUMP-REV-2024-001",
+          "code": "UNSUPPORTED_METHOD",
+          "decision_id": null,
+          "reason": "Unsupported modeling method: Conservative near-term revenue range anchored to the latest normalized historical revenue observations; this is a model assumption, not management guidance."
+        }
+      ],
+      "rejected_decisions": [],
+      "unresolved_items": [
+        {
+          "category": "missing_management_guidance",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRESOLVED-GUIDANCE-2024-001",
+          "metric": "revenue",
+          "reason": "No management guidance or accepted first-party forward observation was supplied for FY2024 revenue or other forecast metrics.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        },
+        {
+          "category": "missing_operating_driver_registry",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRESOLVED-DRIVERS-2024-001",
+          "metric": null,
+          "reason": "The supplied definitions and segment inputs are empty, so no registry-backed operating-driver assumption can be proposed.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        },
+        {
+          "category": "insufficient_supported_metric_evidence",
+          "driver_id": null,
+          "fiscal_years": [
+            2024
+          ],
+          "item_id": "UNRESOLVED-METRICS-2024-001",
+          "metric": null,
+          "reason": "Historical observations are available for selected financial statement items, but no forward evidence supports FY2024 gross margin, R&D, SG&A, other operating items, tax rate, D&A, CAPEX, or OWC assumptions.",
+          "scope": "company",
+          "scope_id": "company",
+          "status": "unresolved"
+        }
+      ],
+      "warnings": [
+        "The only proposed path is a clearly labeled model assumption because no forward guidance or research evidence was supplied.",
+        "No operating-driver proposal is made because the supplied registry-backed definitions are empty.",
+        "Historical observations are not sufficient by themselves to establish FY2024 management guidance."
+      ]
+    }
+  },
+  "warnings": [
+    {
+      "run": 1,
+      "warning": "All proposed FY2024 paths are explicitly labeled model assumptions because the supplied evidence catalog contains only historical observations and no forward guidance or research evidence."
+    },
+    {
+      "run": 1,
+      "warning": "No operating-driver assumptions were proposed because the supplied input contains no registry-backed driver definitions."
+    },
+    {
+      "run": 1,
+      "warning": "No unsupported accounting outputs or valuation assumptions were proposed."
+    },
+    {
+      "run": 3,
+      "warning": "The only proposed path is a clearly labeled model assumption because no forward guidance or research evidence was supplied."
+    },
+    {
+      "run": 3,
+      "warning": "No operating-driver proposal is made because the supplied registry-backed definitions are empty."
+    },
+    {
+      "run": 3,
+      "warning": "Historical observations are not sufficient by themselves to establish FY2024 management guidance."
+    }
+  ]
+}

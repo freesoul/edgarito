@@ -703,10 +703,23 @@ def test_normalized_fact_requires_filed_or_linked_availability_before_call():
 
 def test_explicit_availability_manifest_replaces_period_end_fallback():
     fixture = _fixture()
-    first = fixture.case.point_in_time_financials.observations[0]
+    first = next(
+        item
+        for item in fixture.case.point_in_time_financials.observations
+        if item.fiscal_year == 2023 and item.concept == FinancialConcept.REVENUE
+    )
     changed = first.model_copy(update={"filed": None})
     financials = fixture.case.point_in_time_financials.model_copy(
-        update={"observations": [changed, *fixture.case.point_in_time_financials.observations[1:]]}
+        update={
+            "observations": [
+                changed,
+                *(
+                    item
+                    for item in fixture.case.point_in_time_financials.observations
+                    if item != first
+                ),
+            ]
+        }
     )
     identity = canonical_information_identity(changed, "normalized_fact")
     record = InformationAvailabilityRecord(
@@ -714,7 +727,7 @@ def test_explicit_availability_manifest_replaces_period_end_fallback():
         category="normalized_fact",
         available_on=datetime.date(2024, 2, 15),
         source="KO 2023 10-K",
-        source_id="ko-2023-10k",
+        source_id="0000021344-24-000009",
         provenance="explicit test availability link",
         content_hash=canonical_information_content_hash(changed),
     )
@@ -1060,7 +1073,17 @@ def test_fixtures_use_exact_fy2024_reported_subset_after_fy2023_cutoff():
     tesla = load_fixture("tsla")
     assert ko.case.as_of == datetime.date(2024, 3, 1)
     assert ko.case.fiscal_years == (2024,)
-    assert {item.value for item in ko.case.point_in_time_financials.observations} <= {D("45754"), D("11311")}
+    assert {item.fiscal_year for item in ko.case.point_in_time_financials.observations} == {2022, 2023}
+    assert next(
+        item
+        for item in ko.case.point_in_time_financials.observations
+        if item.fiscal_year == 2023 and item.concept == FinancialConcept.REVENUE
+    ).value == D("45754")
+    assert next(
+        item
+        for item in ko.case.point_in_time_financials.observations
+        if item.fiscal_year == 2023 and item.concept == FinancialConcept.OPERATING_INCOME
+    ).value == D("11311")
     assert next(item for item in ko.actual_outcomes.observations if item.metric == "revenue").value == D("47061")
     assert next(item for item in ko.actual_outcomes.observations if item.metric == "ebit").value == D("9992")
     assert next(item for item in visa.actual_outcomes.observations if item.metric == "revenue").value == D("35926")

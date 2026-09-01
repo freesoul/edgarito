@@ -8,9 +8,36 @@
   "exact_fiscal_years": [2024],
   "expected_archetypes": ["stable"],
   "completeness": "partial",
+  "operating_evidence_available": false,
   "financial_rows": [
-    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "revenue", "value": "45754", "unit": "USD millions", "source_concept": "Revenue", "source_id": "ko-2023-10k", "filed": "2024-02-15", "provenance": "KO 2023 10-K; exact reported fact"},
-    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "operating_income", "value": "11311", "unit": "USD millions", "source_concept": "OperatingIncomeLoss", "source_id": "ko-2023-10k", "filed": "2024-02-15", "provenance": "KO 2023 10-K; exact reported fact"}
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "revenue", "value": "43004", "unit": "USD millions", "source_concept": "Revenues", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "operating_income", "value": "10909", "unit": "USD millions", "source_concept": "OperatingIncomeLoss", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "pretax_income", "value": "11686", "unit": "USD millions", "source_concept": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "income_tax_expense", "value": "2115", "unit": "USD millions", "source_concept": "IncomeTaxExpenseBenefit", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "depreciation_and_amortization", "value": "1260", "unit": "USD millions", "source_concept": "DepreciationDepletionAndAmortization", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "capital_expenditures", "value": "1484", "unit": "USD millions", "source_concept": "PaymentsToAcquirePropertyPlantAndEquipment", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact; SEC cash-flow fact is positive"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "accounts_receivable", "value": "3487", "unit": "USD millions", "source_concept": "AccountsReceivableNetCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "inventory", "value": "4233", "unit": "USD millions", "source_concept": "InventoryNet", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "prepaid_and_other_current_assets", "value": "3240", "unit": "USD millions", "source_concept": "PrepaidExpenseAndOtherAssetsCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "current_assets", "value": "22591", "unit": "USD millions", "source_concept": "AssetsCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "accounts_payable", "value": "5307", "unit": "USD millions", "source_concept": "AccountsPayableTradeCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact; trade accounts payable component"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "accrued_liabilities", "value": "5643", "unit": "USD millions", "source_concept": "OtherAccruedLiabilitiesCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "current_liabilities", "value": "19724", "unit": "USD millions", "source_concept": "LiabilitiesCurrent", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact; aggregate OWC alternative"},
+    {"fiscal_year": 2022, "period_end": "2022-12-31", "concept": "cash_and_equivalents", "value": "9519", "unit": "USD millions", "source_concept": "CashAndCashEquivalentsAtCarryingValue", "source_id": "0000021344-23-000011", "filed": "2023-02-21", "provenance": "KO 2022 10-K; exact SEC reported fact; cash alternative"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "revenue", "value": "45754", "unit": "USD millions", "source_concept": "Revenues", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "operating_income", "value": "11311", "unit": "USD millions", "source_concept": "OperatingIncomeLoss", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "pretax_income", "value": "12952", "unit": "USD millions", "source_concept": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "income_tax_expense", "value": "2249", "unit": "USD millions", "source_concept": "IncomeTaxExpenseBenefit", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "depreciation_and_amortization", "value": "1128", "unit": "USD millions", "source_concept": "DepreciationDepletionAndAmortization", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "capital_expenditures", "value": "1852", "unit": "USD millions", "source_concept": "PaymentsToAcquirePropertyPlantAndEquipment", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact; SEC cash-flow fact is positive"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "accounts_receivable", "value": "3410", "unit": "USD millions", "source_concept": "AccountsReceivableNetCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "inventory", "value": "4424", "unit": "USD millions", "source_concept": "InventoryNet", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "prepaid_and_other_current_assets", "value": "5235", "unit": "USD millions", "source_concept": "PrepaidExpenseAndOtherAssetsCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "current_assets", "value": "26732", "unit": "USD millions", "source_concept": "AssetsCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "accounts_payable", "value": "5590", "unit": "USD millions", "source_concept": "AccountsPayableTradeCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact; trade accounts payable component"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "accrued_liabilities", "value": "5631", "unit": "USD millions", "source_concept": "OtherAccruedLiabilitiesCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "current_liabilities", "value": "23571", "unit": "USD millions", "source_concept": "LiabilitiesCurrent", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact; aggregate OWC alternative"},
+    {"fiscal_year": 2023, "period_end": "2023-12-31", "concept": "cash_and_equivalents", "value": "9366", "unit": "USD millions", "source_concept": "CashAndCashEquivalentsAtCarryingValue", "source_id": "0000021344-24-000009", "filed": "2024-02-20", "provenance": "KO 2023 10-K; exact SEC reported fact; cash alternative"}
   ],
   "reasoning_input": {
     "company_id": "KO",
@@ -19,20 +46,51 @@
     "unit": "USD millions",
     "as_of": "2024-03-01",
     "forecast_years": [2024],
-    "historical_facts": [{"fiscal_year": 2023, "metric": "revenue", "value": 45754, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "ko-2023-10k", "source_date": "2024-02-15"}]
+    "historical_facts": [
+      {"fiscal_year": 2022, "metric": "revenue", "value": 43004, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "operating_income", "value": 10909, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "pretax_income", "value": 11686, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "income_tax_expense", "value": 2115, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "depreciation_and_amortization", "value": 1260, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "capital_expenditures", "value": 1484, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "accounts_receivable", "value": 3487, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "inventory", "value": 4233, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "prepaid_and_other_current_assets", "value": 3240, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "current_assets", "value": 22591, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "accounts_payable", "value": 5307, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "accrued_liabilities", "value": 5643, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "current_liabilities", "value": 19724, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2022, "metric": "cash_and_equivalents", "value": 9519, "unit": "USD millions", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "source_date": "2023-02-21"},
+      {"fiscal_year": 2023, "metric": "revenue", "value": 45754, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "operating_income", "value": 11311, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "pretax_income", "value": 12952, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "income_tax_expense", "value": 2249, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "depreciation_and_amortization", "value": 1128, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "capital_expenditures", "value": 1852, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "accounts_receivable", "value": 3410, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "inventory", "value": 4424, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "prepaid_and_other_current_assets", "value": 5235, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "current_assets", "value": 26732, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "accounts_payable", "value": 5590, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "accrued_liabilities", "value": 5631, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "current_liabilities", "value": 23571, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"},
+      {"fiscal_year": 2023, "metric": "cash_and_equivalents", "value": 9366, "unit": "USD millions", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "source_date": "2024-02-20"}
+    ]
   },
   "evidence_metadata": [
-    {"evidence_id": "historical:company:company:revenue:2023:FY", "category": "historical", "source": "KO 2023 10-K", "source_date": "2024-02-15", "as_of": "2024-03-01", "provenance": "manually curated; source filing"}
+    {"evidence_id": "historical:company:company:revenue:2022:FY", "category": "historical", "source": "KO 2022 10-K", "source_date": "2023-02-21", "as_of": "2024-03-01", "provenance": "manually curated; exact SEC fact"},
+    {"evidence_id": "historical:company:company:revenue:2023:FY", "category": "historical", "source": "KO 2023 10-K", "source_date": "2024-02-20", "as_of": "2024-03-01", "provenance": "manually curated; exact SEC fact"}
   ],
   "availability_records": [
-    {"identity": "historical:company:company:revenue:2023:FY", "category": "historical_summary", "available_on": "2024-02-15", "source": "KO 2023 10-K", "source_id": "ko-2023-10k", "provenance": "manually curated linked availability"}
+    {"identity": "historical:company:company:revenue:2022:FY", "category": "historical_summary", "available_on": "2023-02-21", "source": "KO 2022 10-K", "source_id": "0000021344-23-000011", "provenance": "manually curated linked availability"},
+    {"identity": "historical:company:company:revenue:2023:FY", "category": "historical_summary", "available_on": "2024-02-20", "source": "KO 2023 10-K", "source_id": "0000021344-24-000009", "provenance": "manually curated linked availability"}
   ],
   "actual_outcomes": {
     "company": "The Coca-Cola Company",
     "ticker": "KO",
     "observations": [
-      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "revenue", "value": "47061", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "ko-2024-10k", "source_concept": "Revenue", "source_date": "2025-02-14", "filing_date": "2025-02-14", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"},
-      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "ebit", "value": "9992", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "ko-2024-10k", "source_concept": "OperatingIncomeLoss", "source_date": "2025-02-14", "filing_date": "2025-02-14", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"}
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "revenue", "value": "47061", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "0000021344-25-000011", "source_concept": "Revenues", "source_date": "2025-02-20", "filing_date": "2025-02-20", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"},
+      {"fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-12-31", "metric": "ebit", "value": "9992", "unit": "USD millions", "currency": "USD", "scale": "1", "source": "KO 2024 10-K", "source_id": "0000021344-25-000011", "source_concept": "OperatingIncomeLoss", "source_date": "2025-02-20", "filing_date": "2025-02-20", "value_kind": "reported", "reconstruction_provenance": "reported FY2024 subset; no reconstruction", "provenance": "reported FY2024 subset; not complete FCFF"}
     ]
   }
 }

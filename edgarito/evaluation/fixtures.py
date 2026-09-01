@@ -88,6 +88,7 @@ class EvaluationFixtureManifest(BaseModel):
     exact_fiscal_years: tuple[int, ...]
     expected_archetypes: tuple[str, ...] = ()
     completeness: Literal["partial", "complete"] = "partial"
+    operating_evidence_available: bool | None = None
     financial_rows: tuple[FixtureFinancialRow, ...]
     reasoning_input: dict[str, Any]
     evidence_metadata: tuple[FixtureEvidenceMetadata, ...]
