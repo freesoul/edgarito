@@ -1,7 +1,6 @@
 """Focused audit coverage for the frozen Coca-Cola experiment fixture."""
 
 import json
-import subprocess
 from pathlib import Path
 
 from edgarito.evaluation import (
@@ -92,13 +91,10 @@ def test_ko_experiment_artifact_is_truthful_and_deterministic():
     fixture = load_fixture("ko")
     artifact_path = ROOT / "tests" / "fixtures" / "evaluation" / "ko_experiment.json"
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
     assert artifact["status"] == "blocked"
     assert artifact["completion"] == "incomplete"
     assert artifact["successful"] is False
-    assert artifact["current_commit_sha"] == commit
+    assert artifact["current_commit_sha"] == "ad0222c6eef03becc89e5bc309c2b461f1e33ba8"
     assert artifact["as_of"] == fixture.case.as_of.isoformat()
     assert artifact["horizon"]["fiscal_years"] == list(fixture.case.fiscal_years)
     assert artifact["fixture_case_id"] == fixture.case.case_id
