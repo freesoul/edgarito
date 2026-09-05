@@ -79,31 +79,6 @@ _SUPPORTED_DECISION_STRATEGIES = frozenset(
     {"driver", "consolidated", "explicit", "ratio", "residual", "ignore"}
 )
 _NON_PATH_DECISION_STRATEGIES = frozenset({"driver", "consolidated", "ignore"})
-_SUPPORTED_METHODS = frozenset(
-    {
-        "evidence",
-        "evidence_precedence",
-        "consensus",
-        "management_guidance",
-        "historical_trend",
-        "stable",
-        "base_case",
-        "conservative",
-        "explicit",
-        "absolute",
-        "ratio",
-        "percentage_points",
-        "driver",
-        "model_assumption",
-        "volume_price",
-        "subscribers_arpu",
-        "capacity_utilization_price",
-        "transactions_take_rate",
-        "backlog_conversion",
-        "store_count_sales_per_store",
-        "generic_segment_growth",
-    }
-)
 _RATE_UNITS = frozenset(
     {
         "%",
@@ -206,7 +181,9 @@ class ForecastReasoningValidator:
         decision_keys: set[tuple[str, str, str]] = set()
         for decision in response.modeling_decisions:
             reasons = self._decision_issues(decision, input_value)
-            target = _metric_key(decision.metric) or f"driver:{decision.driver_id}"
+            target = _metric_key(decision.target)
+            if decision.target_type == "operating_driver":
+                target = f"driver:{canonical_driver_id(decision.target)}"
             key = (decision.scope.value, decision.scope_id, target)
             if key in decision_keys:
                 reasons.append(
@@ -285,14 +262,6 @@ class ForecastReasoningValidator:
                 (
                     "HORIZON_MISMATCH",
                     "Assumption fiscal years do not exactly match input horizon",
-                )
-            )
-        method = assumption.method.casefold().replace("-", "_").replace(" ", "_")
-        if method not in _SUPPORTED_METHODS:
-            issues.append(
-                (
-                    "UNSUPPORTED_METHOD",
-                    f"Unsupported modeling method: {assumption.method}",
                 )
             )
         if (
@@ -966,47 +935,43 @@ class ForecastReasoningValidator:
             issues.append(
                 ("UNKNOWN_SEGMENT", f"Unknown decision segment: {decision.scope_id}")
             )
-        metric = _metric_key(decision.metric)
-        if metric in _DERIVED_METRICS or metric == "revenue":
-            issues.append(
-                (
-                    "UNSAFE_DECISION_TARGET",
-                    f"Unsafe decision target is forbidden: {metric}",
+        target = _metric_key(decision.target)
+        if decision.target_type == "forecast_metric":
+            if target in _DERIVED_METRICS or target == "revenue":
+                issues.append(
+                    (
+                        "UNSAFE_DECISION_TARGET",
+                        f"Unsafe decision target is forbidden: {target}",
+                    )
                 )
-            )
-        if decision.driver_id and canonical_driver_id(
-            decision.driver_id
-        ) in _DERIVED_METRICS | {
-            "revenue",
-            "segment_revenue",
-        }:
-            issues.append(
-                (
-                    "UNSAFE_DECISION_TARGET",
-                    f"Unsafe decision driver is forbidden: {decision.driver_id}",
+            if target not in _FINANCIAL_METRICS:
+                issues.append(
+                    (
+                        "UNSUPPORTED_METRIC",
+                        f"Unsupported decision metric: {decision.target}",
+                    )
                 )
-            )
-        if metric and metric not in _FINANCIAL_METRICS:
-            issues.append(
-                (
-                    "UNSUPPORTED_METRIC",
-                    f"Unsupported decision metric: {decision.metric}",
+        else:
+            driver = canonical_driver_id(decision.target)
+            if driver in _DERIVED_METRICS | {"revenue", "segment_revenue"}:
+                issues.append(
+                    (
+                        "UNSAFE_DECISION_TARGET",
+                        f"Unsafe decision driver is forbidden: {decision.target}",
+                    )
                 )
-            )
-        if decision.driver_id:
             definitions = [
                 item
                 for item in input_value.definitions
                 if item.segment_id == decision.scope_id
             ]
-            decision_driver = canonical_driver_id(decision.driver_id)
             if decision.scope != ForecastScope.SEGMENT or not any(
-                decision_driver in item.required_inputs for item in definitions
+                driver in item.required_inputs for item in definitions
             ):
                 issues.append(
                     (
                         "UNKNOWN_DRIVER",
-                        f"Decision driver is not a required input of an accepted definition: {decision.driver_id}",
+                        f"Decision driver is not a required input of an accepted definition: {decision.target}",
                     )
                 )
         if (

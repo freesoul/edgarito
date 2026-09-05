@@ -339,7 +339,7 @@
       "unresolved": 3
     }
   },
-  "current_commit_sha": "811f3f03ccdda418b7e682e0c22918528c9a8b2d",
+  "current_commit_sha": "ad0222c6eef03becc89e5bc309c2b461f1e33ba8",
   "cutoff": {
     "as_of": "2024-03-01",
     "historical_cutoff": "2023-12-31",
@@ -1564,6 +1564,21 @@
     "schema_version": "forecast_reasoner_v1_response_1",
     "validator_hash": "3bdc0a425fc4a2b9d6f5e6981cfa8738c560706cea45fb437185bf9499fac3c7",
     "validator_version": "forecast_reasoner_v1_validator_1"
+  },
+  "post_hardening_identities": {
+    "context_hash": "a67a15e82d9cc06b956f442692b6c7d67eb83d4b53e46c70e345fa3428f31bdb",
+    "context_version": "forecast_reasoner_v1_context_1",
+    "evidence_bundle_hash": "dfec6b818df9d54a4686043077825388ef818d165d65c70fe27de6ea0671b330",
+    "manual_inputs_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "model": "gpt-5.6-luna",
+    "prompt_hash": "ef132844806a8926b635621574554d74eafcf7939444ff3df910648c095f4b99",
+    "prompt_version": "forecast_reasoner_v1_prompt_2",
+    "reasoning_effort": "medium",
+    "research_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "schema_hash": "7b0685489b6657b604698ca0b0e7d498d2e8ce554a725b5f55e9aabe8bbe46bc",
+    "schema_version": "forecast_reasoner_v1_response_2",
+    "validator_hash": "61c95b38730d9fd81cebcbd9edbdc190a931fe5874a64b436929225cf0cdc1be",
+    "validator_version": "forecast_reasoner_v1_validator_2"
   },
   "information_set_audit": {
     "as_of": "2024-03-01",

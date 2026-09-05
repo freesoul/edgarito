@@ -451,13 +451,10 @@ class ReasonedForecastAssumption(BaseModel):
     low: tuple[ForecastDecimal, ...]
     base: tuple[ForecastDecimal, ...]
     high: tuple[ForecastDecimal, ...]
-    method: str = Field(
-        default="evidence",
-        validation_alias=AliasChoices("method", "supported_method"),
-    )
     evidence_ids: tuple[str, ...] = ()
     rationale: str
-    confidence: str
+    confidence: Literal["high", "medium", "low"]
+    assumption_type: Literal["evidence_based", "model_assumption"]
     evidence_based: bool = False
     model_assumption: bool = False
 
@@ -467,26 +464,39 @@ class ReasonedForecastAssumption(BaseModel):
         if not isinstance(value, Mapping):
             return value
         data = dict(value)
-        source = data.pop(
-            "assumption_type",
-            data.pop(
-                "source_type",
-                data.pop(
+        source = next(
+            (
+                data.pop(key)
+                for key in (
+                    "source_type",
                     "assumption_origin",
-                    data.pop(
-                        "origin", data.pop("source", data.pop("classification", None))
-                    ),
-                ),
+                    "origin",
+                    "source",
+                    "classification",
+                )
+                if key in data
             ),
+            None,
         )
         if source is not None:
             normalized = str(getattr(source, "value", source)).strip().casefold()
             if normalized in {"evidence_based", "evidence", "reasoned_assumption"}:
+                data.setdefault("assumption_type", "evidence_based")
                 data.setdefault("evidence_based", True)
                 data.setdefault("model_assumption", False)
             elif normalized in {"model_assumption", "model", "inference"}:
+                data.setdefault("assumption_type", "model_assumption")
                 data.setdefault("evidence_based", False)
                 data.setdefault("model_assumption", True)
+        if "assumption_type" not in data:
+            if data.get("evidence_based") is True and data.get("model_assumption") is False:
+                data["assumption_type"] = "evidence_based"
+            elif data.get("evidence_based") is False and data.get("model_assumption") is True:
+                data["assumption_type"] = "model_assumption"
+        if "assumption_type" in data:
+            expected_evidence_based = data["assumption_type"] == "evidence_based"
+            data.setdefault("evidence_based", expected_evidence_based)
+            data.setdefault("model_assumption", not expected_evidence_based)
         return data
 
     @field_validator("assumption_id")
@@ -494,7 +504,7 @@ class ReasonedForecastAssumption(BaseModel):
     def normalize_assumption_id(cls, value: str) -> str:
         return _text(value, "Assumption ID")
 
-    @field_validator("scope_id", "unit", "method", "rationale")
+    @field_validator("scope_id", "unit", "rationale")
     @classmethod
     def normalize_assumption_text(cls, value: str) -> str:
         return _text(value, "Forecast assumption text")
@@ -569,6 +579,14 @@ class ReasonedForecastAssumption(BaseModel):
             raise ValueError(
                 "Forecast assumptions must be exactly evidence_based or model_assumption"
             )
+        expected_evidence_based = self.assumption_type == "evidence_based"
+        if (
+            self.evidence_based != expected_evidence_based
+            or self.model_assumption == expected_evidence_based
+        ):
+            raise ValueError(
+                "Forecast assumption type must match evidence_based/model_assumption"
+            )
         return self
 
     @property
@@ -581,14 +599,6 @@ class ReasonedForecastAssumption(BaseModel):
             else f"driver:{canonical_driver_id(self.driver_id)}",
         )
 
-    @property
-    def assumption_type(self) -> str:
-        return "evidence_based" if self.evidence_based else "model_assumption"
-
-    @property
-    def supported_method(self) -> str:
-        return self.method
-
 
 class ProposedModelingDecision(BaseModel):
     """A constrained planning proposal, separate from ForecastPlan."""
@@ -598,20 +608,22 @@ class ProposedModelingDecision(BaseModel):
     decision_id: str
     scope: ForecastScope
     scope_id: str = "company"
-    metric: str | None = None
-    driver_id: str | None = None
-    strategy: str
+    target: str
+    target_type: Literal["forecast_metric", "operating_driver"]
+    strategy: Literal[
+        "driver", "consolidated", "explicit", "ratio", "residual", "ignore"
+    ]
     unit: str | None = None
     basis: ForecastReasoningValueBasis | None = None
     fiscal_years: tuple[int, ...] = ()
     rationale: str
 
-    @field_validator("decision_id", "scope_id", "strategy", "rationale")
+    @field_validator("decision_id", "scope_id", "target", "strategy", "rationale")
     @classmethod
     def normalize_decision_text(cls, value: str) -> str:
         return _text(value, "Modeling decision text")
 
-    @field_validator("metric", "driver_id", "unit")
+    @field_validator("unit")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _text(value, "Modeling decision target") if value is not None else None
@@ -620,15 +632,6 @@ class ProposedModelingDecision(BaseModel):
     @classmethod
     def normalize_decision_years(cls, value: Any) -> tuple[int, ...]:
         return tuple(int(item) for item in (value or ()))
-
-    @model_validator(mode="after")
-    def validate_decision_target(self) -> "ProposedModelingDecision":
-        if (self.metric is None) == (self.driver_id is None):
-            raise ValueError(
-                "Modeling decisions require exactly one metric or driver_id"
-            )
-        return self
-
 
 class ForecastUnresolvedItem(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -673,7 +676,7 @@ class ForecastReasoningResponse(BaseModel):
         default=(), validation_alias=AliasChoices("unresolved_items", "unresolved")
     )
     warnings: tuple[str, ...] = ()
-    overall_confidence: str = "medium"
+    overall_confidence: Literal["high", "medium", "low"] = "medium"
 
     @field_validator(
         "assumptions", "modeling_decisions", "unresolved_items", mode="before"

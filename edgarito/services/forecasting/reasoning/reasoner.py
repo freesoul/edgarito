@@ -27,9 +27,9 @@ from edgarito.services.forecasting.reasoning.evidence import (
 )
 from edgarito.services.openai import OpenAIClient
 
-PROMPT_VERSION = "forecast_reasoner_v1_prompt_1"
-SCHEMA_VERSION = "forecast_reasoner_v1_response_1"
-VALIDATOR_VERSION = "forecast_reasoner_v1_validator_1"
+PROMPT_VERSION = "forecast_reasoner_v1_prompt_2"
+SCHEMA_VERSION = "forecast_reasoner_v1_response_2"
+VALIDATOR_VERSION = "forecast_reasoner_v1_validator_2"
 CONTEXT_VERSION = "forecast_reasoner_v1_context_1"
 
 
@@ -46,6 +46,14 @@ Evidence precedence is: accepted first-party observations and management
 constraints, then normalized historical facts, then typed research evidence and
 consensus, then a clearly labeled model assumption. Explain conflicts in the
 rationale or unresolved items; do not silently choose an unsupported fact.
+
+Every assumption must set assumption_type to exactly evidence_based or
+model_assumption. Do not include a method field; target_type, basis, and the
+target determine the proposed path while provenance is derived deterministically.
+Modeling decisions are audit-only. If provided, each decision must use one
+target string and target_type set to forecast_metric or operating_driver; never
+send separate metric and driver_id fields. Use only the supported strategy
+values in the schema.
 
 For forecast years 1-2, prefer observable guidance and near-term operating
 drivers. For years 3-5, explain a transition toward supported historical or

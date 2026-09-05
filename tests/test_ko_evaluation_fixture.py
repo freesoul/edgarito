@@ -230,12 +230,18 @@ def test_ko_experiment_artifact_is_truthful_and_deterministic():
     ]
 
     identities = artifact["identities"]
-    assert identities["prompt_version"] == PROMPT_VERSION
-    assert identities["prompt_hash"] == content_hash(FORECAST_REASONER_INSTRUCTIONS)
-    assert identities["schema_version"] == SCHEMA_VERSION
-    assert identities["schema_hash"] == content_hash(ForecastReasoningResponse.model_json_schema())
-    assert identities["validator_version"] == VALIDATOR_VERSION
-    assert identities["validator_hash"] == content_hash(VALIDATOR_VERSION)
+    assert identities["prompt_version"] == "forecast_reasoner_v1_prompt_1"
+    assert identities["schema_version"] == "forecast_reasoner_v1_response_1"
+    assert identities["validator_version"] == "forecast_reasoner_v1_validator_1"
+    assert identities["schema_hash"] == "3e70a02636c29680ed291ec298866f6e3c0ccd87facc6dc2b56f251041a5a76b"
+    assert identities["validator_hash"] == "3bdc0a425fc4a2b9d6f5e6981cfa8738c560706cea45fb437185bf9499fac3c7"
+    post_hardening = artifact["post_hardening_identities"]
+    assert post_hardening["prompt_version"] == PROMPT_VERSION
+    assert post_hardening["prompt_hash"] == content_hash(FORECAST_REASONER_INSTRUCTIONS)
+    assert post_hardening["schema_version"] == SCHEMA_VERSION
+    assert post_hardening["schema_hash"] == content_hash(ForecastReasoningResponse.model_json_schema())
+    assert post_hardening["validator_version"] == VALIDATOR_VERSION
+    assert post_hardening["validator_hash"] == content_hash(VALIDATOR_VERSION)
     assert identities["context_version"] == CONTEXT_VERSION
     assert identities["evidence_bundle_hash"] == build_evidence_catalog(
         fixture.case.reasoning_input

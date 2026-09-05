@@ -227,7 +227,6 @@ class ForecastReasoningCompiler:
                 scope_evidence="ForecastReasoner v1 compiled operating input",
                 origin=origin,
                 confidence=assumption.confidence,
-                method=assumption.method,
                 provenance=provenance,
             )
             for year, low, base, high in zip(
@@ -316,7 +315,7 @@ class ForecastReasoningCompiler:
             prompt_version=getattr(metadata, "prompt_version", None),
             schema_version=getattr(metadata, "schema_version", None),
             validator_version=getattr(metadata, "validator_version", None),
-            methodology=assumption.method,
+            methodology=_reasoned_methodology(assumption),
         )
 
     @staticmethod
@@ -326,7 +325,7 @@ class ForecastReasoningCompiler:
         return ForecastProvenance(
             source="ForecastReasoner",
             origin=assumption.assumption_type,
-            methodology=assumption.method,
+            methodology=_reasoned_methodology(assumption),
             reference=(
                 f"assumption_id={assumption.assumption_id};"
                 f"evidence_ids={','.join(assumption.evidence_ids) or 'none'}"
@@ -339,6 +338,14 @@ class ForecastReasoningCompiler:
             schema_version=getattr(metadata, "schema_version", None),
             validator_version=getattr(metadata, "validator_version", None),
         )
+
+
+def _reasoned_methodology(assumption: ReasonedForecastAssumption) -> str:
+    """Return stable provenance without accepting model-supplied prose."""
+
+    target_type = getattr(assumption.target_type, "value", assumption.target_type)
+    basis = getattr(assumption.basis, "value", assumption.basis)
+    return f"reasoned:{target_type}:{basis}:{assumption.assumption_type}"
 
 
 def _override_key(value: ForecastOverride) -> tuple[str, str, str]:

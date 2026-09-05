@@ -116,6 +116,7 @@ def _assumption(*, low=DEFAULT_LOW, base=DEFAULT_BASE, high=DEFAULT_HIGH):
         high=high,
         rationale="supported test path",
         confidence="high",
+        assumption_type="evidence_based",
         evidence_based=True,
         evidence_ids=("HIST-1",),
     )

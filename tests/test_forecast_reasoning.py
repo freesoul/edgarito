@@ -126,7 +126,6 @@ def _assumption(
     high=HIGH_PATH,
     evidence_based=False,
     model_assumption=True,
-    method="volume_price",
     confidence="medium",
     scope="segment",
     scope_id="cloud",
@@ -144,11 +143,103 @@ def _assumption(
         low=low,
         base=base,
         high=high,
-        method=method,
         rationale="Frozen test assumption",
         confidence=confidence,
+        assumption_type=(
+            "evidence_based" if evidence_based else "model_assumption"
+        ),
         evidence_based=evidence_based,
         model_assumption=model_assumption,
+    )
+
+
+def test_forecast_reasoning_schema_has_strict_machine_enums():
+    schema = ForecastReasoningResponse.model_json_schema()
+    definitions = schema["$defs"]
+    assumption = definitions["ReasonedForecastAssumption"]
+    decision = definitions["ProposedModelingDecision"]
+
+    assert "method" not in assumption["properties"]
+    assert assumption["properties"]["target_type"]["enum"] == [
+        "operating_driver",
+        "forecast_metric",
+    ]
+    assert assumption["properties"]["confidence"]["enum"] == [
+        "high",
+        "medium",
+        "low",
+    ]
+    assert assumption["properties"]["assumption_type"]["enum"] == [
+        "evidence_based",
+        "model_assumption",
+    ]
+    assert assumption["properties"]["basis"]["$ref"] == (
+        "#/$defs/ForecastReasoningValueBasis"
+    )
+    assert definitions["ForecastReasoningValueBasis"]["enum"] == [
+        "absolute",
+        "percent_of_revenue",
+        "percentage_points",
+    ]
+    assert assumption["properties"]["scope"]["$ref"] == "#/$defs/ForecastScope"
+    assert definitions["ForecastScope"]["enum"] == ["company", "segment"]
+    assert decision["properties"]["strategy"]["enum"] == [
+        "driver",
+        "consolidated",
+        "explicit",
+        "ratio",
+        "residual",
+        "ignore",
+    ]
+    assert decision["properties"]["target_type"]["enum"] == [
+        "forecast_metric",
+        "operating_driver",
+    ]
+
+
+def test_ko_failure_shapes_are_rejected_and_valid_assumption_compiles():
+    assert "method" not in ReasonedForecastAssumption.model_fields
+    assert {"target", "target_type"} <= set(ProposedModelingDecision.model_fields)
+    assert not {"metric", "driver_id"} & set(ProposedModelingDecision.model_fields)
+
+    method_payload = _assumption(driver_id="volume").model_dump()
+    method_payload["method"] = "Conservative scenario range"
+    with pytest.raises(ValueError):
+        ReasonedForecastAssumption.model_validate(method_payload)
+
+    with pytest.raises(ValueError):
+        ProposedModelingDecision.model_validate(
+            {
+                "decision_id": "neither",
+                "scope": "company",
+                "strategy": "ignore",
+                "rationale": "audit only",
+            }
+        )
+    with pytest.raises(ValueError):
+        ProposedModelingDecision.model_validate(
+            {
+                "decision_id": "both",
+                "scope": "company",
+                "target": "capex",
+                "target_type": "forecast_metric",
+                "metric": "capex",
+                "driver_id": "capex",
+                "strategy": "ignore",
+                "rationale": "audit only",
+            }
+        )
+
+    assumption = _assumption(driver_id="volume")
+    validation = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(assumptions=(assumption,)), _input()
+    )
+    assert validation.is_valid
+    compilation = ForecastReasoningCompiler().compile(_input(), validation)
+    assert len(compilation.observations) == 2
+    assert compilation.observations[0].method is None
+    assert compilation.observations[0].provenance.methodology == (
+        "reasoned:operating_driver:absolute:model_assumption"
     )
 
 
@@ -200,7 +291,6 @@ def test_strict_shape_and_post_validation_reject_unsafe_targets():
                 scope="company",
                 scope_id="company",
                 unit="USD",
-                method="explicit",
             ),
         )
     )
@@ -239,7 +329,6 @@ def test_manual_gross_margin_and_driver_inputs_have_precedence():
                 scope_id="company",
                 unit="percent",
                 basis="percentage_points",
-                method="explicit",
             ),
         )
     )
@@ -283,7 +372,6 @@ def test_manual_capex_representation_has_precedence_across_target_aliases(
         metric=ai_metric,
         unit="percent" if ai_basis == "percent_of_revenue" else "USD",
         basis=ai_basis,
-        method="ratio" if ai_basis == "percent_of_revenue" else "explicit",
         scope="company",
         scope_id="company",
     )
@@ -343,7 +431,6 @@ def test_supported_financial_targets_compile_to_existing_strategies(
         scope_id="company",
         unit=unit,
         basis=basis,
-        method="ratio" if basis == "percent_of_revenue" else "explicit",
     )
     validation = ForecastReasoningValidator().validate(
         ForecastReasoningResponse(assumptions=(assumption,)), value
@@ -468,7 +555,6 @@ def test_async_service_executes_deterministic_driver_path(tmp_path):
                 high=path,
                 scope="company",
                 scope_id="company",
-                method="explicit",
             )
         )
 
@@ -517,7 +603,6 @@ def test_every_registry_archetype_accepts_only_its_canonical_inputs(
     assumption = _assumption(
         driver_id=driver_id,
         unit=unit,
-        method=archetype.value,
         low=(D("1"), D("1")),
         base=(D("2"), D("2")),
         high=(D("3"), D("3")),
@@ -554,7 +639,6 @@ def test_percent_and_fraction_driver_units_preserve_scale():
     percent = _assumption(
         driver_id="utilization",
         unit="percent",
-        method="capacity_utilization_price",
     )
     fraction = percent.model_copy(update={"assumption_id": "fraction", "unit": "ratio"})
     result = ForecastReasoningValidator().validate(
@@ -590,7 +674,6 @@ def test_forecast_rate_metrics_reject_ambiguous_ratio_units(metric, basis):
         scope_id="company",
         unit="ratio",
         basis=basis,
-        method="ratio",
     )
     result = ForecastReasoningValidator().validate(
         ForecastReasoningResponse(assumptions=(assumption,)), _input()
@@ -605,7 +688,8 @@ def test_modeling_decisions_cannot_carry_numeric_paths_or_bypass_safety():
         ProposedModelingDecision(
             decision_id="bad",
             scope="company",
-            metric="capex",
+            target="capex",
+            target_type="forecast_metric",
             strategy="explicit",
             explicit_path=(1, 2),
             rationale="bad",
@@ -615,14 +699,16 @@ def test_modeling_decisions_cannot_carry_numeric_paths_or_bypass_safety():
             ProposedModelingDecision(
                 decision_id="fcff",
                 scope="company",
-                metric="fcff",
+                target="fcff",
+                target_type="forecast_metric",
                 strategy="driver",
                 rationale="bad",
             ),
             ProposedModelingDecision(
                 decision_id="capex",
                 scope="company",
-                metric="capex",
+                target="capex",
+                target_type="forecast_metric",
                 strategy="explicit",
                 rationale="requires an assumption",
             ),
@@ -648,7 +734,8 @@ def test_modeling_decisions_are_not_merged_into_executable_plan():
     decision = ProposedModelingDecision(
         decision_id="ignore-capex",
         scope="company",
-        metric="capex",
+        target="capex",
+        target_type="forecast_metric",
         strategy="ignore",
         rationale="audit only",
     )
@@ -734,7 +821,6 @@ def test_executor_driver_aliases_block_canonical_reasoned_inputs(authoritative_d
     assumption = _assumption(
         driver_id=canonical,
         unit=unit,
-        method=definition.archetype.value,
     )
     validation = ForecastReasoningValidator().validate(
         ForecastReasoningResponse(assumptions=(assumption,)), value
@@ -750,7 +836,6 @@ def test_driver_rate_bounds_follow_declared_percent_or_fraction_scale():
     percent = _assumption(
         driver_id="utilization",
         unit="percent",
-        method="capacity_utilization_price",
         low=(0, 0),
         base=(101, 20),
         high=(101, 20),
@@ -778,7 +863,6 @@ def test_driver_rate_bounds_follow_declared_percent_or_fraction_scale():
     fraction = _assumption(
         driver_id="utilization",
         unit="fraction",
-        method="capacity_utilization_price",
         low=(0, 0),
         base=(D("1.1"), D("0.2")),
         high=(D("1.1"), D("0.2")),
@@ -809,7 +893,6 @@ def test_compiled_ratio_targets_are_bounded_before_compilation(
         scope_id="company",
         unit=unit,
         basis=basis,
-        method="ratio",
         low=path,
         base=path,
         high=path,
@@ -840,7 +923,7 @@ def test_authoritative_observation_beats_high_confidence_model_assumption():
     selected = _select_observations(candidates)
     assert selected[("cloud", "volume", 2025)].value == D("99")
     value = _input(observations=(reported,))
-    model = _assumption(driver_id="volume", method="volume_price", confidence="high")
+    model = _assumption(driver_id="volume", confidence="high")
     validation = ForecastReasoningValidator().validate(
         ForecastReasoningResponse(assumptions=(model,)), value
     )
@@ -904,7 +987,6 @@ def test_authoritative_metric_observations_block_full_ai_override_path(
         scope_id="company",
         unit=unit,
         basis=basis,
-        method="explicit",
         confidence="high",
     )
     validation = ForecastReasoningValidator().validate(
@@ -945,7 +1027,6 @@ def test_authoritative_economic_amounts_block_ai_ratio_aliases_without_overlap(
         scope_id="company",
         unit="percent",
         basis="percent_of_revenue",
-        method="ratio",
     )
     value = _input(observations=(observation,))
     validation = ForecastReasoningValidator().validate(
@@ -978,7 +1059,6 @@ def test_citations_bind_target_scope_and_currency_codes():
         scope_id="company",
         unit="percent",
         basis="percentage_points",
-        method="explicit",
         evidence_based=True,
         model_assumption=False,
     ).model_copy(update={"evidence_ids": (volume_id,)})
@@ -1011,7 +1091,6 @@ def test_citations_bind_target_scope_and_currency_codes():
         scope_id="company",
         unit="USD millions",
         basis="absolute",
-        method="explicit",
         evidence_based=True,
         model_assumption=False,
     ).model_copy(update={"evidence_ids": (capex_id,)})
