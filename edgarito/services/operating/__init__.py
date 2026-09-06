@@ -26,6 +26,12 @@ from edgarito.services.operating._forecast.tax_nopat import (
     OperatingTaxForecastService,
     OperatingTaxNopatEngine,
 )
+from edgarito.services.operating._graph.discovery import (
+    EconomicModelDiscoveryResult,
+    EconomicModelDiscoveryService,
+    EconomicModelDiscoveryUnresolvedLeaf,
+    discover_economic_model,
+)
 from edgarito.services.operating.extraction import (
     OperatingEvidenceExtractionError,
     OperatingEvidenceExtractor,
@@ -64,6 +70,10 @@ __all__ = [
     "OperatingHistoryAssembler",
     "merge_operating_growth_evidence",
     "OperatingEvidenceDiscoveryService",
+    "EconomicModelDiscoveryResult",
+    "EconomicModelDiscoveryService",
+    "EconomicModelDiscoveryUnresolvedLeaf",
+    "discover_economic_model",
     "OperatingEvidenceExtractionError",
     "OperatingEvidenceExtractor",
     "OperatingForecastService",

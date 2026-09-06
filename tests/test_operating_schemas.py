@@ -1,9 +1,29 @@
+from datetime import date
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
 from edgarito.schemas import CompanyOperatingForecast as PublicCompanyOperatingForecast
+from edgarito.schemas import (
+    DependencyAudit,
+    EconomicComponentRole,
+    EconomicEvaluationResult,
+    EconomicMateriality,
+    EconomicModel,
+    EconomicNode,
+    EconomicNodeType,
+    EconomicObservation,
+    EconomicProvenance,
+    EconomicRelationship,
+    EconomicRelationshipType,
+    EconomicSourceEdge,
+    EconomicUnitKind,
+    EconomicValue,
+    GraphDiagnostic,
+    GraphDiagnostics,
+    UnresolvedLeafRequirement,
+)
 from edgarito.schemas import OperatingSegment as PublicOperatingSegment
 from edgarito.schemas.operating import (
     CompanyOperatingForecast,
@@ -131,6 +151,78 @@ def test_operating_contracts_are_public_frozen_and_round_trip():
 
     with pytest.raises(ValidationError):
         segment_forecast.revenue = (Decimal("101"), Decimal("111"))
+
+
+def test_economic_graph_contracts_are_public_and_round_trip():
+    provenance = EconomicProvenance(
+        source="sec",
+        available_on=date(2026, 2, 1),
+        evidence_ids=("evidence-1",),
+    )
+    node = EconomicNode(
+        node_id="revenue",
+        node_type=EconomicNodeType.INPUT,
+        metric="Revenue",
+        unit="USD",
+        unit_kind=EconomicUnitKind.MONETARY,
+        currency="USD",
+        provenance=provenance,
+        materiality=EconomicMateriality.MATERIAL,
+        component_role=EconomicComponentRole.STANDARD,
+    )
+    source_edge = EconomicSourceEdge(node_id="revenue")
+    relationship = EconomicRelationship(
+        target="revenue",
+        relationship_type=EconomicRelationshipType.IDENTITY,
+        sources=(source_edge,),
+        provenance=provenance,
+    )
+    observation = EconomicObservation(
+        node_id="revenue",
+        fiscal_year=2025,
+        value=Decimal("100"),
+        unit="USD",
+        currency="USD",
+        provenance=provenance,
+    )
+    model = EconomicModel(
+        nodes=(node,),
+        relationships=(relationship,),
+        observations=(observation,),
+        revenue_root="revenue",
+    )
+    value = EconomicValue(
+        node_id="revenue",
+        fiscal_year=2025,
+        value=Decimal("100"),
+        unit="USD",
+        currency="USD",
+        available=True,
+        provenance=provenance,
+    )
+    audit = DependencyAudit(
+        node_id="revenue",
+        fiscal_year=2025,
+        available=True,
+        dependency_chain=("revenue",),
+    )
+    unresolved = UnresolvedLeafRequirement(
+        node_id="revenue", fiscal_year=2025, reason="missing observation"
+    )
+    diagnostic = GraphDiagnostic(code="example", message="Example diagnostic")
+    diagnostics = GraphDiagnostics(diagnostic_messages=(diagnostic,))
+    result = EconomicEvaluationResult(
+        target_years=(2025,),
+        values={"revenue": {2025: Decimal("100")}},
+        cells=(value,),
+        dependency_audits=(audit,),
+        unresolved_leaf_requirements=(unresolved,),
+        diagnostics=diagnostics,
+    )
+
+    assert model.nodes == (node,)
+    assert EconomicModel.model_validate_json(model.model_dump_json()) == model
+    assert EconomicEvaluationResult.model_validate_json(result.model_dump_json()) == result
 
 
 def test_operating_contracts_reject_invalid_decimal_unit_year_and_range_values():

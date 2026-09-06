@@ -1,0 +1,526 @@
+{
+  "nodes": [
+    {
+      "node_id": "net_revenue",
+      "node_type": "aggregate",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "net revenue",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Reported consolidated net revenue aggregate"
+      },
+      "confidence": "high",
+      "materiality": "material",
+      "component_role": "standard"
+    },
+    {
+      "node_id": "service_revenue",
+      "node_type": "component",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "service revenue",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed Visa service revenue relationship description"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "additive"
+    },
+    {
+      "node_id": "data_processing_revenue",
+      "node_type": "component",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "data processing revenue",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed Visa data processing revenue relationship description"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "additive"
+    },
+    {
+      "node_id": "international_transaction_revenue",
+      "node_type": "component",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "international transaction revenue",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed Visa international transaction revenue relationship description"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "additive"
+    },
+    {
+      "node_id": "other_revenue",
+      "node_type": "component",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "other revenue",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed revenue component; no value supplied in frozen fixture"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "additive",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "client_incentives",
+      "node_type": "component",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "client incentives",
+      "unit": "USD millions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed contra-revenue component; no value supplied in frozen fixture"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "contra_revenue",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "payments_volume",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "payments volume",
+      "unit": "USD billions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa Q4FY22/Q4FY23 Operational Performance Data",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "visa_ir:payments_volume",
+        "methodology": "Existing frozen Visa first-party operating observations"
+      },
+      "confidence": "high",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "lagged_payments_volume",
+      "node_type": "derived",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "lagged payments volume",
+      "unit": "USD billions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Structural lag only; no coefficient"
+      },
+      "confidence": "medium",
+      "materiality": "material",
+      "component_role": "standard"
+    },
+    {
+      "node_id": "service_yield",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "service yield",
+      "unit": "USD millions/USD billions",
+      "currency": null,
+      "unit_kind": "rate",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Unresolved coefficient leaf; no numeric yield disclosed in frozen fixture"
+      },
+      "confidence": "low",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "processed_transactions",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "processed transactions",
+      "unit": "million transactions",
+      "unit_kind": "count",
+      "provenance": {
+        "source": "Visa Q4FY22/Q4FY23 Operational Performance Data",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "visa_ir:processed_transactions",
+        "methodology": "Existing frozen Visa first-party operating observations"
+      },
+      "confidence": "high",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "revenue_per_transaction",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "revenue per transaction",
+      "unit": "USD millions/million transactions",
+      "currency": "USD",
+      "unit_kind": "monetary_per_unit",
+      "denominator_unit": "million transactions",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Unresolved coefficient leaf; no numeric revenue per transaction disclosed in frozen fixture"
+      },
+      "confidence": "low",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "cross_border_volume",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "cross-border volume",
+      "unit": "USD billions",
+      "currency": "USD",
+      "unit_kind": "monetary",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Unresolved absolute-volume leaf; frozen evidence supplies growth only"
+      },
+      "confidence": "low",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "international_yield",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "international transaction yield",
+      "unit": "USD millions/USD billions",
+      "currency": null,
+      "unit_kind": "rate",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Unresolved coefficient leaf; no numeric yield disclosed in frozen fixture"
+      },
+      "confidence": "low",
+      "materiality": "material",
+      "component_role": "standard",
+      "forecast_assumption_allowed": true
+    },
+    {
+      "node_id": "cross_border_volume_growth",
+      "node_type": "input",
+      "scope": "consolidated",
+      "scope_id": "company",
+      "metric": "cross-border volume growth excluding intra-Europe",
+      "unit": "percent",
+      "unit_kind": "rate",
+      "provenance": {
+        "source": "Visa Q4FY22/Q4FY23 Operational Performance Data",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "visa_ir:cross_border_growth_ex_intra_europe",
+        "methodology": "Reported growth evidence; not converted to an absolute volume"
+      },
+      "confidence": "high",
+      "materiality": "material",
+      "component_role": "standard"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_id": "net_revenue_components",
+      "target": "net_revenue",
+      "relationship_type": "add",
+      "sources": [
+        {"node_id": "service_revenue", "sign": 1, "weight": 1},
+        {"node_id": "data_processing_revenue", "sign": 1, "weight": 1},
+        {"node_id": "international_transaction_revenue", "sign": 1, "weight": 1},
+        {"node_id": "other_revenue", "sign": 1, "weight": 1},
+        {"node_id": "client_incentives", "sign": -1, "weight": 1}
+      ],
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Disclosed net revenue aggregate and contra-revenue presentation"
+      },
+      "confidence": "high",
+      "fiscal_period": "FY"
+    },
+    {
+      "relationship_id": "service_revenue_lagged_volume",
+      "target": "service_revenue",
+      "relationship_type": "multiply",
+      "sources": [
+        {"node_id": "lagged_payments_volume", "sign": 1, "weight": 1},
+        {"node_id": "service_yield", "sign": 1, "weight": 1}
+      ],
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Structural volume/yield relationship; coefficient unresolved"
+      },
+      "confidence": "low",
+      "fiscal_period": "FY"
+    },
+    {
+      "relationship_id": "lagged_payments_volume_relationship",
+      "target": "lagged_payments_volume",
+      "relationship_type": "lag",
+      "sources": [
+        {"node_id": "payments_volume", "sign": 1, "weight": 1, "fiscal_lag": 1}
+      ],
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Explicit lag structure; no numeric transformation"
+      },
+      "confidence": "medium",
+      "fiscal_period": "FY"
+    },
+    {
+      "relationship_id": "data_processing_transactions",
+      "target": "data_processing_revenue",
+      "relationship_type": "multiply",
+      "sources": [
+        {"node_id": "processed_transactions", "sign": 1, "weight": 1},
+        {"node_id": "revenue_per_transaction", "sign": 1, "weight": 1}
+      ],
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Structural transaction/yield relationship; coefficient unresolved"
+      },
+      "confidence": "low",
+      "fiscal_period": "FY"
+    },
+    {
+      "relationship_id": "international_volume_yield",
+      "target": "international_transaction_revenue",
+      "relationship_type": "multiply",
+      "sources": [
+        {"node_id": "cross_border_volume", "sign": 1, "weight": 1},
+        {"node_id": "international_yield", "sign": 1, "weight": 1}
+      ],
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "first_party_disclosure",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Structural international volume/yield relationship; both leaves unresolved"
+      },
+      "confidence": "low",
+      "fiscal_period": "FY"
+    }
+  ],
+  "observations": [
+    {
+      "node_id": "net_revenue",
+      "fiscal_year": 2022,
+      "fiscal_period": "FY",
+      "value": 29310,
+      "unit": "USD millions",
+      "currency": "USD",
+      "origin": "historical_reported",
+      "provenance": {
+        "source": "Visa FY2022 10-K",
+        "origin": "historical_reported",
+        "available_on": "2022-11-16",
+        "reference": "0001403161-22-000081",
+        "methodology": "Existing frozen consolidated revenue fact"
+      },
+      "available_on": "2022-11-16"
+    },
+    {
+      "node_id": "net_revenue",
+      "fiscal_year": 2023,
+      "fiscal_period": "FY",
+      "value": 32653,
+      "unit": "USD millions",
+      "currency": "USD",
+      "origin": "historical_reported",
+      "provenance": {
+        "source": "Visa FY2023 10-K",
+        "origin": "historical_reported",
+        "available_on": "2023-11-15",
+        "reference": "0001403161-23-000099",
+        "methodology": "Existing frozen consolidated revenue fact"
+      },
+      "available_on": "2023-11-15"
+    },
+    {
+      "node_id": "payments_volume",
+      "fiscal_year": 2022,
+      "fiscal_period": "FY",
+      "value": 11607,
+      "unit": "USD billions",
+      "currency": "USD",
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2022-10-25",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2022/q4/Q4FY22-Visa-Operational-Performance-Data-FINAL-v2.pdf",
+        "methodology": "Payments volume was $11,607 billion for FY2022"
+      },
+      "available_on": "2022-10-25"
+    },
+    {
+      "node_id": "payments_volume",
+      "fiscal_year": 2023,
+      "fiscal_period": "FY",
+      "value": 12338,
+      "unit": "USD billions",
+      "currency": "USD",
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2023/q4/Q4FY23-Visa-Operational-Performance-Data.pdf",
+        "methodology": "Payments volume was $12,338 billion for FY2023"
+      },
+      "available_on": "2023-10-24"
+    },
+    {
+      "node_id": "processed_transactions",
+      "fiscal_year": 2022,
+      "fiscal_period": "FY",
+      "value": 192530,
+      "unit": "million transactions",
+      "currency": null,
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2022-10-25",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2022/q4/Q4FY22-Visa-Operational-Performance-Data-FINAL-v2.pdf",
+        "methodology": "Visa processed 192,530 million transactions in FY2022"
+      },
+      "available_on": "2022-10-25"
+    },
+    {
+      "node_id": "processed_transactions",
+      "fiscal_year": 2023,
+      "fiscal_period": "FY",
+      "value": 212579,
+      "unit": "million transactions",
+      "currency": null,
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2023/q4/Q4FY23-Visa-Operational-Performance-Data.pdf",
+        "methodology": "Visa processed 212,579 million transactions in FY2023"
+      },
+      "available_on": "2023-10-24"
+    },
+    {
+      "node_id": "cross_border_volume_growth",
+      "fiscal_year": 2022,
+      "fiscal_period": "FY",
+      "value": 49,
+      "unit": "percent",
+      "currency": null,
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2022-10-25",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2022/q4/Q4FY22-Visa-Operational-Performance-Data-FINAL-v2.pdf",
+        "methodology": "Cross-border volume excluding intra-Europe growth"
+      },
+      "available_on": "2022-10-25"
+    },
+    {
+      "node_id": "cross_border_volume_growth",
+      "fiscal_year": 2023,
+      "fiscal_period": "FY",
+      "value": 25,
+      "unit": "percent",
+      "currency": null,
+      "origin": "first_party_observation",
+      "provenance": {
+        "source": "visa_ir",
+        "origin": "first_party_observation",
+        "available_on": "2023-10-24",
+        "reference": "https://s1.q4cdn.com/050606653/files/doc_financials/2023/q4/Q4FY23-Visa-Operational-Performance-Data.pdf",
+        "methodology": "Cross-border volume excluding intra-Europe growth"
+      },
+      "available_on": "2023-10-24"
+    }
+  ],
+  "revenue_root": "net_revenue",
+  "business_roots": [],
+  "fiscal_period": "FY"
+}

@@ -40,6 +40,11 @@ from edgarito.schemas.operating import (
     OperatingSegment,
     operating_units_compatible,
 )
+from edgarito.schemas.operating_graph import (
+    EconomicEvaluationResult,
+    EconomicModel,
+    EconomicObservation,
+)
 from edgarito.services.financials.availability import (
     FinancialObservationAvailabilityService,
     ObservationAvailabilityMode,
@@ -59,6 +64,7 @@ from edgarito.services.operating._forecast.reinvestment import (
     DriverBasedCanonicalFcffAdapter,
 )
 from edgarito.services.operating._forecast.service import OperatingForecastService
+from edgarito.services.operating._graph import adapt_economic_forecast, evaluate_graph
 
 _PERCENT = Decimal(100)
 _DRIVER_METRICS = (
@@ -149,6 +155,24 @@ class DriverBasedFcffForecastService:
         economics_config: OperatingEconomicsForecastConfig
         | Mapping[str, Any]
         | None = None,
+        economic_model: EconomicModel | Mapping[str, Any] | None = None,
+        economic_graph: EconomicModel | Mapping[str, Any] | None = None,
+        graph_observations: Iterable[EconomicObservation | Mapping[str, Any]]
+        | None = None,
+        economic_observations: Iterable[EconomicObservation | Mapping[str, Any]]
+        | None = None,
+        economic_graph_observations: Iterable[EconomicObservation | Mapping[str, Any]]
+        | None = None,
+        compiled_graph_observations: Iterable[EconomicObservation | Mapping[str, Any]]
+        | None = None,
+        graph_evaluation: EconomicEvaluationResult | Mapping[str, Any] | None = None,
+        economic_evaluation: EconomicEvaluationResult
+        | Mapping[str, Any]
+        | None = None,
+        economic_graph_evaluation: EconomicEvaluationResult
+        | Mapping[str, Any]
+        | None = None,
+        evaluation: EconomicEvaluationResult | Mapping[str, Any] | None = None,
         as_of: datetime.date | None = None,
         availability_mode: ObservationAvailabilityMode = ObservationAvailabilityMode.POINT_IN_TIME,
         company_id: str | None = None,
@@ -167,6 +191,32 @@ class DriverBasedFcffForecastService:
         normalized_overrides = (
             forecast_overrides if forecast_overrides is not None else overrides
         )
+        graph_value = economic_model if economic_model is not None else economic_graph
+        graph_model = self._coerce_graph_model(graph_value) if graph_value is not None else None
+        graph_observation_values = self._graph_observation_items(
+            graph_observations,
+            economic_observations,
+            economic_graph_observations,
+            compiled_graph_observations,
+        )
+        graph_evaluation_value = next(
+            (
+                item
+                for item in (
+                    graph_evaluation,
+                    economic_evaluation,
+                    economic_graph_evaluation,
+                    evaluation,
+                )
+                if item is not None
+            ),
+            None,
+        )
+        if hasattr(graph_evaluation_value, "compiled_observations"):
+            graph_observation_values = (
+                *graph_observation_values,
+                *self._graph_observation_items(graph_evaluation_value),
+            )
 
         try:
             context_build = self.build_context(
@@ -250,14 +300,16 @@ class DriverBasedFcffForecastService:
             ticker=ticker,
             availability_mode=availability_mode,
         )
-        explicit_revenue_observations = self._explicit_revenue_observations(
-            normalized_plan,
-            normalized_overrides,
-            parameters,
-            target_years,
-            template.base_revenue,
-            template.unit,
-        )
+        explicit_revenue_observations = ()
+        if graph_model is None:
+            explicit_revenue_observations = self._explicit_revenue_observations(
+                normalized_plan,
+                normalized_overrides,
+                parameters,
+                target_years,
+                template.base_revenue,
+                template.unit,
+            )
         if explicit_revenue_observations:
             all_observations = (*all_observations, *explicit_revenue_observations)
             if not segment_values:
@@ -271,24 +323,80 @@ class DriverBasedFcffForecastService:
         canonical: FcffForecast | None = None
         construction_errors: list[str] = []
         try:
-            operating_forecast = self.operating_forecast_service.forecast(
-                segments=segment_values,
-                definitions=explicit_definitions,
-                observations=all_observations,
-                management_constraints=management,
-                historical_revenue=history,
-                fiscal_years=target_years,
-                company_id=company_id or available.company_id,
-                plan=normalized_plan,
-                forecast_plan=normalized_plan,
-                overrides=normalized_overrides,
-                forecast_overrides=normalized_overrides,
-                economics_config=economics_config or config,
-                investment_programs=investment,
-                capex_constraints=constraints,
-                seed=explicit_seed if explicit_seed is not None else context_seed,
-                reinvestment_seed=explicit_seed,
-            )
+            if graph_model is not None:
+                operating_forecast = self._graph_operating_forecast(
+                    graph_model,
+                    graph_observation_values,
+                    graph_evaluation_value,
+                    target_years,
+                    as_of=as_of,
+                    company_id=company_id or available.company_id,
+                )
+                operating_forecast = self._mark_graph_revenue_source(operating_forecast)
+                economics_service = getattr(
+                    self.operating_forecast_service, "economics_service", None
+                )
+                if economics_service is None:
+                    raise TypeError(
+                        "OperatingForecastService does not expose economics_service"
+                    )
+                economics = economics_service.forecast(
+                    segments=tuple(
+                        item.segment for item in operating_forecast.segment_forecasts
+                    ),
+                    segment_revenue_forecasts=operating_forecast.segment_forecasts,
+                    observations=all_observations,
+                    management_constraints=management,
+                    fiscal_years=target_years,
+                    revenue_forecast=operating_forecast,
+                    plan=normalized_plan,
+                    forecast_plan=normalized_plan,
+                    overrides=normalized_overrides,
+                    forecast_overrides=normalized_overrides,
+                    company_id=company_id or available.company_id,
+                    config=economics_config or config,
+                    investment_programs=investment,
+                    capex_constraints=constraints,
+                    seed=explicit_seed if explicit_seed is not None else context_seed,
+                    reinvestment_seed=explicit_seed,
+                )
+                economics_by_id = {
+                    item.segment.segment_id: item for item in economics.segment_economics
+                }
+                operating_forecast = operating_forecast.model_copy(
+                    update={
+                        "segment_forecasts": tuple(
+                            item.model_copy(
+                                update={
+                                    "operating_economics": economics_by_id.get(
+                                        item.segment.segment_id
+                                    )
+                                }
+                            )
+                            for item in operating_forecast.segment_forecasts
+                        ),
+                        "operating_economics": economics,
+                    }
+                )
+            else:
+                operating_forecast = self.operating_forecast_service.forecast(
+                    segments=segment_values,
+                    definitions=explicit_definitions,
+                    observations=all_observations,
+                    management_constraints=management,
+                    historical_revenue=history,
+                    fiscal_years=target_years,
+                    company_id=company_id or available.company_id,
+                    plan=normalized_plan,
+                    forecast_plan=normalized_plan,
+                    overrides=normalized_overrides,
+                    forecast_overrides=normalized_overrides,
+                    economics_config=economics_config or config,
+                    investment_programs=investment,
+                    capex_constraints=constraints,
+                    seed=explicit_seed if explicit_seed is not None else context_seed,
+                    reinvestment_seed=explicit_seed,
+                )
             economics = getattr(operating_forecast, "operating_economics", None)
             if economics is None:
                 construction_errors.append(
@@ -356,6 +464,11 @@ class DriverBasedFcffForecastService:
                     "operating_forecast_service=OperatingForecastService",
                     "canonical_adapter=DriverBasedCanonicalFcffAdapter",
                     "forecast_validation=read_only",
+                    *(
+                        ("revenue_source=economic_graph",)
+                        if graph_model is not None
+                        else ()
+                    ),
                     "validation_findings="
                     + str(validation_summary.get("counts", {}).get("total", 0)),
                     "validation_errors="
@@ -407,6 +520,134 @@ class DriverBasedFcffForecastService:
             availability_service=self.availability_service,
             core_required_concepts=self._CORE_REQUIRED_CONCEPTS,
         )
+
+    @staticmethod
+    def _coerce_graph_model(value: Any) -> EconomicModel:
+        """Normalize a graph without mutating the caller's frozen model."""
+
+        if hasattr(value, "economic_model") and not isinstance(value, Mapping):
+            value = value.economic_model
+        if hasattr(value, "model") and not isinstance(value, (EconomicModel, Mapping)):
+            value = value.model
+        return value if isinstance(value, EconomicModel) else EconomicModel.model_validate(value)
+
+    @staticmethod
+    def _mark_graph_revenue_source(
+        forecast: CompanyOperatingForecast,
+    ) -> CompanyOperatingForecast:
+        """Make the opt-in source explicit without changing legacy adapter output."""
+
+        return forecast.model_copy(
+            update={
+                "source_by_year": {
+                    year: "economic_graph" for year in forecast.fiscal_years
+                },
+                "segment_forecasts": tuple(
+                    item.model_copy(
+                        update={
+                            "source_by_year": {
+                                year: "economic_graph"
+                                for year in item.fiscal_years
+                            }
+                        }
+                    )
+                    for item in forecast.segment_forecasts
+                ),
+            }
+        )
+
+    @classmethod
+    def _graph_observation_items(cls, *values: Any) -> tuple[EconomicObservation, ...]:
+        result: list[EconomicObservation] = []
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, Mapping) and "node_id" not in value and "node" not in value:
+                value = value.get("observations", value.get("compiled_observations", value))
+            for item in cls._items(value):
+                if hasattr(item, "compiled_observations"):
+                    item = item.compiled_observations
+                    for nested in cls._items(item):
+                        result.append(
+                            nested
+                            if isinstance(nested, EconomicObservation)
+                            else EconomicObservation.model_validate(nested)
+                        )
+                    continue
+                result.append(
+                    item
+                    if isinstance(item, EconomicObservation)
+                    else EconomicObservation.model_validate(item)
+                )
+        return tuple(result)
+
+    @staticmethod
+    def _coerce_graph_evaluation(value: Any) -> EconomicEvaluationResult:
+        if hasattr(value, "evaluation") and not isinstance(
+            value, (EconomicEvaluationResult, Mapping)
+        ):
+            value = value.evaluation
+        return (
+            value
+            if isinstance(value, EconomicEvaluationResult)
+            else EconomicEvaluationResult.model_validate(value)
+        )
+
+    @classmethod
+    def _graph_operating_forecast(
+        cls,
+        model: EconomicModel,
+        observations: Sequence[EconomicObservation],
+        supplied_evaluation: Any,
+        target_years: tuple[int, ...],
+        *,
+        as_of: datetime.date | None,
+        company_id: str,
+    ) -> CompanyOperatingForecast:
+        """Evaluate and adapt graph revenue, failing closed on missing leaves."""
+
+        evaluated_model = model.model_copy(
+            update={"observations": (*model.observations, *observations)}
+        )
+        expected = evaluate_graph(
+            evaluated_model,
+            target_years,
+            as_of=as_of,
+            fiscal_period=evaluated_model.fiscal_period,
+        )
+        if supplied_evaluation is not None:
+            supplied = cls._coerce_graph_evaluation(supplied_evaluation)
+            if supplied.target_years != target_years:
+                raise ValueError(
+                    "Economic graph evaluation years must exactly match driver forecast years"
+                )
+            if supplied.as_of != expected.as_of:
+                raise ValueError(
+                    "Economic graph evaluation as_of must exactly match driver forecast as_of"
+                )
+            if supplied != expected:
+                raise ValueError(
+                    "Economic graph evaluation must be the deterministic evaluation "
+                    "of the compiled economic model"
+                )
+        try:
+            adapted = adapt_economic_forecast(
+                evaluated_model,
+                expected,
+                company_id=company_id,
+            )
+        except Exception as exc:
+            unresolved = tuple(
+                dict.fromkeys(
+                    f"{item.node_id} FY{item.fiscal_year}: {item.reason}"
+                    for item in expected.unresolved_leaf_requirements
+                )
+            )
+            detail = "; ".join(unresolved[:5])
+            if detail:
+                raise ValueError(f"Economic graph unresolved leaves: {detail}") from exc
+            raise
+        return adapted.company_forecast
 
     @staticmethod
     def _plan(value: Any) -> ForecastPlan | None:

@@ -246,6 +246,47 @@ class ForecastReasoner:
     async def forecast(self, input_value: ForecastReasoningInput | Any, **kwargs: Any):
         return await self.reason(input_value, **kwargs)
 
+    async def reason_economic_model(
+        self,
+        input_value: Any | None = None,
+        economic_model: Any | None = None,
+        *,
+        reasoning_input: Any | None = None,
+        evaluation: Any | None = None,
+        force_refresh: bool = False,
+    ):
+        """Run the opt-in economic-graph reason/compile/evaluate boundary.
+
+        The import is intentionally lazy: importing or calling v1 ``reason``
+        does not load graph contracts and cannot change its prompt/schema/cache
+        identities.
+        """
+
+        from edgarito.services.forecasting.reasoning.economic_graph import (
+            EconomicGraphForecastReasoner,
+            EconomicGraphReasoningInput,
+        )
+
+        if not isinstance(input_value, EconomicGraphReasoningInput):
+            input_value = input_value if input_value is not None else reasoning_input
+            if input_value is None:
+                raise TypeError("reason_economic_model requires a forecast input")
+            if economic_model is None:
+                raise TypeError(
+                    "reason_economic_model requires an EconomicModel when input is not a graph input"
+                )
+            input_value = EconomicGraphReasoningInput(
+                forecast_input=input_value,
+                economic_model=economic_model,
+                evaluation=evaluation,
+            )
+        return await EconomicGraphForecastReasoner(
+            self.client,
+            cache=self.cache,
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+        ).reason(input_value, force_refresh=force_refresh)
+
     extract = reason
     areason = reason
 
