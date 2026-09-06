@@ -1,5 +1,7 @@
 """Opt-in ForecastReasoner v1 public API."""
 
+from importlib import import_module
+
 from .cache import ForecastReasoningCache, ForecastReasoningCacheEnvelope
 from .compiler import ForecastReasoningCompiler, ReasoningCompiler
 from .contracts import (
@@ -132,6 +134,20 @@ __all__ = [
     "canonical_json",
     "compact_structured",
     "content_hash",
+    "FactorContextForecastReasoner",
+    "FactorReasoningForecastReasoner",
+    "FactorContextForecastReasoningCache",
+    "FactorContextForecastReasoningCacheEnvelope",
+    "FactorContextForecastReasoningCacheIdentity",
+    "build_factor_evidence_catalog",
+    "build_factor_evidence_item",
+    "build_factor_reasoning_content",
+    "build_factor_reasoning_prompt",
+    "FACTOR_CONTEXT_PROMPT_VERSION",
+    "FACTOR_CONTEXT_SCHEMA_VERSION",
+    "FACTOR_CONTEXT_VALIDATOR_VERSION",
+    "FACTOR_CONTEXT_VERSION",
+    "FACTOR_CONTEXT_REASONER_INSTRUCTIONS",
     "ForecastReasoner",
     "ForecastReasoningProposal",
     "ForecastReasoningValidator",
@@ -177,3 +193,32 @@ __all__ = [
     "EconomicGraphDriverBasedForecastResult",
     "EconomicGraphDriverBasedForecastService",
 ]
+
+
+_FACTOR_CONTEXT_EXPORTS = frozenset(
+    {
+        "FactorContextForecastReasoner",
+        "FactorReasoningForecastReasoner",
+        "FactorContextForecastReasoningCache",
+        "FactorContextForecastReasoningCacheEnvelope",
+        "FactorContextForecastReasoningCacheIdentity",
+        "build_factor_evidence_catalog",
+        "build_factor_evidence_item",
+        "build_factor_reasoning_content",
+        "build_factor_reasoning_prompt",
+        "FACTOR_CONTEXT_PROMPT_VERSION",
+        "FACTOR_CONTEXT_SCHEMA_VERSION",
+        "FACTOR_CONTEXT_VALIDATOR_VERSION",
+        "FACTOR_CONTEXT_VERSION",
+        "FACTOR_CONTEXT_REASONER_INSTRUCTIONS",
+    }
+)
+
+
+def __getattr__(name: str):
+    if name in _FACTOR_CONTEXT_EXPORTS:
+        module = import_module(".factor_context", __name__)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -18,6 +18,9 @@ __all__ = [
     "IncompleteFcffForecastMethodError",
     "SimplifiedFcfForecastService",
     "ForecastReasoner",
+    "FactorContextForecastReasoner",
+    "FactorContextForecastReasoningCache",
+    "FactorContextForecastReasoningCacheIdentity",
     "ForecastReasoningInput",
     "ForecastReasoningResponse",
     "ForecastReasoningValidator",
@@ -119,6 +122,18 @@ _LAZY_EXPORTS = {
     "ForecastReasoner": (
         "edgarito.services.forecasting.reasoning",
         "ForecastReasoner",
+    ),
+    "FactorContextForecastReasoner": (
+        "edgarito.services.forecasting.reasoning",
+        "FactorContextForecastReasoner",
+    ),
+    "FactorContextForecastReasoningCache": (
+        "edgarito.services.forecasting.reasoning",
+        "FactorContextForecastReasoningCache",
+    ),
+    "FactorContextForecastReasoningCacheIdentity": (
+        "edgarito.services.forecasting.reasoning",
+        "FactorContextForecastReasoningCacheIdentity",
     ),
     "ForecastReasoningInput": (
         "edgarito.services.forecasting.reasoning",

@@ -243,6 +243,30 @@ class ForecastReasoner:
     async def propose(self, input_value: ForecastReasoningInput | Any, **kwargs: Any):
         return await self.reason(input_value, **kwargs)
 
+    async def reason_with_factors(
+        self,
+        augmented_input: Any,
+        *,
+        force_refresh: bool = False,
+    ) -> ForecastReasoningProposal:
+        """Run the opt-in resolved-factor context boundary.
+
+        The import is intentionally lazy.  Ordinary ``reason`` keeps its
+        prompt, response schema, cache identity, and artifact boundary without
+        loading factor contracts or the factor adapter.
+        """
+
+        from edgarito.services.forecasting.reasoning.factor_context import (
+            FactorContextForecastReasoner,
+        )
+
+        return await FactorContextForecastReasoner(
+            self.client,
+            cache=self.cache,
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+        ).reason(augmented_input, force_refresh=force_refresh)
+
     async def forecast(self, input_value: ForecastReasoningInput | Any, **kwargs: Any):
         return await self.reason(input_value, **kwargs)
 

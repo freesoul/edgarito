@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -25,6 +27,9 @@ from edgarito.services.forecasting.reasoning.evidence import (
     build_evidence_catalog,
 )
 from edgarito.services.operating.registry import FORMULA_REGISTRY
+
+if TYPE_CHECKING:
+    from edgarito.services.valuation.factors.contracts import FactorKey
 
 _SUPPORTED_ARCHETYPES = frozenset(
     {
@@ -90,6 +95,16 @@ _RATE_UNITS = frozenset(
     }
 )
 _FRACTION_UNITS = frozenset({"fraction", "ratio", "decimal"})
+_FACTOR_BRIDGE_DOMAINS = frozenset({"company", "business", "operating"})
+_FACTOR_CONTEXT_ONLY_METRICS = frozenset({"price_per_call"})
+
+
+@dataclass(frozen=True)
+class _FactorCatalogRecord:
+    evidence_id: str
+    key: FactorKey | None
+    dependencies: tuple[FactorKey, ...]
+    error: str | None = None
 
 
 class ForecastReasoningValidationResult(BaseModel):
@@ -281,7 +296,7 @@ class ForecastReasoningValidator:
         if assumption.target_type == "operating_driver":
             issues.extend(self._driver_issues(assumption, input_value))
         else:
-            issues.extend(self._metric_issues(assumption, input_value))
+            issues.extend(self._metric_issues(assumption, input_value, catalog))
         issues.extend(self._citation_issues(assumption, input_value, catalog))
         issues.extend(self._sanity_issues(assumption))
         return _unique_issues(issues)
@@ -449,11 +464,17 @@ class ForecastReasoningValidator:
         self,
         assumption: ReasonedForecastAssumption,
         input_value: ForecastReasoningInput,
+        catalog: EvidenceCatalog | None = None,
     ) -> list[tuple[str, str]]:
         metric = _metric_key(assumption.metric)
         if metric in _DERIVED_METRICS:
             return [("DERIVED_TARGET", f"Derived metric target is forbidden: {metric}")]
         if metric not in _FINANCIAL_METRICS:
+            if (
+                metric in _FACTOR_CONTEXT_ONLY_METRICS
+                and _cited_factor_has_metric(assumption, catalog, metric)
+            ):
+                return []
             return [
                 (
                     "UNSUPPORTED_METRIC",
@@ -561,6 +582,7 @@ class ForecastReasoningValidator:
                 )
             ]
         issues: list[tuple[str, str]] = []
+        issues.extend(self._factor_citation_issues(assumption, input_value, catalog))
         for evidence_id in assumption.evidence_ids:
             item = catalog.get(evidence_id)
             if item is None:
@@ -575,7 +597,8 @@ class ForecastReasoningValidator:
                 )
                 continue
             issues.extend(self._evidence_scope_issues(item, assumption, input_value))
-            issues.extend(self._target_evidence_issues(item, assumption))
+            if item.category != "FACTOR":
+                issues.extend(self._target_evidence_issues(item, assumption))
             if item.dispersion is not None and item.dispersion > 0:
                 width = max(assumption.high) - min(assumption.low)
                 if assumption.confidence == "high":
@@ -594,6 +617,125 @@ class ForecastReasoningValidator:
                     )
         return issues
 
+    def _factor_citation_issues(
+        self,
+        assumption: ReasonedForecastAssumption,
+        input_value: ForecastReasoningInput,
+        catalog: EvidenceCatalog,
+    ) -> list[tuple[str, str]]:
+        """Validate factor citations as references into the factor catalog.
+
+        Factor estimates are not reported evidence.  A factor may support a
+        forecast target only through a requester-scoped bridge estimate.  The
+        bridge's canonical dependency keys are the authority for retaining
+        external provenance; flat catalog fields are intentionally ignored.
+        """
+
+        cited_factor_items = tuple(
+            sorted(
+                (
+                    catalog.get(evidence_id)
+                    for evidence_id in assumption.evidence_ids
+                    if catalog.get(evidence_id) is not None
+                    and catalog.get(evidence_id).category == "FACTOR"
+                ),
+                key=lambda item: item.evidence_id,
+            )
+        )
+        records = tuple(_factor_catalog_record(item) for item in cited_factor_items)
+        if not records:
+            return []
+
+        issues: list[tuple[str, str]] = []
+        valid_records = tuple(record for record in records if record.key is not None)
+        for record in records:
+            if record.error is not None:
+                issues.append(
+                    (
+                        "FACTOR_CONTEXT_INVALID",
+                        f"Factor evidence {record.evidence_id} has invalid factor context: {record.error}",
+                    )
+                )
+
+        records_by_key: dict[str, _FactorCatalogRecord] = {}
+        all_factor_items = tuple(
+            sorted(
+                (item for item in catalog.items if item.category == "FACTOR"),
+                key=lambda item: item.evidence_id,
+            )
+        )
+        for record in (
+            _factor_catalog_record(item) for item in all_factor_items
+        ):
+            if record.key is None:
+                continue
+            records_by_key.setdefault(record.key.semantic_id, record)
+
+        target = _factor_assumption_target(assumption)
+        bridge_records: list[_FactorCatalogRecord] = []
+        for record in valid_records:
+            assert record.key is not None
+            if record.key.domain.value not in _FACTOR_BRIDGE_DOMAINS:
+                continue
+            if _factor_metric(record.key, assumption) != target:
+                continue
+            scope_issues = _factor_scope_issues(record.key, assumption, input_value)
+            compatibility_issues = _factor_compatibility_issues(
+                record.key, assumption, input_value
+            )
+            if not scope_issues and not compatibility_issues:
+                bridge_records.append(record)
+
+        ancestor_keys = _factor_ancestor_keys(
+            tuple(
+                sorted(
+                    (record.key.semantic_id for record in bridge_records if record.key),
+                )
+            ),
+            records_by_key,
+        )
+
+        for record in records:
+            if record.key is None:
+                continue
+            key = record.key
+            is_external = key.domain.value not in _FACTOR_BRIDGE_DOMAINS
+            if is_external:
+                if not bridge_records:
+                    issues.append(
+                        (
+                            "EVIDENCE_TARGET_MISMATCH",
+                            f"External factor {record.evidence_id} cannot support {target} without a compatible company/business/operating bridge",
+                        )
+                    )
+                elif key.semantic_id not in ancestor_keys:
+                    issues.append(
+                        (
+                            "FACTOR_DEPENDENCY_MISMATCH",
+                            f"External factor {record.evidence_id} is not an ancestor of a cited bridge for {target}",
+                        )
+                    )
+                continue
+
+            # Internal factors retain the same company/business boundary even
+            # when they are cited as an ancestor with a different unit/metric.
+            # Their units are allowed to differ because dependency dimensions
+            # are expected to differ from the final forecast target.
+            issues.extend(_factor_scope_issues(key, assumption, input_value))
+            if key.semantic_id in ancestor_keys:
+                continue
+            if _factor_metric(key, assumption) != target:
+                issues.append(
+                    (
+                        "EVIDENCE_TARGET_MISMATCH",
+                        f"Factor evidence {record.evidence_id} is for {_factor_metric(key, assumption)}, not {target}",
+                    )
+                )
+                continue
+            issues.extend(_factor_compatibility_issues(key, assumption, input_value))
+
+        return _unique_issues(issues)
+
     @staticmethod
     def _evidence_scope_issues(
         item: EvidenceCatalogItem,
@@ -602,6 +744,19 @@ class ForecastReasoningValidator:
     ) -> list[tuple[str, str]]:
         context = item.context_map
         issues: list[tuple[str, str]] = []
+        if item.category == "FACTOR":
+            # Factor scope is derived from the canonical factor_key by the
+            # graph-aware validator.  In particular, an operating factor can
+            # carry a business coordinate even though its catalog projection
+            # is otherwise classified as company context.
+            if item.source_date and item.source_date > input_value.as_of:
+                issues.append(
+                    (
+                        "EVIDENCE_AS_OF_MISMATCH",
+                        f"Evidence {item.evidence_id} was not available as of input date",
+                    )
+                )
+            return issues
         inferred_segment = (
             item.scope_id
             if item.category in {"OP", "MANUAL"}
@@ -1004,6 +1159,214 @@ class ForecastReasoningValidator:
                         f"{evidence_id}: consensus dispersion={dispersion}; widen uncertainty and lower confidence"
                     )
         return tuple(dict.fromkeys(warnings))
+
+
+def _cited_factor_has_metric(
+    assumption: ReasonedForecastAssumption,
+    catalog: EvidenceCatalog | None,
+    metric: str,
+) -> bool:
+    if catalog is None:
+        return False
+    for evidence_id in sorted(assumption.evidence_ids):
+        item = catalog.get(evidence_id)
+        if item is None or item.category != "FACTOR":
+            continue
+        record = _factor_catalog_record(item)
+        if (
+            record.key is not None
+            and record.key.domain.value in _FACTOR_BRIDGE_DOMAINS
+            and _factor_metric(record.key, assumption) == metric
+        ):
+            return True
+    return False
+
+
+def _factor_catalog_record(item: EvidenceCatalogItem) -> _FactorCatalogRecord:
+    from edgarito.services.valuation.factors.contracts import FactorKey
+
+    context = item.context_map
+    try:
+        key_payload = context.get("factor_key")
+        if key_payload is None:
+            raise ValueError("missing canonical factor_key")
+        if isinstance(key_payload, str):
+            key_payload = json.loads(key_payload)
+        key = FactorKey.model_validate(key_payload)
+
+        dependency_payload = context.get("dependencies", "[]")
+        if isinstance(dependency_payload, str):
+            dependency_payload = json.loads(dependency_payload)
+        if not isinstance(dependency_payload, (list, tuple)):
+            raise ValueError("dependencies must be a JSON array")
+        dependencies = tuple(
+            sorted(
+                (FactorKey.model_validate(value) for value in dependency_payload),
+                key=lambda value: value.semantic_id,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        return _FactorCatalogRecord(
+            evidence_id=item.evidence_id,
+            key=None,
+            dependencies=(),
+            error=str(exc),
+        )
+    return _FactorCatalogRecord(
+        evidence_id=item.evidence_id,
+        key=key,
+        dependencies=dependencies,
+    )
+
+
+def _factor_ancestor_keys(
+    roots: tuple[str, ...],
+    records_by_key: dict[str, _FactorCatalogRecord],
+) -> frozenset[str]:
+    pending = list(sorted(roots))
+    ancestors: set[str] = set()
+    while pending:
+        current = pending.pop(0)
+        record = records_by_key.get(current)
+        if record is None:
+            continue
+        for dependency in record.dependencies:
+            dependency_id = dependency.semantic_id
+            if dependency_id not in ancestors:
+                ancestors.add(dependency_id)
+                pending.append(dependency_id)
+        pending.sort()
+    return frozenset(ancestors)
+
+
+def _factor_assumption_target(assumption: ReasonedForecastAssumption) -> str:
+    if assumption.target_type == "operating_driver":
+        return canonical_driver_id(assumption.driver_id)
+    return _metric_key(assumption.metric)
+
+
+def _factor_metric(key: FactorKey, assumption: ReasonedForecastAssumption) -> str:
+    metric = _metric_key(key.metric)
+    return canonical_driver_id(metric) if assumption.target_type == "operating_driver" else metric
+
+
+def _factor_scope_issues(
+    key: FactorKey,
+    assumption: ReasonedForecastAssumption,
+    input_value: ForecastReasoningInput,
+) -> list[tuple[str, str]]:
+    from edgarito.services.valuation.factors.identity import canonicalize_token
+
+    domain = key.domain.value
+    company_subject = key.subject_id
+    business_subject: str | None = None
+    if domain == "business":
+        company_subject, separator, business_subject = key.subject_id.partition(":")
+        if not separator:
+            return [
+                (
+                    "EVIDENCE_SCOPE_MISMATCH",
+                    f"Business factor {key.semantic_id} has no company/business scope",
+                )
+            ]
+
+    company_tokens = {
+        canonicalize_token(value)
+        for value in (input_value.company_id, input_value.company_name)
+        if value
+    }
+    if canonicalize_token(company_subject) not in company_tokens:
+        return [
+            (
+                "EVIDENCE_COMPANY_MISMATCH",
+                f"Factor {key.semantic_id} belongs to another company",
+            )
+        ]
+
+    if assumption.scope == ForecastScope.COMPANY:
+        if domain not in {"company", "operating"} or key.business is not None:
+            return [
+                (
+                    "EVIDENCE_SCOPE_MISMATCH",
+                    f"Factor {key.semantic_id} is not consolidated company scope",
+                )
+            ]
+        return []
+
+    expected_business = canonicalize_token(assumption.scope_id)
+    if (
+        business_subject is not None
+        and key.business is not None
+        and canonicalize_token(business_subject) != canonicalize_token(key.business)
+    ):
+        return [
+            (
+                "EVIDENCE_SCOPE_MISMATCH",
+                f"Factor {key.semantic_id} has inconsistent business coordinates",
+            )
+        ]
+    actual_business = key.business or business_subject
+    if domain not in {"business", "operating"} or actual_business is None:
+        return [
+            (
+                "EVIDENCE_SCOPE_MISMATCH",
+                f"Factor {key.semantic_id} is not scoped to segment {assumption.scope_id}",
+            )
+        ]
+    if canonicalize_token(actual_business) != expected_business:
+        return [
+            (
+                "EVIDENCE_SCOPE_MISMATCH",
+                f"Factor {key.semantic_id} belongs to another business scope",
+            )
+        ]
+    return []
+
+
+def _factor_compatibility_issues(
+    key: FactorKey,
+    assumption: ReasonedForecastAssumption,
+    input_value: ForecastReasoningInput,
+) -> list[tuple[str, str]]:
+    issues: list[tuple[str, str]] = []
+    if (
+        key.unit.casefold() not in {"unit", "unspecified"}
+        and assumption.unit.casefold() not in {"unit", "unspecified"}
+        and not _factor_units_compatible(key.unit, assumption.unit)
+    ):
+        issues.append(
+            (
+                "EVIDENCE_UNIT_MISMATCH",
+                f"Factor {key.semantic_id} has an incompatible unit for {assumption.unit}",
+            )
+        )
+    factor_currencies = _currency_codes(key.currency) or _currency_codes(key.unit)
+    target_currencies = _currency_codes(assumption.unit) or _currency_codes(
+        input_value.unit
+    )
+    if (
+        factor_currencies
+        and target_currencies
+        and factor_currencies.isdisjoint(target_currencies)
+    ):
+        issues.append(
+            (
+                "EVIDENCE_CURRENCY_MISMATCH",
+                f"Factor {key.semantic_id} has an incompatible currency",
+            )
+        )
+    return issues
+
+
+def _factor_units_compatible(factor_unit: str, target_unit: str) -> bool:
+    from edgarito.services.valuation.factors.identity import canonicalize_unit
+
+    try:
+        if canonicalize_unit(factor_unit) == canonicalize_unit(target_unit):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return operating_units_compatible(factor_unit, target_unit)
 
 
 def _metric_key(value: Any) -> str:

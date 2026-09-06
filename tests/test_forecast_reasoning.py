@@ -28,6 +28,7 @@ from edgarito.services.forecasting.reasoning import (
     ReasonedDriverBasedForecastService,
     ReasonedForecastAssumption,
     build_evidence_catalog,
+    build_factor_evidence_catalog,
     build_reasoning_content,
     build_reasoning_prompt,
 )
@@ -41,6 +42,14 @@ from edgarito.services.research.consensus import reconcile_evidence
 from edgarito.services.research.contracts import (
     MarketGrowthEvidence,
     MarketSizeEvidence,
+)
+from edgarito.services.valuation.factors import (
+    FactorConfidence,
+    FactorEstimate,
+    FactorKey,
+    FactorPeriod,
+    FactorRange,
+    ResolvedFactorReasoningAdapter,
 )
 
 D = Decimal
@@ -112,6 +121,117 @@ def _input(
         manual_overrides=manual_overrides,
         manual_forward_driver_observations=manual_forward,
     )
+
+
+def _factor_estimate(*, value=2, info_as_of=datetime.date(2025, 1, 1)):
+    period = FactorPeriod(
+        target_year=2026,
+        period_type="FY",
+        period_key="FY 2026",
+    )
+    key = FactorKey(
+        domain="commodity",
+        subject_type="commodity",
+        subject_id="lithium",
+        metric="price",
+        period=period,
+        unit="USD/tonne",
+        currency="USD",
+    )
+    return FactorEstimate(
+        key=key,
+        range=FactorRange(low=D(value - 1), base=D(value), high=D(value + 1)),
+        unit=key.unit,
+        currency=key.currency,
+        info_as_of=info_as_of,
+        target_period=period,
+        confidence=FactorConfidence.MEDIUM,
+        methodology="lithium range synthesis",
+        resolver="fixture-resolver",
+        evidence_refs=("lithium-source",),
+        dependencies=(
+            FactorKey(
+                domain="macro",
+                subject_type="macro",
+                subject_id="energy",
+                metric="energy_cost",
+                period=period,
+                unit="USD",
+                currency="USD",
+            ),
+        ),
+        dependency_fingerprints=((
+            FactorKey(
+                domain="macro",
+                subject_type="macro",
+                subject_id="energy",
+                metric="energy_cost",
+                period=period,
+                unit="USD",
+                currency="USD",
+            ).digest,
+            "dependency-fingerprint",
+        ),),
+        all_availability_dates=(info_as_of,),
+        created_at=info_as_of,
+        source="lithium-provenance",
+    )
+
+
+def _factor_bridge_estimate(
+    *,
+    metric="gross_margin",
+    domain="company",
+    subject_type="company",
+    subject_id="fixture-company",
+    unit="percent",
+    currency=None,
+    business=None,
+    value=50,
+    dependencies=(),
+):
+    period = FactorPeriod(
+        target_year=2026,
+        period_type="FY",
+        period_key="FY 2026",
+    )
+    key = FactorKey(
+        domain=domain,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        metric=metric,
+        period=period,
+        unit=unit,
+        currency=currency,
+        business=business,
+    )
+    return FactorEstimate(
+        key=key,
+        range=FactorRange.from_point(D(value)),
+        unit=key.unit,
+        currency=key.currency,
+        info_as_of=datetime.date(2025, 1, 1),
+        target_period=period,
+        confidence=FactorConfidence.MEDIUM,
+        methodology="company bridge synthesis",
+        resolver="bridge-resolver",
+        evidence_refs=(f"{metric}-bridge-source",),
+        dependencies=tuple(dependencies),
+        dependency_fingerprints=tuple(
+            (dependency.digest, f"{dependency.digest}-fingerprint")
+            for dependency in dependencies
+        ),
+        all_availability_dates=(datetime.date(2025, 1, 1),),
+        created_at=datetime.date(2025, 1, 1),
+        source="company-bridge",
+    )
+
+
+def _factor_catalog(*estimates, input_value=None):
+    augmented = ResolvedFactorReasoningAdapter().augment(
+        input_value or _input(), estimates
+    )
+    return build_factor_evidence_catalog(augmented)
 
 
 def _assumption(
@@ -497,6 +617,102 @@ def test_frozen_fake_openai_cache_identity_and_model_invalidation(
         assert fake.calls == 4
 
     asyncio.run(run())
+
+
+def test_factor_reasoning_is_citable_versioned_and_cache_sensitive(tmp_path):
+    base = _input()
+    estimate = _factor_estimate()
+    bridge = _factor_bridge_estimate(
+        metric="volume",
+        domain="business",
+        subject_type="business",
+        subject_id="fixture-company:cloud",
+        unit="units",
+        dependencies=(estimate.key,),
+    )
+    augmented = ResolvedFactorReasoningAdapter().augment(base, (estimate, bridge))
+
+    class FakeOpenAI:
+        model = "factor-fake"
+        reasoning_effort = "low"
+
+        def __init__(self):
+            self.calls = 0
+            self.factor_id = None
+
+        async def extract_structured(self, **kwargs):
+            import json
+
+            self.calls += 1
+            payload = json.loads(kwargs["content"])
+            factor = next(
+                item
+                for item in payload["evidence_catalog"]
+                if item["category"] == "FACTOR" and item["metric"] == "volume"
+            )
+            self.factor_id = factor["evidence_id"]
+            assert factor["evidence_id"].startswith("FACTOR-")
+            assert "lithium" in kwargs["content"]
+            assert "dependency-fingerprint" in kwargs["content"]
+            assert "lithium_provenance" in kwargs["content"]
+            return ForecastReasoningResponse(
+                assumptions=(
+                    _assumption(
+                        driver_id="volume",
+                        evidence_based=True,
+                        model_assumption=False,
+                    ).model_copy(update={"evidence_ids": (factor["evidence_id"],)}),
+                )
+            )
+
+    async def run():
+        fake = FakeOpenAI()
+        reasoner = ForecastReasoner(fake, cache=ForecastReasoningCache(tmp_path))
+        first = await reasoner.reason_with_factors(augmented)
+        assert fake.calls == 1
+        assert first.metadata.prompt_version != reasoner_module.PROMPT_VERSION
+        assert first.metadata.context_version != reasoner_module.CONTEXT_VERSION
+        validation = ForecastReasoningValidator().validate(
+            first.response, base, first.catalog
+        )
+        assert validation.is_valid
+
+        changed = _factor_estimate(value=4)
+        changed_bridge = _factor_bridge_estimate(
+            metric="volume",
+            domain="business",
+            subject_type="business",
+            subject_id="fixture-company:cloud",
+            unit="units",
+            dependencies=(changed.key,),
+        )
+        changed_input = ResolvedFactorReasoningAdapter().augment(
+            base, (changed, changed_bridge)
+        )
+        second = await reasoner.reason_with_factors(changed_input)
+        assert fake.calls == 2
+        assert second.cache_key != first.cache_key
+
+    asyncio.run(run())
+
+
+def test_future_factor_is_rejected_before_provider_call():
+    base = _input()
+    estimate = _factor_estimate(info_as_of=datetime.date(2025, 2, 1))
+    augmented = ResolvedFactorReasoningAdapter().augment(base, estimate)
+
+    class FakeOpenAI:
+        model = "future-factor-fake"
+        calls = 0
+
+        async def extract_structured(self, **kwargs):
+            self.calls += 1
+            return ForecastReasoningResponse()
+
+    fake = FakeOpenAI()
+    with pytest.raises(ValueError, match="unavailable after"):
+        asyncio.run(ForecastReasoner(fake).reason_with_factors(augmented))
+    assert fake.calls == 0
 
 
 def test_async_service_executes_deterministic_driver_path(tmp_path):
@@ -1101,6 +1317,134 @@ def test_citations_bind_target_scope_and_currency_codes():
         issue.code == "EVIDENCE_CURRENCY_MISMATCH"
         for issue in result.rejected_assumptions
     )
+
+
+def _factor_assumption(metric, evidence_id, *, unit, scope="company", scope_id="company"):
+    return _assumption(
+        assumption_id=f"factor-{metric}-{evidence_id}",
+        metric=metric,
+        scope=scope,
+        scope_id=scope_id,
+        unit=unit,
+        basis="percentage_points" if metric in {"gross_margin", "tax_rate"} else "absolute",
+        evidence_based=True,
+        model_assumption=False,
+    ).model_copy(update={"evidence_ids": (evidence_id,)})
+
+
+def test_unrelated_lithium_factor_cannot_support_company_tax():
+    catalog = _factor_catalog(_factor_estimate())
+    lithium_id = next(item.evidence_id for item in catalog if item.category == "FACTOR")
+    result = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(
+            assumptions=(_factor_assumption("tax_rate", lithium_id, unit="percent"),)
+        ),
+        _input(),
+        catalog,
+    )
+    assert not result.is_valid
+    assert any(
+        issue.code == "EVIDENCE_TARGET_MISMATCH"
+        for issue in result.rejected_assumptions
+    )
+
+
+def test_external_only_lithium_factor_cannot_support_company_gross_margin():
+    catalog = _factor_catalog(_factor_estimate())
+    lithium_id = next(item.evidence_id for item in catalog if item.category == "FACTOR")
+    result = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(
+            assumptions=(
+                _factor_assumption("gross_margin", lithium_id, unit="percent"),
+            )
+        ),
+        _input(),
+        catalog,
+    )
+    assert not result.is_valid
+    assert any(
+        issue.code == "EVIDENCE_TARGET_MISMATCH"
+        for issue in result.rejected_assumptions
+    )
+
+
+def test_company_gross_margin_bridge_can_retain_lithium_dependency():
+    lithium = _factor_estimate()
+    bridge = _factor_bridge_estimate(
+        dependencies=(lithium.key,),
+        metric="gross_margin",
+        unit="percent",
+    )
+    catalog = _factor_catalog(lithium, bridge)
+    factor_ids = {
+        item.metric: item.evidence_id for item in catalog if item.category == "FACTOR"
+    }
+    result = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(
+            assumptions=(
+                _factor_assumption(
+                    "gross_margin", factor_ids["gross_margin"], unit="percent"
+                ).model_copy(
+                    update={"evidence_ids": (factor_ids["price"], factor_ids["gross_margin"])}
+                ),
+            )
+        ),
+        _input(),
+        catalog,
+    )
+    assert result.is_valid
+
+
+def test_exact_company_price_per_call_leaf_is_a_valid_factor_bridge():
+    bridge = _factor_bridge_estimate(
+        metric="price_per_call",
+        unit="USD / call",
+        currency="USD",
+    )
+    catalog = _factor_catalog(bridge)
+    factor_id = next(item.evidence_id for item in catalog if item.category == "FACTOR")
+    result = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(
+            assumptions=(
+                _factor_assumption("price_per_call", factor_id, unit="USD / call"),
+            )
+        ),
+        _input(),
+        catalog,
+    )
+    assert result.is_valid
+    assert not ForecastReasoningCompiler().compile(_input(), result).overrides
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected_code"),
+    [
+        ({"subject_id": "other-company"}, "EVIDENCE_COMPANY_MISMATCH"),
+        ({"business": "other-business"}, "EVIDENCE_SCOPE_MISMATCH"),
+        ({"unit": "USD"}, "EVIDENCE_UNIT_MISMATCH"),
+        ({"currency": "EUR"}, "EVIDENCE_CURRENCY_MISMATCH"),
+    ],
+)
+def test_factor_bridge_rejects_wrong_scope_or_unit(changes, expected_code):
+    base = _input()
+    if changes.get("subject_id") == "other-company":
+        factor_input = base.model_copy(
+            update={"company_id": "other-company", "company_name": "Other Company"}
+        )
+    else:
+        factor_input = base
+    bridge = _factor_bridge_estimate(**changes)
+    catalog = _factor_catalog(bridge, input_value=factor_input)
+    factor_id = next(item.evidence_id for item in catalog if item.category == "FACTOR")
+    result = ForecastReasoningValidator().validate(
+        ForecastReasoningResponse(
+            assumptions=(_factor_assumption("gross_margin", factor_id, unit="percent"),)
+        ),
+        base,
+        catalog,
+    )
+    assert not result.is_valid
+    assert any(issue.code == expected_code for issue in result.rejected_assumptions)
 
 
 def test_market_growth_is_compatible_with_volume_target():
